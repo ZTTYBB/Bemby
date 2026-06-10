@@ -24,7 +24,7 @@
 
 ## 环境要求
 
-- Docker + Docker Compose
+- Docker
 
 ---
 
@@ -236,44 +236,11 @@ A self-hosted automation tool for managing daily Telegram bot check-ins (签到)
 
 ### Requirements
 
-- Docker + Docker Compose
+- Docker
 
 ---
 
 ### Quick Start
-
-```bash
-# Download config files
-curl -O https://raw.githubusercontent.com/liveinaus/Bemby/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/liveinaus/Bemby/main/env.example
-
-# Configure environment
-cp env.example .env
-```
-
-Edit `.env`:
-
-| Variable         | Description                                          |
-|------------------|------------------------------------------------------|
-| `PORT`           | Host port to expose (default `3000`)                 |
-| `ADMIN_USERNAME` | Admin login username (default `admin`)               |
-| `ADMIN_PASSWORD` | Admin login password — **change this**               |
-| `JWT_SECRET`     | Secret for signing JWTs — **use a long random string** |
-| `TZ`             | Host timezone (default `Australia/Sydney`)           |
-
-```bash
-# Pull image and start
-docker compose up -d
-```
-
-The app is served on `http://<host>:3000`. The database is stored on the host at `/docker/bemby-data` so it persists across redeployments.
-
-```bash
-# Stop
-docker compose down
-```
-
-**No Docker Compose?** Use `docker run` instead:
 
 ```bash
 docker run -d \
