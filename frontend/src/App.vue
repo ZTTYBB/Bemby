@@ -5,7 +5,7 @@
   <div v-else class="layout">
     <header class="mobile-header">
       <div class="mobile-header-brand">
-        <span class="mobile-logo">Bemby</span>
+        <img src="/logo.png" alt="Bemby" class="mobile-logo-img" />
         <span class="mobile-version">v{{ APP_VERSION }}</span>
       </div>
       <div class="mobile-header-actions">
@@ -22,7 +22,7 @@
 
     <nav class="sidebar" :class="{ 'is-open': sidebarOpen }">
       <div class="sidebar-title">
-        Bemby
+        <img src="/logo.png" alt="Bemby" class="sidebar-logo" />
         <span class="sidebar-version">v{{ APP_VERSION }}</span>
       </div>
       <router-link class="nav-link" to="/accounts" @click="sidebarOpen = false">{{ t('nav.accounts') }}</router-link>
