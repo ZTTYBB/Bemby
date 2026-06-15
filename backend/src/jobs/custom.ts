@@ -140,6 +140,7 @@ export async function runCustom(
             step.label = `Wait reply (max ${action.maxWaitMs}ms)`;
             const msgs = await waitForReply(client, botUsername, action.maxWaitMs, signal);
             lastMessages = msgs;
+            step.msgCount = msgs.length;
             const btnMsg = [...msgs].reverse().find(m => (m as any).replyMarkup instanceof Api.ReplyInlineMarkup) ?? null;
             if (btnMsg) lastButtonsMsg = btnMsg;
             const parsed = await parseMessages(msgs, client, signal);
@@ -218,9 +219,11 @@ export async function runCustom(
 
             const peer = await client.getInputEntity(botUsername);
             let clicked = false;
+            let retryCount = 0;
 
             for (let attempt = 0; attempt <= action.maxRetries && !clicked; attempt++) {
               if (attempt > 0) {
+                retryCount = attempt;
                 // Wait for a new buttons message on retry
                 const msgs = await waitForButtonsMessage(client, botUsername, action.maxWaitMs, signal).catch(() => null);
                 if (msgs) {
@@ -249,9 +252,13 @@ export async function runCustom(
 
                   if (answer.message) step.callbackAnswer = answer.message;
                   clicked = true;
+                  step.retryCount = retryCount;
 
-                  const responseMsg = await Promise.race([editPromise, newMsgPromise]);
+                  const taggedEdit = editPromise.then(m => ({ msg: m, src: 'edit' as const }));
+                  const taggedNew = newMsgPromise.then(m => ({ msg: m, src: 'new_message' as const }));
+                  const { msg: responseMsg, src: respSrc } = await Promise.race([taggedEdit, taggedNew]);
                   if (responseMsg && !signal?.aborted) {
+                    step.responseSource = respSrc;
                     lastMessages = [responseMsg];
                     if ((responseMsg as any).replyMarkup instanceof Api.ReplyInlineMarkup) lastButtonsMsg = responseMsg;
                     const parsed = await parseMessages([responseMsg], client, signal);
@@ -275,6 +282,7 @@ export async function runCustom(
         }
       } catch (err: any) {
         step.error = err?.message ?? String(err);
+        step.errorName = err?.name ?? err?.constructor?.name;
         throw err;
       } finally {
         step.durationMs = Date.now() - t0;

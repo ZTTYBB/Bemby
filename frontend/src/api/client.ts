@@ -76,6 +76,11 @@ export type CustomStepLog = {
   aiPrompt?: string;
   aiResponse?: string;
   aiDurationMs?: number;
+  // Dev fields
+  msgCount?: number;
+  responseSource?: 'edit' | 'new_message';
+  retryCount?: number;
+  errorName?: string;
 };
 
 export type Job = {
@@ -128,6 +133,15 @@ export type CheckinAttemptLog = {
   aiPrompt?: string;
   aiResponse?: string;
   error?: string;
+  // Dev timing fields
+  connectMs?: number;
+  replyLatencyMs?: number;
+  buttonClickMs?: number;
+  buttonResponseMs?: number;
+  buttonResponseSource?: 'edit' | 'new_message';
+  totalMs?: number;
+  replyTimeoutMs?: number;
+  errorName?: string;
 };
 
 

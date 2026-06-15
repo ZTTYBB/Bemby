@@ -65,6 +65,14 @@ export type CustomStepLog = {
   aiPrompt?: string;
   aiResponse?: string;
   aiDurationMs?: number;
+  // Dev fields
+  /** For wait_reply: number of messages received during the wait */
+  msgCount?: number;
+  /** For click_button: 'edit' or 'new_message' — which response path fired */
+  responseSource?: 'edit' | 'new_message';
+  /** For click_button: how many retries were needed (0 = first attempt succeeded) */
+  retryCount?: number;
+  errorName?: string;
 };
 
 export type EmbywatchConfig = {

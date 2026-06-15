@@ -24,6 +24,16 @@ export type CheckinAttemptLog = {
   /** The raw response text returned by the AI */
   aiResponse?: string;
   error?: string;
+  // Dev timing fields
+  connectMs?: number;
+  replyLatencyMs?: number;
+  buttonClickMs?: number;
+  buttonResponseMs?: number;
+  /** Whether the button response came via a message edit or a new message */
+  buttonResponseSource?: 'edit' | 'new_message';
+  totalMs?: number;
+  replyTimeoutMs?: number;
+  errorName?: string;
 };
 
 export class CheckinError extends Error {
@@ -399,9 +409,11 @@ export async function runCheckin(
   attempt = 1,
   signal?: AbortSignal,
 ): Promise<CheckinAttemptLog> {
+  const attemptStart = Date.now();
   const log: CheckinAttemptLog = {
     attempt, commandSent: startCommand, hasMedia: false,
     commandResponseHtml: '', availableButtons: [] as string[][],
+    replyTimeoutMs,
   };
 
   const client = new TelegramClient(new StringSession(sessionString), apiId, apiHash, {
@@ -410,19 +422,24 @@ export async function runCheckin(
     baseLogger: new Logger(LogLevel.NONE),
   });
 
+  const t_connect = Date.now();
   await client.connect();
+  log.connectMs = Date.now() - t_connect;
 
   try {
     if (signal?.aborted) throw new Error('Job cancelled');
     const expandedCommand = expandCommand(startCommand);
     log.commandSent = expandedCommand; // record what was actually sent, not the template
     const replyPromise = waitForBotReply(client, botUsername, replyTimeoutMs, signal);
+    const t_send = Date.now();
     await client.sendMessage(botUsername, { message: expandedCommand });
 
     let messages: Api.Message[];
     try {
       messages = await replyPromise;
+      log.replyLatencyMs = Date.now() - t_send;
     } catch (err) {
+      log.replyLatencyMs = Date.now() - t_send;
       if (err instanceof BotReplyTimeoutError && err.partial.length > 0) {
         const parsed = await parseMessages(err.partial, client, signal);
         log.hasMedia = parsed.hasMedia;
@@ -484,18 +501,25 @@ export async function runCheckin(
           const newMsgPromise = waitForNewBotMessage(client, botUsername, 10_000, signal);
 
           const callbackData = (btn as Api.KeyboardButtonCallback).data;
+          const t_click = Date.now();
           const answer = await client.invoke(new Api.messages.GetBotCallbackAnswer({
             peer,
             msgId: buttonsMsg.id,
             data: callbackData,
           })) as Api.messages.BotCallbackAnswer;
+          log.buttonClickMs = Date.now() - t_click;
           log.buttonClicked = btnText;
           if (answer.message) log.callbackAnswer = answer.message;
           clicked = true;
 
-          // Take whichever response arrives first
-          const responseMsg = await Promise.race([editPromise, newMsgPromise]);
+          // Take whichever response arrives first; track the source for dev logs
+          const t_resp = Date.now();
+          const taggedEdit = editPromise.then(m => ({ msg: m, src: 'edit' as const }));
+          const taggedNew = newMsgPromise.then(m => ({ msg: m, src: 'new_message' as const }));
+          const { msg: responseMsg, src: respSrc } = await Promise.race([taggedEdit, taggedNew]);
+          log.buttonResponseMs = Date.now() - t_resp;
           if (responseMsg && !signal?.aborted) {
+            log.buttonResponseSource = respSrc;
             const bp = await parseMessages([responseMsg], client, signal);
             if (bp.html || bp.hasMedia) {
               log.buttonResponseHtml = bp.html || undefined;
@@ -513,9 +537,12 @@ export async function runCheckin(
     const notFoundLabel = isAiBtn(checkinButton) ? `{aiBtn} -> "${targetText}"` : `"${checkinButton}"`;
     if (!clicked) throw new Error(`Button ${notFoundLabel} not found in bot reply`);
 
+    log.totalMs = Date.now() - attemptStart;
     return log;
   } catch (err: any) {
     log.error = err?.message ?? String(err);
+    log.errorName = err?.name ?? err?.constructor?.name;
+    log.totalMs = Date.now() - attemptStart;
     throw new CheckinError(log.error!, log);
   } finally {
     // GramJS throws TIMEOUT when the update loop stops on disconnect; always swallow here

@@ -104,6 +104,19 @@
                               <div v-if="a.aiDurationMs != null" class="ai-badge">AI · {{ a.aiDurationMs }}ms</div>
                             </div>
                           </div>
+                          <template v-if="showDevLogs">
+                            <div class="dev-block" style="margin-top:6px">
+                              <div class="dev-block-label">{{ t('logs.dev.timing') }}</div>
+                              <div class="dev-timing-grid">
+                                <template v-if="a.totalMs != null"><span class="dev-t-key">{{ t('logs.dev.totalMs') }}</span><span class="dev-t-val">{{ a.totalMs }}ms</span></template>
+                                <template v-if="a.connectMs != null"><span class="dev-t-key">{{ t('logs.dev.connectMs') }}</span><span class="dev-t-val">{{ a.connectMs }}ms</span></template>
+                                <template v-if="a.replyLatencyMs != null"><span class="dev-t-key">{{ t('logs.dev.replyLatencyMs') }}</span><span class="dev-t-val">{{ a.replyLatencyMs }}ms<span v-if="a.replyTimeoutMs != null" class="dev-t-note"> (limit: {{ a.replyTimeoutMs }}ms)</span></span></template>
+                                <template v-if="a.buttonClickMs != null"><span class="dev-t-key">{{ t('logs.dev.buttonClickMs') }}</span><span class="dev-t-val">{{ a.buttonClickMs }}ms</span></template>
+                                <template v-if="a.buttonResponseMs != null"><span class="dev-t-key">{{ t('logs.dev.buttonResponseMs') }}</span><span class="dev-t-val">{{ a.buttonResponseMs }}ms<span v-if="a.buttonResponseSource" class="dev-t-note"> · {{ a.buttonResponseSource }}</span></span></template>
+                                <template v-if="a.errorName"><span class="dev-t-key">{{ t('logs.dev.errorName') }}</span><span class="dev-t-val dev-t-error">{{ a.errorName }}</span></template>
+                              </div>
+                            </div>
+                          </template>
                           <template v-if="showDevLogs && a.aiPrompt != null">
                             <div class="dev-block">
                               <div class="dev-block-label">{{ t('logs.aiPrompt') }}</div>
@@ -174,6 +187,12 @@
                               </div>
                             </div>
                           </div>
+                        </div>
+                        <div v-if="showDevLogs && (s.msgCount != null || s.responseSource || s.retryCount != null || s.errorName)" class="dev-step-meta">
+                          <span v-if="s.msgCount != null">{{ t('logs.dev.msgCount') }}: {{ s.msgCount }}</span>
+                          <span v-if="s.responseSource">{{ t('logs.dev.responseSource') }}: {{ s.responseSource }}</span>
+                          <span v-if="s.retryCount != null">{{ t('logs.dev.retryCount') }}: {{ s.retryCount }}</span>
+                          <span v-if="s.errorName">{{ t('logs.dev.errorName') }}: {{ s.errorName }}</span>
                         </div>
                         <div v-if="s.callbackAnswer" class="custom-step-callback">{{ s.callbackAnswer }}</div>
                         <!-- Response after the action -->
@@ -732,5 +751,49 @@ function fmtSeconds(s: number): string {
   word-break: break-word;
   font-family: monospace;
   line-height: 1.5;
+}
+
+.dev-timing-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  align-items: baseline;
+}
+
+.dev-t-key {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9399b2;
+  white-space: nowrap;
+}
+
+.dev-t-val {
+  font-size: 11px;
+  color: #cdd6f4;
+  font-family: monospace;
+}
+
+.dev-t-note {
+  font-size: 10px;
+  color: #6c7086;
+}
+
+.dev-t-error {
+  color: #f38ba8;
+}
+
+.dev-step-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 3px 6px;
+  background: #1e1e2e;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #9399b2;
+  font-family: monospace;
 }
 </style>
