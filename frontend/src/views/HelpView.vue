@@ -113,13 +113,13 @@
               <tbody><tr><td>服务器地址</td><td>Emby 服务器完整地址，如 <code>https://emby.example.com:443</code>。粘贴含协议和端口的完整 URL 时会自动解析并填充各字段。</td></tr>
               <tr><td>Emby 用户名 / 密码</td><td>用于登录 Emby 账户的凭据。</td></tr>
               <tr><td>播放时长</td><td>模拟播放的秒数。实际时长会在此基础上随机延长 0–10%。留空使用系统默认值。</td></tr>
-              <tr><td>用户代理</td><td>发送给 Emby 的 UA 字符串。留空使用系统默认值。</td></tr>
+              <tr><td>用户代理</td><td>从预设列表中选择（SenPlayer、Yamby、Hills、Lenna、VidHub），或选"自定义"手动填写。留空使用设置中配置的默认预设。</td></tr>
               <tr><td>播放后标记已看</td><td>播放结束后调用 Emby API 将该剧集/电影标记为已看。默认开启，可按任务单独配置。</td></tr>
               <tr><td>账号（可选）</td><td>用于发送成功/失败通知的 Telegram 账号。留空则不发送通知。</td></tr>
             </tbody></table>
             <p class="help-note">
               播放从剧集随机 5–10% 处开始，而非从头播放，使行为更接近真实用户。
-              Emby 日志中的会话设备显示为 <strong>Mac / SenPlayer</strong>。
+              Emby 日志中的会话设备将显示为所选 User Agent 预设对应的客户端（默认为 <strong>Mac / SenPlayer</strong>）。
             </p>
 
             <div class="card-section-title" style="margin-top:16px;font-size:11px">自定义（Custom）</div>
@@ -199,13 +199,13 @@
               <tbody><tr><td>Server URL</td><td>Full address of the Emby server, e.g. <code>https://emby.example.com:443</code>. Paste a URL with protocol and port and the fields are auto-filled.</td></tr>
               <tr><td>Emby Username / Password</td><td>Credentials for the Emby account to log in as.</td></tr>
               <tr><td>Play Duration</td><td>Seconds to simulate playback. Actual duration is this value plus a random 0–10% extra. Blank uses the system default.</td></tr>
-              <tr><td>User Agent</td><td>Browser UA string sent to Emby. Blank uses the system default.</td></tr>
+              <tr><td>User Agent</td><td>Select from the preset list (SenPlayer, Yamby, Hills, Lenna, VidHub) or choose "Custom..." to enter a value manually. Blank uses the default preset configured in Settings.</td></tr>
               <tr><td>Mark as watched</td><td>Calls the Emby PlayedItems API after playback ends to mark the item as watched. On by default; configurable per job.</td></tr>
               <tr><td>Account (optional)</td><td>Telegram account used to send success/failure notifications. Leave blank to disable notifications for this job.</td></tr>
             </tbody></table>
             <p class="help-note">
               Playback starts at a random position 5–10% into the episode rather than from the beginning, making the session more realistic.
-              The device appears in Emby as <strong>Mac / SenPlayer</strong>.
+              The device appears in Emby as the client matching the selected User Agent preset (default: <strong>Mac / SenPlayer</strong>).
             </p>
 
             <div class="card-section-title" style="margin-top:16px;font-size:11px">Custom (自定义)</div>
@@ -271,7 +271,8 @@
               <tr><td>每天仅运行一次</td><td>防止任务在 24 小时内重复运行。测试时可关闭。</td></tr>
               <tr><td>默认播放时长</td><td>未在任务中单独设置时，Emby 观看会话的默认时长（秒）。</td></tr>
               <tr><td>设备名称</td><td>发送给 Emby API 的设备标识（如 <code>Mac</code>），Emby 会在客户端旁显示该名称。</td></tr>
-              <tr><td>默认用户代理</td><td>未在任务中单独设置时，Emby 观看请求使用的默认 UA 字符串。</td></tr>
+              <tr><td>默认用户代理</td><td>未在任务中单独选择时使用的 UA 预设。从已有预设中选择，默认为 SenPlayer (Mac)。</td></tr>
+              <tr><td>用户代理预设</td><td>管理可在任务中选用的 UA 预设列表。内置 SenPlayer、Yamby、Hills、Lenna、VidHub 五个预设，可按需添加或删除。</td></tr>
               <tr><td>AI 按钮识别</td><td>配置用于 <code>{aiBtn}</code> 功能的 API 地址、密钥、模型和超时。支持任意 OpenAI 兼容接口（如 OpenRouter）。</td></tr>
               <tr><td>通知目标用户名</td><td>接收通知的 Telegram 用户名，接受 <code>username</code>、<code>@username</code> 或 <code>https://t.me/username</code>。未填写时发至账户"收藏夹"。</td></tr>
               <tr><td>通知触发时机</td><td>选择触发通知的事件：失败（默认）和/或成功，可多选。</td></tr>
@@ -289,7 +290,8 @@
               <tr><td>Enforce one run per day</td><td>Prevents a job from running more than once in a 24-hour period. Disable during testing.</td></tr>
               <tr><td>Default Play Duration</td><td>Fallback Emby Watch session length in seconds when not set per-job.</td></tr>
               <tr><td>Device Name</td><td>Device identifier sent to the Emby API (e.g. <code>Mac</code>). Emby displays this alongside the client name.</td></tr>
-              <tr><td>Default User Agent</td><td>Fallback UA string for Emby Watch requests when not set per-job.</td></tr>
+              <tr><td>Default User Agent</td><td>The UA preset used when a job has no UA selected. Pick from the preset list; defaults to SenPlayer (Mac).</td></tr>
+              <tr><td>User Agent Presets</td><td>Manage the preset list available in job forms. Five built-in presets (SenPlayer, Yamby, Hills, Lenna, VidHub) — add or remove custom entries as needed.</td></tr>
               <tr><td>AI Button Detection</td><td>Configure the API base URL, key, model, and timeout for the <code>{aiBtn}</code> feature. Any OpenAI-compatible provider works (e.g. OpenRouter).</td></tr>
               <tr><td>TG Notification Target</td><td>Telegram username to receive notifications. Accepts <code>username</code>, <code>@username</code>, or <code>https://t.me/username</code>. Falls back to Saved Messages if not set.</td></tr>
               <tr><td>Notify On Events</td><td>Which events trigger a notification: failed (default) and/or success. Multi-select.</td></tr>
