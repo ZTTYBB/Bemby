@@ -33,7 +33,8 @@
 - **账号导出/导入** — 在设置页面将 Telegram 会话数据导出为 JSON 文件，可导入至另一 Bemby 实例，无需重新认证
 - **开发者日志** — 在日志视图中开启"显示开发者日志"，可查看 AI 提示词及响应、各阶段耗时（连接、等待回复、按钮点击、按钮响应）、错误类型等调试信息
 - **登录验证码** — 管理员登录页面使用图形验证码
-- **移动端友好** — 响应式布局，侧边栏在小屏幕折叠为汉堡菜单（左侧菜单图标，右侧语言切换和品牌标识）
+- **移动端友好** — 响应式布局，侧边栏折叠为汉堡菜单；表格自适应隐藏次要列；弹窗固定于顶部并使用动态视口高度避免被浏览器界面遮挡；任务列表的操作按钮在移动端合并为单一 ⋯ 按钮，点击后从屏幕底部弹出操作菜单
+- **界面状态持久化** — 任务和日志页面的筛选条件、列排序方式在刷新后自动恢复；登录后自动跳回上次访问的页面
 - **Web 管理门户** — Vue 3 单页应用，用于管理账号、任务、设置和查看日志
 - **持久化存储** — SQLite 数据库，重启和容器升级后数据不丢失
 
@@ -304,7 +305,8 @@ A self-hosted automation tool for managing daily Telegram bot check-ins (签到)
 - **Account export/import** — export Telegram session data from Settings as a JSON file and import it into another Bemby instance without re-authenticating
 - **Developer logs** — enable "Show developer logs" in the log view to see timing breakdowns (connect, reply latency, button click, button response), AI prompt and response, error type, and per-step metadata useful for tuning job settings
 - **Login CAPTCHA** — SVG CAPTCHA on the admin login page
-- **Mobile-friendly** — responsive layout, sidebar collapses to a hamburger menu on small screens (menu icon on the left, language switcher and brand on the right)
+- **Mobile-friendly** — responsive layout, sidebar collapses to a hamburger menu; tables hide secondary columns on narrow screens; modals pin to the top and use dynamic viewport height to stay clear of browser chrome; job action buttons merge into a single ⋯ button on mobile, opening a bottom action sheet
+- **UI state persistence** — filter selections and column sort order are restored automatically on refresh; login redirects back to the last visited page
 - **Web admin portal** — Vue 3 SPA for managing accounts, jobs, settings, and viewing logs
 - **Persistent storage** — SQLite database, survives restarts and container upgrades
 

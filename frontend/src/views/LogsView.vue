@@ -37,14 +37,17 @@
                 :class="expandedId === l.id ? 'row-expanded' : ''"
                 @click="toggleDetail(l)"
               >
-                <td style="white-space:nowrap">{{ fmtDate(l.ranAt) }}</td>
+                <td class="time-cell">
+                  <span class="hide-mobile">{{ fmtDate(l.ranAt) }}</span>
+                  <span class="show-mobile" style="display:none">{{ fmtDateShort(l.ranAt) }}</span>
+                </td>
                 <td>
                   {{ l.jobName ?? l.jobId }}
                   <span style="margin-left:4px;font-size:11px;color:#aaa">▾</span>
                 </td>
                 <td class="col-hide-mobile">{{ l.accountName ?? '—' }}</td>
                 <td><span :class="statusBadge(l.status)">{{ t(`logs.status.${l.status}`) }}</span></td>
-                <td style="max-width:320px">
+                <td class="msg-cell">
                   <div style="display:flex;align-items:center;gap:8px">
                     <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">{{ l.message ?? '—' }}</span>
                     <button
@@ -61,7 +64,7 @@
               <!-- Detail panel — checkin jobs: chat-style attempt log -->
               <tr v-if="l.jobType === 'checkin' && expandedId === l.id">
                 <td colspan="5" style="padding:0;background:#f8f9fa;border-top:none">
-                  <div style="padding:16px 20px">
+                  <div class="detail-panel">
                     <div v-if="detailLoading" style="color:#888;font-size:13px">
                       {{ t('logs.detail.loading') }}
                     </div>
@@ -157,7 +160,7 @@
               <!-- Detail panel — custom jobs: step-by-step timeline -->
               <tr v-if="l.jobType === 'custom' && expandedId === l.id">
                 <td colspan="5" style="padding:0;background:#f8f9fa;border-top:none">
-                  <div style="padding:16px 20px">
+                  <div class="detail-panel">
                     <div v-if="detailLoading" style="color:#888;font-size:13px">{{ t('logs.detail.loading') }}</div>
                     <div v-else-if="!customDetail?.length" style="color:#888;font-size:13px">{{ t('logs.detail.noDetail') }}</div>
                     <div v-else class="custom-steps">
@@ -235,7 +238,7 @@
               <!-- Detail panel — embywatch jobs: playback summary -->
               <tr v-if="l.jobType === 'embywatch' && expandedId === l.id">
                 <td colspan="5" style="padding:0;background:#f8f9fa;border-top:none">
-                  <div style="padding:16px 20px">
+                  <div class="detail-panel">
                     <div v-if="detailLoading" style="color:#888;font-size:13px">{{ t('logs.detail.loading') }}</div>
                     <div v-else-if="!embywatchDetail" style="color:#888;font-size:13px">{{ t('logs.detail.noDetail') }}</div>
                     <div v-else class="emby-detail">
@@ -444,6 +447,13 @@ function fmtDate(iso: string) {
   const localeMap: Record<string, string> = { en: 'en-AU', zh: 'zh-CN' };
   return new Date(iso).toLocaleString(localeMap[locale.value] ?? 'en-AU', {
     month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+}
+
+function fmtDateShort(iso: string) {
+  const localeMap: Record<string, string> = { en: 'en-AU', zh: 'zh-CN' };
+  return new Date(iso).toLocaleString(localeMap[locale.value] ?? 'en-AU', {
+    month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
   });
 }
 
@@ -796,5 +806,60 @@ function fmtSeconds(s: number): string {
   font-size: 11px;
   color: #9399b2;
   font-family: monospace;
+}
+
+.time-cell {
+  white-space: nowrap;
+}
+
+.msg-cell {
+  max-width: 320px;
+}
+
+.detail-panel {
+  padding: 16px 20px;
+}
+
+@media (max-width: 767px) {
+  .time-cell {
+    font-size: 11px;
+  }
+
+  .time-cell .hide-mobile {
+    display: none;
+  }
+
+  .time-cell .show-mobile {
+    display: inline !important;
+  }
+
+  .msg-cell {
+    max-width: 140px;
+  }
+
+  .detail-panel {
+    padding: 10px 12px;
+  }
+
+  .chat-bg {
+    display: block;
+    max-width: 100%;
+  }
+
+  .custom-steps {
+    max-width: 100%;
+  }
+
+  .dev-block {
+    max-width: 100%;
+  }
+
+  .tg-bubble {
+    max-width: 100%;
+  }
+
+  .tg-keyboard {
+    max-width: 100%;
+  }
 }
 </style>

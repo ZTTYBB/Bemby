@@ -21,6 +21,7 @@
               <li>调度器每天在时间窗口内随机选择一个时间点自动执行任务。</li>
               <li>查看<strong>日志</strong>以确认结果或排查问题。</li>
             </ol>
+            <p class="help-note">筛选条件、列排序方式和上次访问的页面在刷新或重新登录后自动恢复。</p>
           </template>
           <template v-else>
             <div class="card-section-title">Overview</div>
@@ -35,6 +36,7 @@
               <li>The scheduler picks a random time within the window each day and runs the job automatically.</li>
               <li>Check <strong>Logs</strong> to verify results or diagnose failures.</li>
             </ol>
+            <p class="help-note">Filter selections, column sort order, and last visited page are automatically restored on refresh or re-login.</p>
           </template>
         </div>
       </div>
@@ -151,6 +153,18 @@
             <p class="help-para">
               当系统存在多个账号或多个机器人/网址时，任务列表顶部会显示对应的筛选下拉框，可按账号或机器人/网址过滤任务。
             </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">列排序</div>
+            <p class="help-para">
+              点击任意列标题可对任务列表按该列排序，再次点击切换升序/降序。点击行本身可高亮选中该行。
+              筛选条件与排序方式在刷新后自动恢复。
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">移动端操作菜单</div>
+            <p class="help-para">
+              在移动端，每行的操作按钮（运行、编辑、复制、删除）合并为单一的 <strong>⋯</strong> 按钮。
+              点击后从屏幕底部弹出操作菜单，选择所需操作后菜单自动关闭；点击空白处可取消。
+            </p>
           </template>
           <template v-else>
             <div class="card-section-title">Jobs</div>
@@ -229,6 +243,18 @@
             <p class="help-para">
               When more than one account or bot/URL exists, filter dropdowns appear at the top of the jobs list,
               letting you show only jobs for a specific account or bot target.
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">Sorting</div>
+            <p class="help-para">
+              Click any column header to sort the job list by that column; click again to reverse the direction.
+              Clicking a row highlights it. Filter selections and sort order are both remembered across page refreshes.
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">Mobile Action Menu</div>
+            <p class="help-para">
+              On mobile, the per-row action buttons (Run, Edit, Duplicate, Delete) are merged into a single <strong>⋯</strong> button.
+              Tapping it opens a bottom action sheet; choose an action and the sheet closes automatically, or tap outside to dismiss.
             </p>
           </template>
         </div>
