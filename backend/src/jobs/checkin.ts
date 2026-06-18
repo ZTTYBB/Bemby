@@ -269,6 +269,8 @@ export async function selectButtonWithAI(
 
   const err = new Error(`AI selected "${failedResponses.at(-1)}" but it does not match any available button after ${effectiveMax + 1} attempt(s): ${JSON.stringify(flat)}`);
   (err as any).aiRetries = failedResponses;
+  (err as any).aiPrompt = prompt;
+  (err as any).aiResponse = failedResponses.at(-1) ?? '';
   throw err;
 }
 

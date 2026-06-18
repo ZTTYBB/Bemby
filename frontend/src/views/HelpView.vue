@@ -128,14 +128,19 @@
             </p>
             <table class="help-table">
               <tbody>
-                <tr><td>发送命令</td><td>向机器人发送命令或消息。支持模板占位符（<code>{word:N}</code> 等），以及 <code>{aiInput}</code> / <code>{aiInput:N}</code>——自动将上一条消息中的图片发给 AI 识别，将识别出的字符填入发送内容。</td></tr>
-                <tr><td>等待回复</td><td>等待机器人回复（可设置超时时长）。</td></tr>
-                <tr><td>点击按钮</td><td>点击内联键盘按钮。支持 <code>{aiBtn}</code>（AI 自动识别）和 <code>{anyBtn}</code>（随机选择）。</td></tr>
-                <tr><td>输入验证码</td><td>等待含图片的机器人消息，通过 AI 识别图中验证码，再将识别结果自动发送给机器人。可指定验证码字符数量以提高识别准确率。</td></tr>
+                <tr><td>发送命令</td><td>向机器人发送命令或消息。支持模板占位符（<code>{word:N}</code> 等），以及 <code>{aiInput}</code> / <code>{aiInput:N}</code>——自动将上一条消息中的图片发给 AI 识别，将识别出的字符填入发送内容。支持独立的<strong>最大重试次数</strong>配置。</td></tr>
+                <tr><td>等待回复</td><td>等待机器人回复（可设置超时时长），支持独立的<strong>最大重试次数</strong>。可选配<strong>成功包含文字</strong>和<strong>失败包含文字</strong>：收到含成功文字的回复则立即标记成功；收到含失败文字的回复则标记失败（并按配置重试）；两者均留空时，任意回复均视为成功。</td></tr>
+                <tr><td>点击按钮</td><td>点击内联键盘按钮。支持 <code>{aiBtn}</code>（AI 自动识别）、<code>{anyBtn}</code>（随机选择）或精确文字匹配，并支持独立的<strong>最大重试次数</strong>。</td></tr>
+                <tr><td>输入验证码</td><td>等待含图片的机器人消息，通过 AI 识别图中验证码，再将识别结果自动发送给机器人。可指定验证码字符数量以提高识别准确率——若 AI 返回的字符数与预期不符，则视为失败并触发重试。支持独立的<strong>最大重试次数</strong>。</td></tr>
                 <tr><td>延时</td><td>在步骤之间插入固定等待时长。</td></tr>
               </tbody>
             </table>
+            <p class="help-para">
+              <strong>任务最大重试次数</strong>——自定义任务专属设置（独立于全局任务重试），失败时从头重新执行整个动作链。
+              <strong>动作最大重试次数</strong>——每个动作仅重试自身，不影响其他步骤。
+            </p>
             <p class="help-note">需要在<strong>设置</strong>页面配置 AI API 密钥，方可使用 <code>{aiBtn}</code>、<code>{aiInput}</code> 和"输入验证码"步骤。</p>
+            <p class="help-note">AI 的提示词与响应始终显示在步骤日志中，无需开启开发者模式。</p>
 
             <div class="card-section-title" style="margin-top:16px;font-size:11px">时间窗口</div>
             <p class="help-para">
@@ -222,14 +227,19 @@
             </p>
             <table class="help-table">
               <tbody>
-                <tr><td>Send command</td><td>Sends a command or message to the bot. Supports template placeholders (<code>{word:N}</code>, etc.) and <code>{aiInput}</code> / <code>{aiInput:N}</code> -- the image from the previous bot message is sent to AI, the recognised characters are substituted into the message before sending.</td></tr>
-                <tr><td>Wait for reply</td><td>Waits for the bot to reply, with a configurable timeout.</td></tr>
-                <tr><td>Click button</td><td>Clicks an inline keyboard button. Supports <code>{aiBtn}</code> (AI picks the button) and <code>{anyBtn}</code> (random pick).</td></tr>
-                <tr><td>Enter captcha</td><td>Waits for a bot message containing an image, sends it to AI to recognise the captcha characters, then automatically sends the answer back. An optional character-count hint improves accuracy.</td></tr>
+                <tr><td>Send command</td><td>Sends a command or message to the bot. Supports template placeholders (<code>{word:N}</code>, etc.) and <code>{aiInput}</code> / <code>{aiInput:N}</code> -- the image from the previous bot message is sent to AI, the recognised characters are substituted into the message before sending. Has its own <strong>Max retries</strong> setting.</td></tr>
+                <tr><td>Wait for reply</td><td>Waits for the bot to reply, with a configurable timeout and its own <strong>Max retries</strong> setting. Optional <strong>Success contains</strong> and <strong>Fail contains</strong> fields let you classify the reply by text: if the reply contains the success text the action succeeds immediately; if it contains the fail text the action fails (and retries if configured). Leave both empty and any reply counts as success.</td></tr>
+                <tr><td>Click button</td><td>Clicks an inline keyboard button. Supports <code>{aiBtn}</code> (AI picks the button), <code>{anyBtn}</code> (random pick), or exact text. Has its own <strong>Max retries</strong> setting.</td></tr>
+                <tr><td>Enter captcha</td><td>Waits for a bot message containing an image, sends it to AI to recognise the captcha characters, then automatically sends the answer back. An optional character-count hint improves accuracy -- if the AI response does not match the expected length the action fails and retries. Has its own <strong>Max retries</strong> setting.</td></tr>
                 <tr><td>Delay</td><td>Pauses for a fixed duration between steps.</td></tr>
               </tbody>
             </table>
+            <p class="help-para">
+              <strong>Job max retries</strong> -- a per-custom-job setting (separate from the global job retry) that reruns the entire action chain from the beginning on failure.
+              <strong>Action max retries</strong> -- each action retries only itself on failure; the rest of the chain is unaffected.
+            </p>
             <p class="help-note">An AI API key must be configured in <strong>Settings</strong> before using <code>{aiBtn}</code>, <code>{aiInput}</code>, or Enter captcha steps.</p>
+            <p class="help-note">AI prompt and response are always shown in the step log, regardless of whether developer logs are enabled.</p>
 
             <div class="card-section-title" style="margin-top:16px;font-size:11px">Schedule Window</div>
             <p class="help-para">
@@ -366,7 +376,7 @@
             <ul class="help-steps">
               <li><strong>签到任务</strong>：TG 连接耗时、等待回复耗时（含配置的超时限制）、按钮 API 调用耗时、按钮响应耗时及来源（原地编辑或新消息）、总耗时、错误类型。</li>
               <li><strong>自定义任务</strong>：每步收到的消息数（等待回复步骤）、响应来源、重试次数（点击按钮步骤）及错误类型。</li>
-              <li><strong>AI 步骤</strong>：发送给 AI 的提示词、图片及响应文本、响应耗时；若发生重试，每次失败的 AI 回答也会单独列出。</li>
+              <li><strong>自定义任务</strong>（进阶元数据）：每步收到的消息数、响应来源、重试次数及错误类型。AI 提示词、响应及耗时无论是否开启此开关均始终显示在步骤日志中。</li>
             </ul>
             <p class="help-note">默认关闭，调试或调优任务参数时开启。</p>
             <p class="help-para" style="margin-top:10px"><strong>AI 调试面板</strong></p>
@@ -418,7 +428,7 @@
             <ul class="help-steps">
               <li><strong>Check-in jobs</strong>: TG connect time, reply latency (with the configured timeout limit for comparison), button click API time, button response time and source (edited message or new message), total attempt duration, and error type on failure.</li>
               <li><strong>Custom jobs</strong>: per-step metadata including message count received (wait-reply steps), response source and retry count (click-button steps), and error type.</li>
-              <li><strong>AI steps</strong>: the full prompt sent, any image(s) included, the model's response, and how long the AI request took. If the AI retried (button not matched on first attempt), each failed response is listed separately.</li>
+              <li><strong>AI steps</strong>: per-step message count (wait-reply), response source and retry count (click-button), and error type. AI prompt, response, and timing are always visible in the step log regardless of this toggle.</li>
             </ul>
             <p class="help-note">Off by default. Enable when debugging failures or tuning timeout and retry settings.</p>
             <p class="help-para" style="margin-top:10px"><strong>AI Debug Panel</strong></p>

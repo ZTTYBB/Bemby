@@ -223,7 +223,7 @@
                           </div>
                         </div>
                         <div v-if="s.error" class="chat-error" style="margin-top:4px">{{ s.error }}</div>
-                        <template v-if="showDevLogs && s.aiPrompt != null">
+                        <template v-if="s.aiPrompt != null">
                           <div class="dev-block" style="margin-top:8px">
                             <div class="dev-block-label">{{ t('logs.aiPrompt') }}</div>
                             <img v-if="s.preClickImage" :src="s.preClickImage" class="dev-block-img" alt="image sent to AI" />

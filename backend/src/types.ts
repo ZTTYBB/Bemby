@@ -34,14 +34,15 @@ export type Job = {
 };
 
 export type CustomAction =
-  | { type: 'send_command'; content: string }
-  | { type: 'wait_reply'; maxWaitMs: number }
+  | { type: 'send_command'; content: string; maxRetries?: number }
+  | { type: 'wait_reply'; maxWaitMs: number; successContains?: string; failContains?: string; maxRetries?: number }
   | { type: 'delay'; waitMs: number }
   | { type: 'click_button'; button: string; maxRetries: number; maxWaitMs: number }
-  | { type: 'enter_captcha'; maxWaitMs: number; captchaLength?: number };
+  | { type: 'enter_captcha'; maxWaitMs: number; captchaLength?: number; maxRetries?: number };
 
 export type CustomConfig = {
   actions: CustomAction[];
+  maxRetries?: number;
 };
 
 export type CustomStepLog = {
@@ -75,6 +76,10 @@ export type CustomStepLog = {
   /** For click_button: how many retries were needed (0 = first attempt succeeded) */
   retryCount?: number;
   errorName?: string;
+  /** Which job-level attempt this step belongs to, 1-based (only set when job maxRetries > 1) */
+  jobAttempt?: number;
+  /** Which action-level attempt this is, 1-based (only set when action maxRetries > 0) */
+  actionAttempt?: number;
 };
 
 export type EmbywatchConfig = {
