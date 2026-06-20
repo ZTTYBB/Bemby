@@ -149,6 +149,28 @@ function loadEligibleJobs(): Array<{ job: Job; account: TgAccount | null }> {
 }
 
 async function executeJob(job: Job, account: TgAccount | null): Promise<void> {
+  // Re-fetch job settings so changes made after scheduling take effect
+  const freshJob = db.prepare("SELECT * FROM jobs WHERE id = ?").get(job.id) as any;
+  if (freshJob) {
+    job = {
+      id: freshJob.id,
+      name: freshJob.name,
+      accountId: freshJob.account_id ?? null,
+      jobType: freshJob.job_type,
+      botUsername: freshJob.bot_username,
+      scheduleWindowStart: freshJob.schedule_window_start,
+      scheduleWindowEnd: freshJob.schedule_window_end,
+      timezone: freshJob.timezone,
+      replyTimeoutMs: freshJob.reply_timeout_ms,
+      retryMax: freshJob.retry_max,
+      enabled: Boolean(freshJob.enabled),
+      createdAt: freshJob.created_at,
+      config: freshJob.config ?? null,
+      startCommand: freshJob.start_command || "/start",
+      checkinButton: freshJob.checkin_button || "签到",
+    };
+  }
+
   const ranAt = new Date().toISOString();
   const { lastInsertRowid: logId } = db
     .prepare(
@@ -160,7 +182,7 @@ async function executeJob(job: Job, account: TgAccount | null): Promise<void> {
   const signal = registerJob(Number(logId));
   registerLiveDetail(Number(logId), detailLogs);
   try {
-    // Re-fetch session for checkin jobs in case it was updated since scheduling
+    // Re-fetch session in case it was updated since scheduling
     if (account) {
       const fresh = db
         .prepare("SELECT session_string FROM tg_accounts WHERE id = ?")
@@ -256,16 +278,19 @@ function refreshJobs(): void {
       const alreadyRanToday = dailyCheckOn && hasRunToday(job.id, job.timezone);
       scheduleOne(job, account, alreadyRanToday);
     } else {
-      const configChanged =
+      const scheduleChanged =
         existing.job.scheduleWindowStart !== job.scheduleWindowStart ||
         existing.job.scheduleWindowEnd !== job.scheduleWindowEnd ||
         existing.job.timezone !== job.timezone ||
         existing.job.botUsername !== job.botUsername ||
         existing.job.accountId !== job.accountId;
-      if (configChanged) {
+      if (scheduleChanged) {
         const alreadyRanToday =
           dailyCheckOn && hasRunToday(job.id, job.timezone);
         scheduleOne(job, account, alreadyRanToday);
+      } else {
+        // Keep the timer but update the stored snapshot so status reflects current settings
+        schedule.set(job.id, { ...existing, job, account });
       }
     }
   }
