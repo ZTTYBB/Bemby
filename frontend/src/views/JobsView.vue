@@ -11,7 +11,7 @@
         {{ t('jobs.nextRuns') }}
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:12px">
-        <div v-for="s in scheduleStatus" :key="s.jobId" style="font-size:13px">
+        <div v-for="s in sortedScheduleStatus" :key="s.jobId" style="font-size:13px">
           <strong>{{ s.jobName }}</strong>: {{ fmtDateTime(s.nextRun) }}
         </div>
       </div>
@@ -558,6 +558,9 @@ const jobs = ref<Job[]>([]);
 const accounts = ref<Account[]>([]);
 const templates = ref<JobTemplate[]>([]);
 const scheduleStatus = ref<ScheduleStatus[]>([]);
+const sortedScheduleStatus = computed(() =>
+  [...scheduleStatus.value].sort((a, b) => a.nextRun.localeCompare(b.nextRun))
+);
 const settings = ref<Settings | null>(null);
 const uaPresets = computed<UAPreset[]>(() => {
   try { return JSON.parse(settings.value?.ua_presets ?? '[]'); } catch { return []; }
