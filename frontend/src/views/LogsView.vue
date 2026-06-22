@@ -24,6 +24,12 @@
           <input type="checkbox" v-model="showDevLogs" />
           <span class="dev-toggle-label">{{ t("logs.devLogsLabel") }}</span>
         </label>
+        <input
+          v-model="filterText"
+          class="form-input"
+          style="width: 200px"
+          :placeholder="t('logs.filterPlaceholder')"
+        />
         <button class="btn btn-ghost" @click="load">
           <i class="fa-solid fa-rotate"></i> {{ t("common.refresh") }}
         </button>
@@ -43,10 +49,10 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-if="!logs.length">
+            <tr v-if="!filteredLogs.length">
               <td colspan="5" class="empty">{{ t("logs.noLogs") }}</td>
             </tr>
-            <template v-for="l in logs" :key="l.id">
+            <template v-for="l in filteredLogs" :key="l.id">
               <tr
                 style="cursor: pointer; user-select: none"
                 :class="[expandedId === l.id ? 'row-expanded' : '', l.retired ? 'row-retired' : '']"
@@ -869,9 +875,18 @@ import { usePersistedRef } from "../composables/usePersistedRef";
 const logs = ref<Log[]>([]);
 const jobs = ref<Job[]>([]);
 const filterJobId = usePersistedRef<number | "">("bemby:logs:filterJobId", "");
+const filterText = usePersistedRef<string>("bemby:logs:filterText", "");
 const showDevLogs = usePersistedRef<boolean>("bemby:logs:showDevLogs", false);
 const showRetired = usePersistedRef<boolean>("bemby:logs:showRetired", false);
 const offset = ref(0);
+
+const filteredLogs = computed(() => {
+  const q = filterText.value.trim().toLowerCase();
+  if (!q) return logs.value;
+  return logs.value.filter(l =>
+    [l.jobName, l.accountName, l.message].some(f => f?.toLowerCase().includes(q))
+  );
+});
 
 const expandedId = ref<number | null>(null);
 const expandedDetail = ref<CheckinAttemptLog[] | EmbywatchLog[] | null>(null);
