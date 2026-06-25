@@ -32,7 +32,7 @@
         </a>
       </div>
       <a class="nav-link" href="#" :class="{ active: currentView === 'accounts' }" @click.prevent="setView('accounts')"><i class="fa-solid fa-users"></i>{{ t('nav.accounts') }}</a>
-      <a class="nav-link" href="#" @click.prevent="showMessenger = true"><i class="fa-brands fa-telegram"></i>{{ t('nav.messenger') }}</a>
+      <a class="nav-link" href="#" :class="{ active: showMessengerInline }" @click.prevent="openMessenger()"><i class="fa-brands fa-telegram"></i>{{ t('nav.messenger') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'jobs' }" @click.prevent="setView('jobs')"><i class="fa-solid fa-robot"></i>{{ t('nav.jobs') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'templates' }" @click.prevent="setView('templates')"><i class="fa-solid fa-layer-group"></i>{{ t('nav.templates') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'logs' }" @click.prevent="setView('logs')"><i class="fa-solid fa-scroll"></i>{{ t('nav.logs') }}</a>
@@ -55,15 +55,21 @@
     </nav>
 
     <main class="main">
-      <component :is="currentComponent" />
+      <TgClientPopup
+        v-if="showMessengerInline"
+        :inline="true"
+        @close="closeMessengerInline"
+      />
+      <component v-else :is="currentComponent" />
     </main>
   </div>
 
+  <!-- Desktop popup (non-mobile only) -->
   <TgClientPopup v-if="showMessenger" @close="showMessenger = false" />
 </template>
 
 <script setup lang="ts">
-import { computed, ref, type Component } from 'vue';
+import { computed, onUnmounted, ref, type Component } from 'vue';
 import TgClientPopup from './components/TgClientPopup.vue';
 import { useRoute, useRouter } from 'vue-router';
 import { version as APP_VERSION } from '../package.json';
@@ -93,13 +99,35 @@ const savedView = localStorage.getItem(LAST_VIEW_KEY) as ViewName;
 const currentView = ref<ViewName>(VALID_VIEWS.includes(savedView) ? savedView : 'accounts');
 const currentComponent = computed(() => viewComponents[currentView.value]);
 
+// Track whether the messenger is shown inline (mobile) or as a popup (desktop)
+const mq = window.matchMedia('(max-width: 768px)');
+const isMobile = ref(mq.matches);
+const mqHandler = (e: MediaQueryListEvent) => { isMobile.value = e.matches; };
+mq.addEventListener('change', mqHandler);
+onUnmounted(() => mq.removeEventListener('change', mqHandler));
+
+const showMessenger = ref(false);       // desktop popup
+const showMessengerInline = ref(false); // mobile inline view
+
+function openMessenger() {
+  sidebarOpen.value = false;
+  if (isMobile.value) {
+    showMessengerInline.value = true;
+  } else {
+    showMessenger.value = true;
+  }
+}
+
+function closeMessengerInline() {
+  showMessengerInline.value = false;
+}
+
 function setView(view: ViewName) {
   currentView.value = view;
   localStorage.setItem(LAST_VIEW_KEY, view);
+  showMessengerInline.value = false;
   sidebarOpen.value = false;
 }
-
-const showMessenger = ref(false);
 
 const route = useRoute();
 const router = useRouter();

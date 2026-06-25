@@ -1,6 +1,9 @@
 <template>
-  <div class="tgc-backdrop" @click.self="$emit('close')">
-    <div class="tgc-popup" :class="{ 'mobile-chat-open': showMobileChat }">
+  <div
+    :class="inline ? 'tgc-inline-wrap' : 'tgc-backdrop'"
+    @click.self="inline ? undefined : $emit('close')"
+  >
+    <div class="tgc-popup" :class="{ 'mobile-chat-open': showMobileChat, 'tgc-popup-inline': inline }">
       <!-- Header -->
       <div class="tgc-header">
         <div class="tgc-header-left">
@@ -157,8 +160,9 @@
         <template v-if="activeChat">
           <div class="tgc-chat">
             <div class="tgc-chat-header">
-              <button class="tgc-back-btn" @click="backToDialogs" title="Back">
+              <button v-show="showMobileChat" class="tgc-back-btn" @click="backToDialogs" title="Back to chats">
                 <i class="fa-solid fa-arrow-left"></i>
+                <span class="tgc-back-label">Back</span>
               </button>
               <div
                 class="tgc-avatar tgc-avatar-sm tgc-clickable"
@@ -792,6 +796,7 @@ import {
   type TgProfile,
 } from "../api/client";
 
+const { inline = false } = defineProps<{ inline?: boolean }>();
 const emit = defineEmits<{ close: [] }>();
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -1813,7 +1818,7 @@ async function addContactSubmit() {
 </script>
 
 <style scoped>
-/* ── Overlay ────────────────────────────────────────────────────────────────── */
+/* ── Overlay (desktop popup mode) ───────────────────────────────────────────── */
 .tgc-backdrop {
   position: fixed;
   inset: 0;
@@ -1823,6 +1828,22 @@ async function addContactSubmit() {
   align-items: center;
   justify-content: center;
   padding: 16px;
+}
+
+/* ── Inline mode (mobile full-page) ─────────────────────────────────────────── */
+.tgc-inline-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.tgc-popup-inline {
+  height: 100% !important;
+  max-height: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  width: 100% !important;
 }
 
 .tgc-popup {
@@ -2170,6 +2191,7 @@ async function addContactSubmit() {
 
 .tgc-chat-title-wrap {
   min-width: 0;
+  flex: 1;
 }
 
 .tgc-chat-name {
@@ -3205,16 +3227,22 @@ async function addContactSubmit() {
   margin: 4px 0;
 }
 
-/* ── Back button (mobile only) ──────────────────────────────────────────────── */
+/* ── Back button ──────────────────────────────────────────────────────────────
+   Visibility is controlled by v-show (JS), not CSS alone, so it is reliable
+   regardless of screen width or media-query quirks.
+────────────────────────────────────────────────────────────────────────────── */
 .tgc-back-btn {
-  display: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: none;
-  color: #888;
+  color: #4361ee;
   cursor: pointer;
   padding: 6px 8px;
   border-radius: 6px;
-  font-size: 16px;
+  font-size: 15px;
+  font-weight: 500;
   flex-shrink: 0;
   transition:
     background 0.15s,
@@ -3222,18 +3250,24 @@ async function addContactSubmit() {
 }
 
 .tgc-back-btn:hover {
-  background: #f0f2f5;
-  color: #1a1a2e;
+  background: #eef0fb;
 }
 
-/* ── Mobile-only close button in chat header ────────────────────────────────── */
+/* "Back" text label -- always shown alongside the arrow */
+.tgc-back-label {
+  font-size: 13px;
+}
+
+/* ── Close button in chat header (always visible) ────────────────────────────
+   On mobile the main header is hidden when a chat is open, so this is the
+   only way to exit. On desktop it is a convenient shortcut.
+────────────────────────────────────────────────────────────────────────────── */
 .tgc-chat-close-btn {
-  display: none;
   flex-shrink: 0;
 }
 
 /* ── Responsive ─────────────────────────────────────────────────────────────── */
-@media (max-width: 640px) {
+@media (max-width: 768px) {
   .tgc-backdrop {
     padding: 0;
     align-items: flex-end;
@@ -3250,19 +3284,6 @@ async function addContactSubmit() {
   /* Hide outer header when a chat is open -- chat header takes over */
   .tgc-popup.mobile-chat-open .tgc-header {
     display: none;
-  }
-
-  /* Show close button inside chat header on mobile */
-  .tgc-chat-close-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-left: auto;
-  }
-
-  /* Chat title fills the space between avatar and close btn */
-  .tgc-chat-title-wrap {
-    flex: 1;
   }
 
   /* Single-panel: sidebar fills the body */
@@ -3292,12 +3313,6 @@ async function addContactSubmit() {
     display: none;
   }
 
-  .tgc-back-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
   /* Contacts panel full-width on mobile */
   .tgc-contacts-panel {
     width: 100%;
@@ -3320,6 +3335,7 @@ async function addContactSubmit() {
 
   .tgc-messages {
     padding: 12px;
+    -webkit-overflow-scrolling: touch;
   }
 
   /* Tap-to-show message actions on mobile (no hover available) */
@@ -3334,15 +3350,15 @@ async function addContactSubmit() {
     font-size: 13px;
   }
 
-  /* Header: collapse logo + title on dialog list view */
-  .tgc-logo,
-  .tgc-title {
+  /* Header: hide logo only -- keep "Messenger" title so users have context */
+  .tgc-logo {
     display: none;
   }
 
   .tgc-header-left {
     flex: 1;
     min-width: 0;
+    gap: 6px;
   }
 
   .tgc-account-select {
@@ -3353,18 +3369,18 @@ async function addContactSubmit() {
     padding: 5px 8px;
   }
 
-  /* Minimum touch target sizes (44px recommended by Apple HIG) */
+  /* Minimum touch target sizes (Apple HIG recommends 44px) */
   .tgc-icon-btn,
   .tgc-back-btn {
-    min-width: 40px;
-    min-height: 40px;
+    min-width: 44px;
+    min-height: 44px;
     padding: 8px;
   }
 
   /* Slightly larger send button */
   .tgc-send-btn {
-    width: 42px;
-    height: 42px;
+    width: 44px;
+    height: 44px;
   }
 
   /* Bigger folder tab touch targets */
@@ -3378,12 +3394,7 @@ async function addContactSubmit() {
     padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
 
-  /* Dialog list items -- already 60px min-height, just ensure smooth scroll */
   .tgc-dialog-list {
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .tgc-messages {
     -webkit-overflow-scrolling: touch;
   }
 }
