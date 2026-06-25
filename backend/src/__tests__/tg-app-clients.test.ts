@@ -369,3 +369,73 @@ describe('accounts CRUD — app_client_id', () => {
     expect(params?.deviceModel).toBe('PC 64bit');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 7. checkAccountStatus — account state detection
+// ---------------------------------------------------------------------------
+
+describe('checkAccountStatus — account state detection', () => {
+  beforeEach(() => { vi.mocked(TelegramClient).mockClear(); mockConnect.mockClear(); mockGetMe.mockClear(); mockDisconnect.mockClear(); });
+
+  it('returns isActive true and isRestricted false for a normal account', async () => {
+    mockGetMe.mockResolvedValueOnce({ firstName: 'Alice', deleted: false, restricted: false, restrictionReason: [] });
+    const result = await checkAccountStatus(1, 'hash', 'session');
+    expect(result.isActive).toBe(true);
+    expect(result.isDeleted).toBe(false);
+    expect(result.isRestricted).toBe(false);
+    expect(result.firstName).toBe('Alice');
+  });
+
+  it('returns isDeleted true when the user object has deleted flag', async () => {
+    mockGetMe.mockResolvedValueOnce({ firstName: '', deleted: true, restricted: false, restrictionReason: [] });
+    const result = await checkAccountStatus(1, 'hash', 'session');
+    expect(result.isDeleted).toBe(true);
+    expect(result.isActive).toBe(false);
+  });
+
+  it('returns isRestricted true and populates restrictions for a restricted user', async () => {
+    mockGetMe.mockResolvedValueOnce({
+      firstName: 'Bob', deleted: false, restricted: true,
+      restrictionReason: [{ platform: 'all', reason: 'spam', text: 'Spam restricted' }],
+    });
+    const result = await checkAccountStatus(1, 'hash', 'session');
+    expect(result.isRestricted).toBe(true);
+    expect(result.isActive).toBe(false);
+    expect(result.restrictions[0].reason).toBe('spam');
+  });
+
+  it('returns isDeleted true for UserEmpty response', async () => {
+    mockGetMe.mockResolvedValueOnce({ className: 'UserEmpty' });
+    const result = await checkAccountStatus(1, 'hash', 'session');
+    expect(result.isDeleted).toBe(true);
+    expect(result.isActive).toBe(false);
+  });
+
+  it('returns isDeleted true when connect throws USER_DEACTIVATED_BAN', async () => {
+    mockConnect.mockRejectedValueOnce(Object.assign(new Error('USER_DEACTIVATED_BAN'), { errorMessage: 'USER_DEACTIVATED_BAN' }));
+    const result = await checkAccountStatus(1, 'hash', 'session');
+    expect(result.isDeleted).toBe(true);
+    expect(result.isActive).toBe(false);
+    expect(result.restrictions[0].reason).toBe('banned');
+  });
+
+  it('returns isRestricted true when connect throws ACCOUNT_FROZEN', async () => {
+    mockConnect.mockRejectedValueOnce(Object.assign(new Error('ACCOUNT_FROZEN'), { errorMessage: 'ACCOUNT_FROZEN' }));
+    const result = await checkAccountStatus(1, 'hash', 'session');
+    expect(result.isRestricted).toBe(true);
+    expect(result.isActive).toBe(false);
+    expect(result.restrictions[0].reason).toBe('account_frozen');
+  });
+
+  it('returns isRestricted true when connect throws AUTH_KEY_UNREGISTERED', async () => {
+    mockConnect.mockRejectedValueOnce(Object.assign(new Error('AUTH_KEY_UNREGISTERED'), { errorMessage: 'AUTH_KEY_UNREGISTERED' }));
+    const result = await checkAccountStatus(1, 'hash', 'session');
+    expect(result.isRestricted).toBe(true);
+    expect(result.restrictions[0].text).toMatch(/revoked/i);
+  });
+
+  it('re-throws unknown errors', async () => {
+    mockConnect.mockRejectedValueOnce(Object.assign(new Error('FLOOD_WAIT_60'), { errorMessage: 'FLOOD_WAIT_60' }));
+    await expect(checkAccountStatus(1, 'hash', 'session')).rejects.toThrow('FLOOD_WAIT_60');
+  });
+});

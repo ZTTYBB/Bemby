@@ -79,6 +79,19 @@ export async function submitCode(
   }
 }
 
+// Telegram error codes that indicate a permanently banned / deactivated account
+const BANNED_CODES = ['USER_DEACTIVATED', 'USER_DEACTIVATED_BAN', 'PHONE_NUMBER_BANNED'];
+
+// Telegram error codes that indicate a frozen or revoked session
+const FROZEN_CODES = ['ACCOUNT_FROZEN', 'AUTH_KEY_UNREGISTERED', 'SESSION_REVOKED', 'AUTH_KEY_DUPLICATED'];
+
+const FROZEN_TEXT: Record<string, string> = {
+  ACCOUNT_FROZEN:        'Account is frozen by Telegram',
+  AUTH_KEY_UNREGISTERED: 'Session revoked — account may have been banned or logged out everywhere',
+  SESSION_REVOKED:       'Session was explicitly revoked',
+  AUTH_KEY_DUPLICATED:   'Auth key duplicated — session is no longer valid',
+};
+
 export async function checkAccountStatus(
   apiId: number,
   apiHash: string,
@@ -95,22 +108,55 @@ export async function checkAccountStatus(
 
   try {
     await client.connect();
-    const me = await client.getMe() as Api.User;
+    const me = await client.getMe();
+
+    // UserEmpty or null — account deleted / inaccessible
+    if (!me || (me as any).className === 'UserEmpty') {
+      return { isActive: false, isDeleted: true, isRestricted: false, restrictions: [], firstName: '' };
+    }
+
+    const user = me as Api.User;
+    const isDeleted = Boolean(user.deleted);
+    const isRestricted = Boolean(user.restricted);
 
     return {
-      isActive: true,
-      isDeleted: Boolean(me.deleted),
-      isRestricted: Boolean(me.restricted),
-      restrictions: (me.restrictionReason ?? []).map(r => ({
+      isActive: !isDeleted && !isRestricted,
+      isDeleted,
+      isRestricted,
+      restrictions: (user.restrictionReason ?? []).map(r => ({
         platform: r.platform,
         reason: r.reason,
         text: r.text,
       })),
-      firstName: me.firstName ?? '',
-      lastName: me.lastName,
-      username: me.username,
-      phone: me.phone,
+      firstName: user.firstName ?? '',
+      lastName: user.lastName,
+      username: user.username,
+      phone: user.phone,
     };
+  } catch (err: any) {
+    const code: string = err.errorMessage ?? '';
+
+    if (BANNED_CODES.includes(code)) {
+      return {
+        isActive: false,
+        isDeleted: true,
+        isRestricted: false,
+        restrictions: [{ platform: 'all', reason: 'banned', text: `Account banned by Telegram (${code})` }],
+        firstName: '',
+      };
+    }
+
+    if (FROZEN_CODES.includes(code)) {
+      return {
+        isActive: false,
+        isDeleted: false,
+        isRestricted: true,
+        restrictions: [{ platform: 'all', reason: code.toLowerCase(), text: FROZEN_TEXT[code] ?? code }],
+        firstName: '',
+      };
+    }
+
+    throw err;
   } finally {
     await client.disconnect().catch(() => undefined);
   }
