@@ -15,6 +15,7 @@ import {
   clickButton,
   sendReaction,
   getThreadMessages,
+  getBotCommands,
   subscribeToMessages,
   getFolders,
 } from "../tg/liveClient";
@@ -266,6 +267,18 @@ router.get("/:accountId/messages/:chatId/:msgId/photo", async (req, res) => {
     res.set("Content-Type", "image/jpeg");
     res.set("Cache-Control", "private, max-age=3600");
     res.send(buf);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /:accountId/bot-commands/:chatId -- commands for a bot chat
+router.get("/:accountId/bot-commands/:chatId", async (req, res) => {
+  const accountId = Number(req.params.accountId);
+  const chatId = decodeURIComponent(req.params.chatId);
+  try {
+    const entry = await getLiveClient(accountId);
+    res.json(await getBotCommands(entry, chatId));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

@@ -366,6 +366,20 @@
               </template>
             </div>
 
+            <!-- Command suggestions -->
+            <div v-if="commandSuggestions.length" class="tgc-cmd-suggestions">
+              <div
+                v-for="(cmd, i) in commandSuggestions"
+                :key="cmd.command"
+                class="tgc-cmd-item"
+                :class="{ 'tgc-cmd-selected': i === selectedCmdIdx }"
+                @click="selectCommand(cmd)"
+              >
+                <span class="tgc-cmd-name">/{{ cmd.command }}</span>
+                <span class="tgc-cmd-desc">{{ cmd.description }}</span>
+              </div>
+            </div>
+
             <div class="tgc-compose">
               <!-- Reply strip -->
               <div v-if="replyingTo" class="tgc-reply-strip">
@@ -387,6 +401,16 @@
                 </button>
               </div>
               <div class="tgc-compose-row">
+                <!-- Commands button for bots -->
+                <button
+                  v-if="botCommands.length"
+                  class="tgc-slash-btn"
+                  :class="{ active: commandSuggestions.length }"
+                  title="Bot commands"
+                  @click="openCommandMenu"
+                >
+                  /
+                </button>
                 <textarea
                   v-model="inputText"
                   class="tgc-input"
@@ -759,6 +783,7 @@ import {
   type TgDialog,
   type TgMessage,
   type TgReaction,
+  type TgBotCommand,
   type TgContact,
   type TgFolder,
   type TgProfile,
@@ -818,6 +843,10 @@ const emojiPickerMsgId = ref<number | null>(null);
 const emojiPickerPos = ref({ x: 0, y: 0 });
 const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "👎", "🔥", "🎉"];
 
+// Bot commands
+const botCommands = ref<TgBotCommand[]>([]);
+const selectedCmdIdx = ref(-1);
+
 // Thread / comments panel
 const showThread = ref(false);
 const threadRootMsg = ref<TgMessage | null>(null);
@@ -871,6 +900,20 @@ const filteredContacts = computed(() => {
   );
 });
 
+// Command suggestions: shown while input starts with "/" and no space yet
+const commandSuggestions = computed(() => {
+  if (!botCommands.value.length) return [];
+  const text = inputText.value;
+  if (!text.startsWith("/")) return [];
+  // Once a space is typed the command word is done -- hide suggestions
+  if (text.includes(" ")) return [];
+  const query = text.slice(1).toLowerCase();
+  if (!query) return botCommands.value;
+  return botCommands.value.filter((c) =>
+    c.command.toLowerCase().startsWith(query),
+  );
+});
+
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 onMounted(async () => {
@@ -889,6 +932,10 @@ onBeforeUnmount(() => {
 
 watch(showContacts, async (val) => {
   if (val && !contacts.value.length) await loadContacts();
+});
+
+watch(commandSuggestions, () => {
+  selectedCmdIdx.value = -1;
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1085,6 +1132,42 @@ async function refreshMessages() {
   } catch {
     // Silent -- best effort
   }
+}
+
+// ── Bot commands ──────────────────────────────────────────────────────────────
+
+async function loadBotCommands(chatId: string) {
+  if (!selectedAccountId.value) return;
+  try {
+    botCommands.value = await tgClientApi.botCommands(
+      selectedAccountId.value,
+      chatId,
+    );
+  } catch {
+    botCommands.value = [];
+  }
+}
+
+function openCommandMenu() {
+  if (!inputText.value.startsWith("/")) {
+    inputText.value = "/";
+    autoResize();
+  }
+  nextTick(() => {
+    inputEl.value?.focus();
+    const el = inputEl.value;
+    if (el) el.setSelectionRange(el.value.length, el.value.length);
+  });
+}
+
+function selectCommand(cmd: TgBotCommand) {
+  inputText.value = `/${cmd.command} `;
+  autoResize();
+  nextTick(() => {
+    inputEl.value?.focus();
+    const el = inputEl.value;
+    if (el) el.setSelectionRange(el.value.length, el.value.length);
+  });
 }
 
 function showToast(msg: string, ms = 3000) {
@@ -1321,6 +1404,7 @@ async function onAccountChange() {
   tgFolders.value = [];
   showThread.value = false;
   replyingTo.value = null;
+  botCommands.value = [];
   await loadDialogs();
   startSSE();
 }
@@ -1393,7 +1477,10 @@ async function openChat(dialog: TgDialog) {
   showThread.value = false;
   threadRootMsg.value = null;
   replyingTo.value = null;
+  botCommands.value = [];
   await fetchMessages();
+  // Load bot commands in the background -- non-blocking
+  if (dialog.type === "bot") loadBotCommands(dialog.chatId);
   await nextTick();
   inputEl.value?.focus();
 }
@@ -1450,6 +1537,40 @@ async function loadOlderMessages() {
 }
 
 function onComposeKey(e: KeyboardEvent) {
+  // Command suggestion keyboard navigation
+  if (commandSuggestions.value.length) {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      selectedCmdIdx.value = Math.max(0, selectedCmdIdx.value - 1);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      selectedCmdIdx.value = Math.min(
+        commandSuggestions.value.length - 1,
+        selectedCmdIdx.value + 1,
+      );
+      return;
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const idx = selectedCmdIdx.value >= 0 ? selectedCmdIdx.value : 0;
+      const cmd = commandSuggestions.value[idx];
+      if (cmd) selectCommand(cmd);
+      return;
+    }
+    if (e.key === "Enter" && selectedCmdIdx.value >= 0) {
+      e.preventDefault();
+      selectCommand(commandSuggestions.value[selectedCmdIdx.value]);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      inputText.value = "";
+      return;
+    }
+  }
+
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
@@ -2400,6 +2521,75 @@ async function addContactSubmit() {
 .tgc-emoji-btn:hover {
   background: #f0f2f5;
   transform: scale(1.25);
+}
+
+/* ── Bot command suggestions ────────────────────────────────────────────────── */
+.tgc-cmd-suggestions {
+  border-top: 1px solid #e8e9ed;
+  max-height: 220px;
+  overflow-y: auto;
+  background: #fff;
+  flex-shrink: 0;
+  scrollbar-width: thin;
+}
+
+.tgc-cmd-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 16px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.tgc-cmd-item:hover,
+.tgc-cmd-selected {
+  background: #f0f3ff;
+}
+
+.tgc-cmd-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #4361ee;
+  flex-shrink: 0;
+}
+
+.tgc-cmd-desc {
+  font-size: 13px;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Slash button in compose row */
+.tgc-slash-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #f5f6fa;
+  border: 1px solid #dde0e8;
+  color: #4361ee;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+  line-height: 1;
+  font-family: monospace;
+}
+
+.tgc-slash-btn:hover,
+.tgc-slash-btn.active {
+  background: #eef1fb;
+  border-color: #4361ee;
 }
 
 /* ── Reply compose strip ────────────────────────────────────────────────────── */

@@ -570,6 +570,11 @@ export type TgProfile = {
   memberCount: number | null;
 };
 
+export type TgBotCommand = {
+  command: string;
+  description: string;
+};
+
 export type TgFolder = {
   id: number;
   title: string;
@@ -703,7 +708,17 @@ export const tgClientApi = {
     api
       .post<{
         ok: boolean;
-      }>(`/tg-client/${accountId}/messages/${encodeURIComponent(chatId)}/${msgId}/reaction`, { emoji })
+      }>(
+        `/tg-client/${accountId}/messages/${encodeURIComponent(chatId)}/${msgId}/reaction`,
+        { emoji },
+      )
+      .then((r) => r.data),
+
+  botCommands: (accountId: number, chatId: string) =>
+    api
+      .get<
+        TgBotCommand[]
+      >(`/tg-client/${accountId}/bot-commands/${encodeURIComponent(chatId)}`)
       .then((r) => r.data),
 
   threadMessages: (

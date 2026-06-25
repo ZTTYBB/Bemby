@@ -736,6 +736,11 @@ export type TgButtonResult = {
   url: string | null;
 };
 
+export type TgBotCommand = {
+  command: string;
+  description: string;
+};
+
 export async function clickButton(
   entry: LiveEntry,
   chatId: string,
@@ -829,6 +834,28 @@ export async function getThreadMessages(
       replyCount: null,
     };
   });
+}
+
+export async function getBotCommands(
+  entry: LiveEntry,
+  chatId: string,
+): Promise<TgBotCommand[]> {
+  await ensureEntityCached(entry, chatId);
+  const entity = entry.entityCache.get(chatId);
+  if (!(entity instanceof Api.User) || !entity.bot) return [];
+  try {
+    // GetFullUser returns botInfo.commands for bot entities
+    const full = await entry.client.invoke(
+      new Api.users.GetFullUser({ id: entity as any }),
+    );
+    const commands: any[] = (full as any).fullUser?.botInfo?.commands ?? [];
+    return commands.map((c: any) => ({
+      command: c.command as string,
+      description: c.description as string,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 export function subscribeToMessages(
