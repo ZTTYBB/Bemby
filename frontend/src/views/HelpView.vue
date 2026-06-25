@@ -77,6 +77,93 @@
         </div>
       </div>
 
+      <!-- Messenger -->
+      <div class="card">
+        <div class="card-body">
+          <template v-if="locale === 'zh'">
+            <div class="card-section-title">消息（Messenger）</div>
+            <p class="help-para">
+              内置 Telegram 消息客户端，可直接在 Bemby 中与联系人、群组和频道实时聊天。
+              点击导航栏中的<strong>消息</strong>图标即可打开。
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">表情回应</div>
+            <p class="help-para">
+              将鼠标悬停在任意消息上，点击笑脸图标即可回应。提供 8 个快捷表情（👍 ❤️ 😂 😮 😢 👎 🔥 🎉）以及完整表情选择器。
+              再次点击自己的回应可取消；自己的回应以高亮蓝色显示。
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">引用回复</div>
+            <p class="help-para">
+              悬停消息后点击回复图标，输入框上方将显示引用预览条。
+              点击聊天中的引用气泡可滚动至原始消息并短暂高亮。
+              发送后回复关系在 Telegram 中完整保留。
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">内联图片查看</div>
+            <p class="help-para">含图片的消息直接在聊天气泡中展示缩略图，无需跳转外部链接。</p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">频道帖子评论</div>
+            <p class="help-para">
+              频道消息气泡底部若显示评论数，点击该按钮即可在右侧面板中展开评论线程，并可直接发送回复。
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">机器人命令自动补全</div>
+            <p class="help-para">
+              与机器人聊天时，输入框左侧出现 <code>/</code> 按钮，点击可展开该机器人支持的全部命令及说明。
+              在输入框中直接输入 <code>/</code> 也会触发补全面板，继续输入可按前缀筛选命令。
+              通过 <kbd>↑</kbd> <kbd>↓</kbd> 方向键或 <kbd>Tab</kbd> / <kbd>Enter</kbd> 选择命令，<kbd>Esc</kbd> 关闭面板。
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">自动标记已读</div>
+            <p class="help-para">
+              打开聊天窗口或收到新消息时，自动调用 Telegram API 将消息标记为已读，并立即清除对话列表中的未读角标。
+            </p>
+          </template>
+          <template v-else>
+            <div class="card-section-title">Messenger</div>
+            <p class="help-para">
+              A built-in Telegram chat client lets you message contacts, groups, and channels directly from Bemby.
+              Click the <strong>Messages</strong> icon in the sidebar to open it.
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">Emoji reactions</div>
+            <p class="help-para">
+              Hover any message and click the smiley icon to react. Eight quick-pick emojis (👍 ❤️ 😂 😮 😢 👎 🔥 🎉) are available alongside a full emoji picker.
+              Tap your own reaction again to remove it; your reactions are highlighted blue.
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">Quoted replies</div>
+            <p class="help-para">
+              Hover a message and click the reply icon to quote it. A preview strip appears above the compose box.
+              Click any reply quote in the chat to scroll to the original message and briefly highlight it.
+              The reply relationship is preserved on Telegram after sending.
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">Inline photo viewing</div>
+            <p class="help-para">Messages containing photos display the image directly inside the chat bubble -- no external link needed.</p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">Channel post comments</div>
+            <p class="help-para">
+              Channel messages with a comment count show a comment button in the message footer.
+              Click it to open the thread panel on the right and reply to the comment thread directly.
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">Bot command autocomplete</div>
+            <p class="help-para">
+              When chatting with a bot, a <code>/</code> button appears beside the compose box. Click it to expand the full list of commands the bot supports, each with its description.
+              Typing <code>/</code> directly in the input also opens the panel; keep typing to filter by prefix.
+              Navigate with <kbd>↑</kbd> <kbd>↓</kbd> or <kbd>Tab</kbd> / <kbd>Enter</kbd> to select; <kbd>Esc</kbd> closes the panel.
+            </p>
+
+            <div class="card-section-title" style="margin-top:16px;font-size:11px">Auto read-marking</div>
+            <p class="help-para">
+              Opening a chat or receiving a new message automatically calls the Telegram API to mark messages as read and clears the unread badge on the dialog immediately.
+            </p>
+          </template>
+        </div>
+      </div>
+
       <!-- Jobs -->
       <div class="card">
         <div class="card-body">
