@@ -89,6 +89,18 @@
                     a.appClientId
                   }}</span
                 >
+                <span
+                  v-if="a.proxyId"
+                  class="badge badge-purple"
+                  style="margin-left: 4px; font-size: 10px"
+                  ><i
+                    class="fa-solid fa-shield-halved"
+                    style="margin-right: 3px"
+                  ></i
+                  >{{
+                    proxiesList.find((p) => p.id === a.proxyId)?.name ?? "Proxy"
+                  }}</span
+                >
               </td>
               <td>{{ a.phoneNumber }}</td>
               <td>
@@ -284,8 +296,11 @@
           <label class="form-label">{{ t("accounts.labelAppClient") }}</label>
           <select v-model="form.appClientId" class="form-select">
             <option value="">
-              {{ t("accounts.appClientDefault")
-              }}{{ defaultClientName ? ` (${defaultClientName})` : "" }}
+              {{
+                tgClientMode === "random"
+                  ? t("accounts.appClientRandom")
+                  : `${t("accounts.appClientDefault")}${defaultClientName ? ` (${defaultClientName})` : ""}`
+              }}
             </option>
             <option v-for="c in appClientsList" :key="c.id" :value="c.id">
               {{ c.name }}
@@ -532,9 +547,11 @@ async function onDrop(targetIdx: number) {
   accounts.value = arr;
   await accountsApi.reorder(arr.map((a, i) => ({ id: a.id, sortOrder: i })));
 }
-const settings = ref<{ proxies?: string; tg_app_clients?: string } | null>(
-  null,
-);
+const settings = ref<{
+  proxies?: string;
+  tg_app_clients?: string;
+  tg_client_mode?: string;
+} | null>(null);
 
 const proxiesList = computed<Proxy[]>(() => {
   try {
@@ -552,9 +569,14 @@ const appClientsList = computed<TgAppClient[]>(() => {
   }
 });
 
-const defaultClientName = computed(
-  () => appClientsList.value.find((c) => c.isDefault)?.name ?? "",
+const tgClientMode = computed(
+  () => settings.value?.tg_client_mode ?? "default",
 );
+
+const defaultClientName = computed(() => {
+  if (tgClientMode.value === "random") return t("accounts.appClientRandom");
+  return appClientsList.value.find((c) => c.isDefault)?.name ?? "";
+});
 
 // ── Form state ────────────────────────────────────────────────────────────────
 const showForm = ref(false);

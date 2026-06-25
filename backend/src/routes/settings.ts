@@ -21,6 +21,7 @@ export const ALLOWED_KEYS = [
   "ua_presets",
   "proxies",
   "tg_app_clients",
+  "tg_client_mode",
 ];
 
 router.get("/", (_req, res) => {
@@ -52,13 +53,18 @@ router.put("/", (req, res) => {
 });
 
 // Test TCP reachability through a SOCKS proxy (target: 1.1.1.1:80)
-router.post('/test-proxy', async (req, res) => {
+router.post("/test-proxy", async (req, res) => {
   const { url } = req.body as { url?: string };
-  if (!url) { res.status(400).json({ error: 'url is required' }); return; }
+  if (!url) {
+    res.status(400).json({ error: "url is required" });
+    return;
+  }
 
   const proxy = parseTgProxy(url);
   if (!proxy) {
-    res.status(400).json({ error: 'Invalid proxy URL — use socks5:// or socks4://' });
+    res
+      .status(400)
+      .json({ error: "Invalid proxy URL — use socks5:// or socks4://" });
     return;
   }
 
@@ -68,16 +74,18 @@ router.post('/test-proxy', async (req, res) => {
         host: proxy.ip,
         port: proxy.port,
         type: proxy.socksType,
-        ...(proxy.username ? { userId: proxy.username, password: proxy.password } : {}),
+        ...(proxy.username
+          ? { userId: proxy.username, password: proxy.password }
+          : {}),
       },
-      command: 'connect',
-      destination: { host: '1.1.1.1', port: 80 },
+      command: "connect",
+      destination: { host: "1.1.1.1", port: 80 },
       timeout: 6000,
     });
     result.socket.destroy();
     res.json({ ok: true });
   } catch (err: any) {
-    res.json({ ok: false, error: err.message ?? 'Connection failed' });
+    res.json({ ok: false, error: err.message ?? "Connection failed" });
   }
 });
 

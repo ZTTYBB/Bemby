@@ -297,7 +297,10 @@ export const authApi = {
 export const accountsApi = {
   list: () => api.get<Account[]>("/accounts").then((r) => r.data),
   create: (
-    data: Omit<Account, "id" | "authStatus" | "createdAt" | "disabled" | "sortOrder"> & {
+    data: Omit<
+      Account,
+      "id" | "authStatus" | "createdAt" | "disabled" | "sortOrder"
+    > & {
       apiHash: string;
     },
   ) => api.post<Account>("/accounts", data).then((r) => r.data),
@@ -308,7 +311,10 @@ export const accountsApi = {
   delete: (id: number) => api.delete(`/accounts/${id}`),
   requestCode: (id: number) =>
     api
-      .post<{ message: string; isCodeViaApp: boolean }>(`/accounts/${id}/auth/request`)
+      .post<{
+        message: string;
+        isCodeViaApp: boolean;
+      }>(`/accounts/${id}/auth/request`)
       .then((r) => r.data),
   resendCode: (id: number) =>
     api.post(`/accounts/${id}/auth/resend`).then((r) => r.data),
@@ -332,7 +338,10 @@ export const accountsApi = {
       .then((r) => r.data),
   checkEnabledSessions: () =>
     api
-      .post<{ checked: number; expired: number[] }>("/accounts/check-enabled-sessions")
+      .post<{
+        checked: number;
+        expired: number[];
+      }>("/accounts/check-enabled-sessions")
       .then((r) => r.data),
   reorder: (items: Array<{ id: number; sortOrder: number }>) =>
     api.put("/accounts/reorder", { items }).then((r) => r.data),
@@ -447,6 +456,7 @@ export type Settings = {
   ua_presets: string;
   proxies: string;
   tg_app_clients: string;
+  tg_client_mode: string; // 'default' | 'random'
 };
 
 export const settingsApi = {
@@ -640,7 +650,11 @@ export type TgFolder = {
 };
 
 export const tgClientApi = {
-  dialogs: (accountId: number, params?: { limit?: number }, signal?: AbortSignal) =>
+  dialogs: (
+    accountId: number,
+    params?: { limit?: number },
+    signal?: AbortSignal,
+  ) =>
     api
       .get<TgDialog[]>(`/tg-client/${accountId}/dialogs`, { params, signal })
       .then((r) => r.data),
@@ -790,7 +804,9 @@ export const tgClientApi = {
 
   markRead: (accountId: number, chatId: string, maxId: number) =>
     api
-      .post(`/tg-client/${accountId}/mark-read/${encodeURIComponent(chatId)}`, { maxId })
+      .post(`/tg-client/${accountId}/mark-read/${encodeURIComponent(chatId)}`, {
+        maxId,
+      })
       .then((r) => r.data),
 
   resolvePeer: (accountId: number, username: string) =>
@@ -799,18 +815,20 @@ export const tgClientApi = {
       .then((r) => r.data),
 
   reconnect: (accountId: number) =>
-    api
-      .post(`/tg-client/${accountId}/reconnect`)
-      .then((r) => r.data),
+    api.post(`/tg-client/${accountId}/reconnect`).then((r) => r.data),
 
   checkInvite: (accountId: number, hash: string) =>
     api
-      .get<TgInvitePreview>(`/tg-client/${accountId}/invite/${encodeURIComponent(hash)}`)
+      .get<TgInvitePreview>(
+        `/tg-client/${accountId}/invite/${encodeURIComponent(hash)}`,
+      )
       .then((r) => r.data),
 
   joinInvite: (accountId: number, hash: string) =>
     api
-      .post<TgDialog>(`/tg-client/${accountId}/invite/${encodeURIComponent(hash)}`)
+      .post<TgDialog>(
+        `/tg-client/${accountId}/invite/${encodeURIComponent(hash)}`,
+      )
       .then((r) => r.data),
 };
 

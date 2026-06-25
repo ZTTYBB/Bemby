@@ -53,7 +53,8 @@
             :disabled="saving"
             @click="saveSettings"
           >
-            <i class="fa-solid fa-floppy-disk"></i> {{ saving ? t("common.saving") : t("settings.saveBtn") }}
+            <i class="fa-solid fa-floppy-disk"></i>
+            {{ saving ? t("common.saving") : t("settings.saveBtn") }}
           </button>
         </div>
       </div>
@@ -108,7 +109,8 @@
             :disabled="notifySaving"
             @click="saveNotify"
           >
-            <i class="fa-solid fa-floppy-disk"></i> {{ notifySaving ? t("common.saving") : t("settings.saveBtn") }}
+            <i class="fa-solid fa-floppy-disk"></i>
+            {{ notifySaving ? t("common.saving") : t("settings.saveBtn") }}
           </button>
         </div>
       </div>
@@ -166,7 +168,8 @@
             :disabled="credSaving"
             @click="saveCredentials"
           >
-            <i class="fa-solid fa-shield-halved"></i> {{ credSaving ? t("common.saving") : t("settings.updateBtn") }}
+            <i class="fa-solid fa-shield-halved"></i>
+            {{ credSaving ? t("common.saving") : t("settings.updateBtn") }}
           </button>
         </div>
       </div>
@@ -207,23 +210,47 @@
             <label class="form-label">{{ t("settings.labelUserAgent") }}</label>
             <select v-model="form.default_ua" class="form-select">
               <option value="">— {{ t("jobs.uaDefault") }} —</option>
-              <option v-for="p in uaPresets" :key="p.name" :value="p.value">{{ p.name }}</option>
+              <option v-for="p in uaPresets" :key="p.name" :value="p.value">
+                {{ p.name }}
+              </option>
             </select>
           </div>
 
-          <div style="margin-bottom:16px">
-            <div class="card-section-title" style="margin-bottom:10px">{{ t("settings.uaPresetsSection") }}</div>
+          <div style="margin-bottom: 16px">
+            <div class="card-section-title" style="margin-bottom: 10px">
+              {{ t("settings.uaPresetsSection") }}
+            </div>
             <div v-for="(p, i) in uaPresets" :key="i" class="ua-preset-row">
               <span class="ua-preset-name">{{ p.name }}</span>
               <span class="ua-preset-value">{{ p.value }}</span>
-              <button class="btn btn-sm btn-ghost ua-preset-del" :title="t('settings.uaPresetDeleteTip')" @click="removeUaPreset(i)">
+              <button
+                class="btn btn-sm btn-ghost ua-preset-del"
+                :title="t('settings.uaPresetDeleteTip')"
+                @click="removeUaPreset(i)"
+              >
                 <i class="fa-solid fa-xmark"></i>
               </button>
             </div>
             <div class="ua-preset-add">
-              <input v-model.trim="newPresetName" class="form-input" style="flex:0 0 140px" :placeholder="t('settings.uaPresetName')" @keyup.enter="addUaPreset" />
-              <input v-model.trim="newPresetValue" class="form-input" style="flex:1;min-width:0" :placeholder="t('settings.uaPresetValue')" @keyup.enter="addUaPreset" />
-              <button class="btn btn-ghost btn-sm" :disabled="!newPresetName || !newPresetValue" @click="addUaPreset">
+              <input
+                v-model.trim="newPresetName"
+                class="form-input"
+                style="flex: 0 0 140px"
+                :placeholder="t('settings.uaPresetName')"
+                @keyup.enter="addUaPreset"
+              />
+              <input
+                v-model.trim="newPresetValue"
+                class="form-input"
+                style="flex: 1; min-width: 0"
+                :placeholder="t('settings.uaPresetValue')"
+                @keyup.enter="addUaPreset"
+              />
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="!newPresetName || !newPresetValue"
+                @click="addUaPreset"
+              >
                 <i class="fa-solid fa-plus"></i> {{ t("settings.addPreset") }}
               </button>
             </div>
@@ -234,7 +261,8 @@
             :disabled="embySaving"
             @click="saveEmby"
           >
-            <i class="fa-solid fa-floppy-disk"></i> {{ embySaving ? t("common.saving") : t("settings.saveBtn") }}
+            <i class="fa-solid fa-floppy-disk"></i>
+            {{ embySaving ? t("common.saving") : t("settings.saveBtn") }}
           </button>
         </div>
       </div>
@@ -242,8 +270,12 @@
       <!-- Proxies -->
       <div class="card s-col-6">
         <div class="card-body">
-          <div class="card-section-title">{{ t("settings.proxiesSection") }}</div>
-          <p style="font-size:12px;color:#888;margin:0 0 12px">{{ t("settings.proxiesHint") }}</p>
+          <div class="card-section-title">
+            {{ t("settings.proxiesSection") }}
+          </div>
+          <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+            {{ t("settings.proxiesHint") }}
+          </p>
 
           <div v-if="proxiesMsg" class="success-msg">{{ proxiesMsg }}</div>
           <div v-if="proxiesError" class="error-msg">{{ proxiesError }}</div>
@@ -251,68 +283,174 @@
           <div v-for="(p, i) in proxies" :key="p.id">
             <div v-if="editingProxyId === p.id" class="proxy-edit-panel">
               <div class="proxy-row">
-                <select v-model="editProxyForm.protocol" class="form-select" style="flex:0 0 110px">
+                <select
+                  v-model="editProxyForm.protocol"
+                  class="form-select"
+                  style="flex: 0 0 110px"
+                >
                   <option value="socks5">SOCKS5</option>
                   <option value="socks4">SOCKS4</option>
                 </select>
-                <input v-model.trim="editProxyForm.host" class="form-input" style="flex:1"
-                       :placeholder="t('settings.proxyHost')" @input="onProxyHostInput(editProxyForm)" />
-                <input v-model.trim="editProxyForm.port" class="form-input" style="flex:0 0 80px"
-                       type="number" min="1" max="65535" :placeholder="t('settings.proxyPort')" />
+                <input
+                  v-model.trim="editProxyForm.host"
+                  class="form-input"
+                  style="flex: 1"
+                  :placeholder="t('settings.proxyHost')"
+                  @input="onProxyHostInput(editProxyForm)"
+                />
+                <input
+                  v-model.trim="editProxyForm.port"
+                  class="form-input"
+                  style="flex: 0 0 80px"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  :placeholder="t('settings.proxyPort')"
+                />
               </div>
               <div class="proxy-row">
-                <input v-model.trim="editProxyForm.username" class="form-input" style="flex:1"
-                       :placeholder="t('settings.proxyUsername')" autocomplete="off" />
-                <input v-model.trim="editProxyForm.password" class="form-input" style="flex:1"
-                       :placeholder="t('settings.proxyPassword')" autocomplete="off" />
+                <input
+                  v-model.trim="editProxyForm.username"
+                  class="form-input"
+                  style="flex: 1"
+                  :placeholder="t('settings.proxyUsername')"
+                  autocomplete="off"
+                />
+                <input
+                  v-model.trim="editProxyForm.password"
+                  class="form-input"
+                  style="flex: 1"
+                  :placeholder="t('settings.proxyPassword')"
+                  autocomplete="off"
+                />
               </div>
               <div class="proxy-row">
-                <input v-model.trim="editProxyForm.name" class="form-input" style="flex:0 0 160px" :placeholder="t('settings.proxyName')" />
-                <button class="btn btn-sm btn-primary" :disabled="proxyEditTesting || !editProxyForm.name || !editProxyForm.host" @click="saveProxyEdit(i)">
-                  {{ proxyEditTesting ? t('settings.proxyTesting') : t('common.save') }}
+                <input
+                  v-model.trim="editProxyForm.name"
+                  class="form-input"
+                  style="flex: 0 0 160px"
+                  :placeholder="t('settings.proxyName')"
+                />
+                <button
+                  class="btn btn-sm btn-primary"
+                  :disabled="
+                    proxyEditTesting ||
+                    !editProxyForm.name ||
+                    !editProxyForm.host
+                  "
+                  @click="saveProxyEdit(i)"
+                >
+                  {{
+                    proxyEditTesting
+                      ? t("settings.proxyTesting")
+                      : t("common.save")
+                  }}
                 </button>
-                <button class="btn btn-sm btn-ghost" @click="editingProxyId = null">{{ t('common.cancel') }}</button>
+                <button
+                  class="btn btn-sm btn-ghost"
+                  @click="editingProxyId = null"
+                >
+                  {{ t("common.cancel") }}
+                </button>
               </div>
             </div>
             <div v-else class="ua-preset-row">
               <span class="ua-preset-name">{{ p.name }}</span>
               <span class="ua-preset-value">{{ p.url }}</span>
-              <button class="btn btn-sm btn-ghost btn-icon" :title="t('common.edit')" @click="startEditProxy(p)"><i class="fa-solid fa-pen"></i></button>
-              <button class="btn btn-sm btn-ghost ua-preset-del" :title="t('settings.proxyDeleteTip')" @click="removeProxy(i)">
+              <button
+                class="btn btn-sm btn-ghost btn-icon"
+                :title="t('common.edit')"
+                @click="startEditProxy(p)"
+              >
+                <i class="fa-solid fa-pen"></i>
+              </button>
+              <button
+                class="btn btn-sm btn-ghost ua-preset-del"
+                :title="t('settings.proxyDeleteTip')"
+                @click="removeProxy(i)"
+              >
                 <i class="fa-solid fa-xmark"></i>
               </button>
             </div>
           </div>
 
-          <div class="proxy-edit-panel" style="margin-top:8px">
+          <div class="proxy-edit-panel" style="margin-top: 8px">
             <div class="proxy-row">
-              <select v-model="newProxy.protocol" class="form-select" style="flex:0 0 110px">
+              <select
+                v-model="newProxy.protocol"
+                class="form-select"
+                style="flex: 0 0 110px"
+              >
                 <option value="socks5">SOCKS5</option>
                 <option value="socks4">SOCKS4</option>
               </select>
-              <input v-model.trim="newProxy.host" class="form-input" style="flex:1"
-                     :placeholder="t('settings.proxyHost')" @input="onProxyHostInput(newProxy)" />
-              <input v-model.trim="newProxy.port" class="form-input" style="flex:0 0 80px"
-                     type="number" min="1" max="65535" :placeholder="t('settings.proxyPort')" />
+              <input
+                v-model.trim="newProxy.host"
+                class="form-input"
+                style="flex: 1"
+                :placeholder="t('settings.proxyHost')"
+                @input="onProxyHostInput(newProxy)"
+              />
+              <input
+                v-model.trim="newProxy.port"
+                class="form-input"
+                style="flex: 0 0 80px"
+                type="number"
+                min="1"
+                max="65535"
+                :placeholder="t('settings.proxyPort')"
+              />
             </div>
             <div class="proxy-row">
-              <input v-model.trim="newProxy.username" class="form-input" style="flex:1"
-                     :placeholder="t('settings.proxyUsername')" autocomplete="off" />
-              <input v-model.trim="newProxy.password" class="form-input" style="flex:1"
-                     :placeholder="t('settings.proxyPassword')" autocomplete="off" />
+              <input
+                v-model.trim="newProxy.username"
+                class="form-input"
+                style="flex: 1"
+                :placeholder="t('settings.proxyUsername')"
+                autocomplete="off"
+              />
+              <input
+                v-model.trim="newProxy.password"
+                class="form-input"
+                style="flex: 1"
+                :placeholder="t('settings.proxyPassword')"
+                autocomplete="off"
+              />
             </div>
             <div class="proxy-row">
-              <input v-model.trim="newProxy.name" class="form-input" style="flex:0 0 160px"
-                     :placeholder="t('settings.proxyName')" @keyup.enter="addProxy" />
-              <button class="btn btn-ghost btn-sm" :disabled="!newProxy.name || !newProxy.host || proxyTesting" @click="addProxy">
-                <i class="fa-solid fa-plus"></i> {{ proxyTesting ? t("settings.proxyTesting") : t("settings.addProxy") }}
+              <input
+                v-model.trim="newProxy.name"
+                class="form-input"
+                style="flex: 0 0 160px"
+                :placeholder="t('settings.proxyName')"
+                @keyup.enter="addProxy"
+              />
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="!newProxy.name || !newProxy.host || proxyTesting"
+                @click="addProxy"
+              >
+                <i class="fa-solid fa-plus"></i>
+                {{
+                  proxyTesting
+                    ? t("settings.proxyTesting")
+                    : t("settings.addProxy")
+                }}
               </button>
             </div>
           </div>
-          <p style="font-size:11px;color:#888;margin:4px 0 0">{{ t('settings.proxyUrlHint') }}</p>
+          <p style="font-size: 11px; color: #888; margin: 4px 0 0">
+            {{ t("settings.proxyUrlHint") }}
+          </p>
 
-          <button class="btn btn-primary" style="margin-top:14px" :disabled="proxiesSaving" @click="saveProxies">
-            <i class="fa-solid fa-floppy-disk"></i> {{ proxiesSaving ? t("common.saving") : t("settings.saveBtn") }}
+          <button
+            class="btn btn-primary"
+            style="margin-top: 14px"
+            :disabled="proxiesSaving"
+            @click="saveProxies"
+          >
+            <i class="fa-solid fa-floppy-disk"></i>
+            {{ proxiesSaving ? t("common.saving") : t("settings.saveBtn") }}
           </button>
         </div>
       </div>
@@ -320,66 +458,211 @@
       <!-- TG App Clients -->
       <div class="card s-col-6">
         <div class="card-body">
-          <div class="card-section-title">{{ t("settings.appClientsSection") }}</div>
-          <p style="font-size:12px;color:#888;margin:0 0 12px">{{ t("settings.appClientsHint") }}</p>
+          <div class="card-section-title">
+            {{ t("settings.appClientsSection") }}
+          </div>
+          <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+            {{ t("settings.appClientsHint") }}
+          </p>
 
-          <div v-if="appClientsMsg" class="success-msg">{{ appClientsMsg }}</div>
-          <div v-if="appClientsError" class="error-msg">{{ appClientsError }}</div>
+          <div v-if="appClientsMsg" class="success-msg">
+            {{ appClientsMsg }}
+          </div>
+          <div v-if="appClientsError" class="error-msg">
+            {{ appClientsError }}
+          </div>
+
+          <div class="tg-client-mode-row">
+            <span class="form-label" style="margin: 0">{{
+              t("settings.tgClientModeLabel")
+            }}</span>
+            <label class="radio-opt">
+              <input type="radio" v-model="tgClientMode" value="default" />
+              {{ t("settings.tgClientModeDefault") }}
+            </label>
+            <label class="radio-opt">
+              <input type="radio" v-model="tgClientMode" value="random" />
+              {{ t("settings.tgClientModeRandom") }}
+            </label>
+          </div>
 
           <div v-for="(c, i) in appClients" :key="c.id">
             <div v-if="editingClientId === c.id" class="proxy-edit-panel">
               <div class="proxy-row">
-                <input v-model.trim="editClientForm.name" class="form-input" style="flex:0 0 110px" :placeholder="t('settings.appClientName')" />
-                <input v-model.trim="editClientForm.deviceModel" class="form-input" style="flex:1" :placeholder="t('settings.appClientDevice')" />
+                <input
+                  v-model.trim="editClientForm.name"
+                  class="form-input"
+                  style="flex: 0 0 110px"
+                  :placeholder="t('settings.appClientName')"
+                />
+                <input
+                  v-model.trim="editClientForm.deviceModel"
+                  class="form-input"
+                  style="flex: 1"
+                  :placeholder="t('settings.appClientDevice')"
+                />
               </div>
               <div class="proxy-row">
-                <input v-model.trim="editClientForm.systemVersion" class="form-input" style="flex:1" :placeholder="t('settings.appClientSystem')" />
-                <input v-model.trim="editClientForm.appVersion" class="form-input" style="flex:0 0 120px" :placeholder="t('settings.appClientApp')" />
+                <input
+                  v-model.trim="editClientForm.systemVersion"
+                  class="form-input"
+                  style="flex: 1"
+                  :placeholder="t('settings.appClientSystem')"
+                />
+                <input
+                  v-model.trim="editClientForm.appVersion"
+                  class="form-input"
+                  style="flex: 0 0 120px"
+                  :placeholder="t('settings.appClientApp')"
+                />
               </div>
               <div class="proxy-row">
-                <input v-model.trim="editClientForm.langCode" class="form-input" style="flex:0 0 80px" :placeholder="t('settings.appClientLangCode')" />
-                <input v-model.trim="editClientForm.langPack" class="form-input" style="flex:1" :placeholder="t('settings.appClientLangPack')" />
-                <input v-model.trim="editClientForm.systemLangCode" class="form-input" style="flex:0 0 100px" :placeholder="t('settings.appClientSysLang')" />
+                <input
+                  v-model.trim="editClientForm.langCode"
+                  class="form-input"
+                  style="flex: 0 0 80px"
+                  :placeholder="t('settings.appClientLangCode')"
+                />
+                <input
+                  v-model.trim="editClientForm.langPack"
+                  class="form-input"
+                  style="flex: 1"
+                  :placeholder="t('settings.appClientLangPack')"
+                />
+                <input
+                  v-model.trim="editClientForm.systemLangCode"
+                  class="form-input"
+                  style="flex: 0 0 100px"
+                  :placeholder="t('settings.appClientSysLang')"
+                />
               </div>
               <div class="proxy-row">
-                <button class="btn btn-sm btn-primary" :disabled="!editClientForm.name || !editClientForm.deviceModel" @click="saveClientEdit(i)">{{ t('common.save') }}</button>
-                <button class="btn btn-sm btn-ghost" @click="editingClientId = null">{{ t('common.cancel') }}</button>
+                <button
+                  class="btn btn-sm btn-primary"
+                  :disabled="
+                    !editClientForm.name || !editClientForm.deviceModel
+                  "
+                  @click="saveClientEdit(i)"
+                >
+                  {{ t("common.save") }}
+                </button>
+                <button
+                  class="btn btn-sm btn-ghost"
+                  @click="editingClientId = null"
+                >
+                  {{ t("common.cancel") }}
+                </button>
               </div>
             </div>
             <div v-else class="ua-preset-row">
               <span class="ua-preset-name">{{ c.name }}</span>
-              <span class="ua-preset-value">{{ c.deviceModel }} / {{ c.systemVersion }}</span>
-              <span v-if="c.isDefault" class="badge badge-green" style="font-size:11px;padding:1px 6px">{{ t('settings.appClientIsDefault') }}</span>
-              <button v-else class="btn btn-sm btn-ghost btn-icon" :title="t('settings.appClientSetDefault')" @click="setDefaultClient(i)"><i class="fa-regular fa-star"></i></button>
-              <button class="btn btn-sm btn-ghost btn-icon" :title="t('common.edit')" @click="startEditClient(c)"><i class="fa-solid fa-pen"></i></button>
-              <button class="btn btn-sm btn-ghost ua-preset-del" :title="t('settings.appClientDeleteTip')" :disabled="c.isDefault" @click="removeClient(i)"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-          </div>
-
-          <!-- Add new client form -->
-          <div class="proxy-edit-panel" style="margin-top:8px">
-            <div class="proxy-row">
-              <input v-model.trim="newClient.name" class="form-input" style="flex:0 0 110px" :placeholder="t('settings.appClientName')" />
-              <input v-model.trim="newClient.deviceModel" class="form-input" style="flex:1" :placeholder="t('settings.appClientDevice')" />
-            </div>
-            <div class="proxy-row">
-              <input v-model.trim="newClient.systemVersion" class="form-input" style="flex:1" :placeholder="t('settings.appClientSystem')" />
-              <input v-model.trim="newClient.appVersion" class="form-input" style="flex:0 0 120px" :placeholder="t('settings.appClientApp')" />
-            </div>
-            <div class="proxy-row">
-              <input v-model.trim="newClient.langCode" class="form-input" style="flex:0 0 80px" :placeholder="t('settings.appClientLangCode')" />
-              <input v-model.trim="newClient.langPack" class="form-input" style="flex:1" :placeholder="t('settings.appClientLangPack')" />
-              <input v-model.trim="newClient.systemLangCode" class="form-input" style="flex:0 0 100px" :placeholder="t('settings.appClientSysLang')" />
-            </div>
-            <div class="proxy-row">
-              <button class="btn btn-ghost btn-sm" :disabled="!newClient.name || !newClient.deviceModel" @click="addClient">
-                <i class="fa-solid fa-plus"></i> {{ t("settings.addAppClient") }}
+              <span class="ua-preset-value"
+                >{{ c.deviceModel }} / {{ c.systemVersion }}</span
+              >
+              <template v-if="tgClientMode !== 'random'">
+                <span
+                  v-if="c.isDefault"
+                  class="badge badge-green"
+                  style="font-size: 11px; padding: 1px 6px"
+                  >{{ t("settings.appClientIsDefault") }}</span
+                >
+                <button
+                  v-else
+                  class="btn btn-sm btn-ghost btn-icon"
+                  :title="t('settings.appClientSetDefault')"
+                  @click="setDefaultClient(i)"
+                >
+                  <i class="fa-regular fa-star"></i>
+                </button>
+              </template>
+              <button
+                class="btn btn-sm btn-ghost btn-icon"
+                :title="t('common.edit')"
+                @click="startEditClient(c)"
+              >
+                <i class="fa-solid fa-pen"></i>
+              </button>
+              <button
+                class="btn btn-sm btn-ghost ua-preset-del"
+                :title="t('settings.appClientDeleteTip')"
+                :disabled="tgClientMode !== 'random' && c.isDefault"
+                @click="removeClient(i)"
+              >
+                <i class="fa-solid fa-xmark"></i>
               </button>
             </div>
           </div>
 
-          <button class="btn btn-primary" style="margin-top:14px" :disabled="appClientsSaving" @click="saveAppClients">
-            <i class="fa-solid fa-floppy-disk"></i> {{ appClientsSaving ? t("common.saving") : t("settings.saveBtn") }}
+          <!-- Add new client form -->
+          <div class="proxy-edit-panel" style="margin-top: 8px">
+            <div class="proxy-row">
+              <input
+                v-model.trim="newClient.name"
+                class="form-input"
+                style="flex: 0 0 110px"
+                :placeholder="t('settings.appClientName')"
+              />
+              <input
+                v-model.trim="newClient.deviceModel"
+                class="form-input"
+                style="flex: 1"
+                :placeholder="t('settings.appClientDevice')"
+              />
+            </div>
+            <div class="proxy-row">
+              <input
+                v-model.trim="newClient.systemVersion"
+                class="form-input"
+                style="flex: 1"
+                :placeholder="t('settings.appClientSystem')"
+              />
+              <input
+                v-model.trim="newClient.appVersion"
+                class="form-input"
+                style="flex: 0 0 120px"
+                :placeholder="t('settings.appClientApp')"
+              />
+            </div>
+            <div class="proxy-row">
+              <input
+                v-model.trim="newClient.langCode"
+                class="form-input"
+                style="flex: 0 0 80px"
+                :placeholder="t('settings.appClientLangCode')"
+              />
+              <input
+                v-model.trim="newClient.langPack"
+                class="form-input"
+                style="flex: 1"
+                :placeholder="t('settings.appClientLangPack')"
+              />
+              <input
+                v-model.trim="newClient.systemLangCode"
+                class="form-input"
+                style="flex: 0 0 100px"
+                :placeholder="t('settings.appClientSysLang')"
+              />
+            </div>
+            <div class="proxy-row">
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="!newClient.name || !newClient.deviceModel"
+                @click="addClient"
+              >
+                <i class="fa-solid fa-plus"></i>
+                {{ t("settings.addAppClient") }}
+              </button>
+            </div>
+          </div>
+
+          <button
+            class="btn btn-primary"
+            style="margin-top: 14px"
+            :disabled="appClientsSaving"
+            @click="saveAppClients"
+          >
+            <i class="fa-solid fa-floppy-disk"></i>
+            {{ appClientsSaving ? t("common.saving") : t("settings.saveBtn") }}
           </button>
         </div>
       </div>
@@ -399,7 +682,8 @@
               {{ t("settings.importExport.exportHint") }}
             </p>
             <button class="btn btn-secondary" @click="doExport">
-              <i class="fa-solid fa-file-export"></i> {{ t("settings.importExport.exportBtn") }}
+              <i class="fa-solid fa-file-export"></i>
+              {{ t("settings.importExport.exportBtn") }}
             </button>
           </div>
 
@@ -472,15 +756,34 @@
           </p>
 
           <!-- Providers list -->
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-            <div class="card-section-title" style="margin:0">{{ t("settings.aiProvidersSection") }}</div>
-            <button class="btn btn-ghost btn-sm" @click="showAddSupplier = true">
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              margin-bottom: 10px;
+            "
+          >
+            <div class="card-section-title" style="margin: 0">
+              {{ t("settings.aiProvidersSection") }}
+            </div>
+            <button
+              class="btn btn-ghost btn-sm"
+              @click="showAddSupplier = true"
+            >
               <i class="fa-solid fa-plus"></i> {{ t("settings.addProvider") }}
             </button>
           </div>
 
-          <div v-if="aiSuppliersLoading" style="color:#888;font-size:13px">{{ t("common.loading") }}</div>
-          <div v-else-if="!suppliers.length" style="color:#aaa;font-size:13px;margin-bottom:12px">{{ t("settings.noSuppliers") }}</div>
+          <div v-if="aiSuppliersLoading" style="color: #888; font-size: 13px">
+            {{ t("common.loading") }}
+          </div>
+          <div
+            v-else-if="!suppliers.length"
+            style="color: #aaa; font-size: 13px; margin-bottom: 12px"
+          >
+            {{ t("settings.noSuppliers") }}
+          </div>
 
           <div v-for="s in suppliers" :key="s.id" class="supplier-card">
             <!-- Supplier header -->
@@ -491,51 +794,113 @@
                 <span class="supplier-timeout">{{ s.timeout_ms }}ms</span>
               </div>
               <div class="supplier-actions">
-                <button class="btn btn-ghost btn-sm" @click="startEditSupplier(s)">{{ t("settings.editSupplier") }}</button>
-                <button class="btn btn-ghost btn-sm btn-danger" @click="removeSupplier(s.id)"><i class="fa-solid fa-trash"></i></button>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  @click="startEditSupplier(s)"
+                >
+                  {{ t("settings.editSupplier") }}
+                </button>
+                <button
+                  class="btn btn-ghost btn-sm btn-danger"
+                  @click="removeSupplier(s.id)"
+                >
+                  <i class="fa-solid fa-trash"></i>
+                </button>
               </div>
             </div>
-            <div v-if="editingSupplierId !== s.id && !s.api_key" class="supplier-no-key-warning">
-              <i class="fa-solid fa-triangle-exclamation"></i> {{ t("settings.supplierNoApiKey") }}
+            <div
+              v-if="editingSupplierId !== s.id && !s.api_key"
+              class="supplier-no-key-warning"
+            >
+              <i class="fa-solid fa-triangle-exclamation"></i>
+              {{ t("settings.supplierNoApiKey") }}
             </div>
 
             <!-- Supplier edit form -->
             <div v-if="editingSupplierId === s.id" class="supplier-edit-form">
               <div class="form-row">
                 <div class="form-group">
-                  <label class="form-label">{{ t("settings.supplierName") }}</label>
+                  <label class="form-label">{{
+                    t("settings.supplierName")
+                  }}</label>
                   <input v-model.trim="editForm.name" class="form-input" />
                 </div>
                 <div class="form-group">
-                  <label class="form-label">{{ t("settings.supplierTimeout") }}</label>
-                  <input v-model.number="editForm.timeout_ms" class="form-input" type="number" min="1000" step="1000" />
+                  <label class="form-label">{{
+                    t("settings.supplierTimeout")
+                  }}</label>
+                  <input
+                    v-model.number="editForm.timeout_ms"
+                    class="form-input"
+                    type="number"
+                    min="1000"
+                    step="1000"
+                  />
                 </div>
               </div>
               <div class="form-group">
-                <label class="form-label">{{ t("settings.supplierBaseUrl") }}</label>
-                <input v-model.trim="editForm.base_url" class="form-input" placeholder="https://openrouter.ai/api/v1" />
+                <label class="form-label">{{
+                  t("settings.supplierBaseUrl")
+                }}</label>
+                <input
+                  v-model.trim="editForm.base_url"
+                  class="form-input"
+                  placeholder="https://openrouter.ai/api/v1"
+                />
               </div>
               <div class="form-group">
-                <label class="form-label">{{ t("settings.supplierApiKey") }}</label>
-                <input v-model.trim="editForm.api_key" class="form-input" type="text" autocomplete="off" placeholder="sk-..." />
+                <label class="form-label">{{
+                  t("settings.supplierApiKey")
+                }}</label>
+                <input
+                  v-model.trim="editForm.api_key"
+                  class="form-input"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="sk-..."
+                />
               </div>
-              <div style="display:flex;gap:8px">
-                <button class="btn btn-primary btn-sm" :disabled="supplierSaving" @click="saveEditSupplier(s.id)">
-                  {{ supplierSaving ? t("common.saving") : t("settings.saveSupplier") }}
+              <div style="display: flex; gap: 8px">
+                <button
+                  class="btn btn-primary btn-sm"
+                  :disabled="supplierSaving"
+                  @click="saveEditSupplier(s.id)"
+                >
+                  {{
+                    supplierSaving
+                      ? t("common.saving")
+                      : t("settings.saveSupplier")
+                  }}
                 </button>
-                <button class="btn btn-ghost btn-sm" @click="editingSupplierId = null">{{ t("settings.cancelEdit") }}</button>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  @click="editingSupplierId = null"
+                >
+                  {{ t("settings.cancelEdit") }}
+                </button>
               </div>
             </div>
 
             <!-- Models -->
             <div class="supplier-models">
-              <div class="supplier-models-label">{{ t("settings.supplierModels") }}</div>
+              <div class="supplier-models-label">
+                {{ t("settings.supplierModels") }}
+              </div>
               <div class="supplier-model-chips">
                 <span v-for="m in s.models" :key="m.id" class="model-chip">
                   {{ m.model_id }}
-                  <button class="model-chip-del" @click="removeModel(s.id, m.id)"><i class="fa-solid fa-xmark"></i></button>
+                  <button
+                    class="model-chip-del"
+                    @click="removeModel(s.id, m.id)"
+                  >
+                    <i class="fa-solid fa-xmark"></i>
+                  </button>
                 </span>
-                <span v-if="!s.models.length" style="color:#aaa;font-size:12px">—</span>
+                <span
+                  v-if="!s.models.length"
+                  style="color: #aaa; font-size: 12px"
+                  >—</span
+                >
               </div>
               <div class="model-add-row">
                 <input
@@ -544,7 +909,11 @@
                   :placeholder="t('settings.modelId')"
                   @keyup.enter="addModel(s.id)"
                 />
-                <button class="btn btn-ghost btn-sm" :disabled="!newModelInputs[s.id]" @click="addModel(s.id)">
+                <button
+                  class="btn btn-ghost btn-sm"
+                  :disabled="!newModelInputs[s.id]"
+                  @click="addModel(s.id)"
+                >
                   <i class="fa-solid fa-plus"></i> {{ t("settings.addModel") }}
                 </button>
               </div>
@@ -555,47 +924,109 @@
           <div v-if="showAddSupplier" class="supplier-card supplier-edit-form">
             <div class="form-row">
               <div class="form-group">
-                <label class="form-label">{{ t("settings.supplierName") }}</label>
-                <input v-model.trim="newSupplierForm.name" class="form-input" placeholder="OpenRouter" />
+                <label class="form-label">{{
+                  t("settings.supplierName")
+                }}</label>
+                <input
+                  v-model.trim="newSupplierForm.name"
+                  class="form-input"
+                  placeholder="OpenRouter"
+                />
               </div>
               <div class="form-group">
-                <label class="form-label">{{ t("settings.supplierTimeout") }}</label>
-                <input v-model.number="newSupplierForm.timeout_ms" class="form-input" type="number" min="1000" step="1000" />
+                <label class="form-label">{{
+                  t("settings.supplierTimeout")
+                }}</label>
+                <input
+                  v-model.number="newSupplierForm.timeout_ms"
+                  class="form-input"
+                  type="number"
+                  min="1000"
+                  step="1000"
+                />
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label">{{ t("settings.supplierBaseUrl") }}</label>
-              <input v-model.trim="newSupplierForm.base_url" class="form-input" placeholder="https://openrouter.ai/api/v1" />
+              <label class="form-label">{{
+                t("settings.supplierBaseUrl")
+              }}</label>
+              <input
+                v-model.trim="newSupplierForm.base_url"
+                class="form-input"
+                placeholder="https://openrouter.ai/api/v1"
+              />
             </div>
             <div class="form-group">
-              <label class="form-label">{{ t("settings.supplierApiKey") }}</label>
-              <input v-model.trim="newSupplierForm.api_key" class="form-input" type="text" autocomplete="off" placeholder="sk-..." />
+              <label class="form-label">{{
+                t("settings.supplierApiKey")
+              }}</label>
+              <input
+                v-model.trim="newSupplierForm.api_key"
+                class="form-input"
+                type="text"
+                autocomplete="off"
+                placeholder="sk-..."
+              />
             </div>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-primary btn-sm" :disabled="supplierSaving || !newSupplierForm.name || !newSupplierForm.base_url" @click="createSupplier">
-                {{ supplierSaving ? t("common.saving") : t("settings.saveSupplier") }}
+            <div style="display: flex; gap: 8px">
+              <button
+                class="btn btn-primary btn-sm"
+                :disabled="
+                  supplierSaving ||
+                  !newSupplierForm.name ||
+                  !newSupplierForm.base_url
+                "
+                @click="createSupplier"
+              >
+                {{
+                  supplierSaving
+                    ? t("common.saving")
+                    : t("settings.saveSupplier")
+                }}
               </button>
-              <button class="btn btn-ghost btn-sm" @click="showAddSupplier = false">{{ t("settings.cancelEdit") }}</button>
+              <button
+                class="btn btn-ghost btn-sm"
+                @click="showAddSupplier = false"
+              >
+                {{ t("settings.cancelEdit") }}
+              </button>
             </div>
           </div>
 
-          <div v-if="supplierError" class="error-msg" style="margin-top:8px">{{ supplierError }}</div>
+          <div v-if="supplierError" class="error-msg" style="margin-top: 8px">
+            {{ supplierError }}
+          </div>
 
           <!-- Default model -->
-          <div style="margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb">
+          <div
+            style="
+              margin-top: 20px;
+              padding-top: 16px;
+              border-top: 1px solid #e5e7eb;
+            "
+          >
             <div class="form-group">
               <label class="form-label">{{ t("settings.defaultModel") }}</label>
               <select v-model="form.ai_model" class="form-select">
                 <option value="">{{ t("settings.defaultModelNone") }}</option>
                 <optgroup v-for="s in suppliers" :key="s.id" :label="s.name">
-                  <option v-for="m in s.models" :key="m.id" :value="m.model_id">{{ m.model_id }}</option>
+                  <option v-for="m in s.models" :key="m.id" :value="m.model_id">
+                    {{ m.model_id }}
+                  </option>
                 </optgroup>
               </select>
             </div>
             <div v-if="aiMsg" class="success-msg">{{ aiMsg }}</div>
             <div v-if="aiError" class="error-msg">{{ aiError }}</div>
-            <button class="btn btn-primary" :disabled="aiSaving" @click="saveAi">
-              <i class="fa-solid fa-floppy-disk"></i> {{ aiSaving ? t("common.saving") : t("settings.saveDefaultModel") }}
+            <button
+              class="btn btn-primary"
+              :disabled="aiSaving"
+              @click="saveAi"
+            >
+              <i class="fa-solid fa-floppy-disk"></i>
+              {{
+                aiSaving ? t("common.saving") : t("settings.saveDefaultModel")
+              }}
             </button>
           </div>
         </div>
@@ -607,7 +1038,13 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from "vue";
 import { settingsApi, authApi, dataApi, aiSuppliersApi } from "../api/client";
-import type { ExportPayload, UAPreset, AiSupplier, Proxy, TgAppClient } from "../api/client";
+import type {
+  ExportPayload,
+  UAPreset,
+  AiSupplier,
+  Proxy,
+  TgAppClient,
+} from "../api/client";
 import { t } from "../i18n";
 
 const timezones = [
@@ -653,11 +1090,21 @@ const aiError = ref("");
 const suppliers = ref<AiSupplier[]>([]);
 const aiSuppliersLoading = ref(false);
 const editingSupplierId = ref<number | null>(null);
-const editForm = reactive({ name: '', base_url: '', api_key: '', timeout_ms: 25000 });
-const newSupplierForm = reactive({ name: '', base_url: '', api_key: '', timeout_ms: 25000 });
+const editForm = reactive({
+  name: "",
+  base_url: "",
+  api_key: "",
+  timeout_ms: 25000,
+});
+const newSupplierForm = reactive({
+  name: "",
+  base_url: "",
+  api_key: "",
+  timeout_ms: 25000,
+});
 const showAddSupplier = ref(false);
 const supplierSaving = ref(false);
-const supplierError = ref('');
+const supplierError = ref("");
 const newModelInputs = ref<Record<number, string>>({});
 
 const notifyForm = reactive({ username: "", events: ["failed"] as string[] });
@@ -677,33 +1124,58 @@ const proxyEditTesting = ref(false);
 const proxiesMsg = ref("");
 const proxiesError = ref("");
 
-type ProxyForm = { protocol: 'socks5' | 'socks4'; host: string; port: string; username: string; password: string; name: string };
-const newProxy = reactive<ProxyForm>({ protocol: 'socks5', host: '', port: '1080', username: '', password: '', name: '' });
-const editProxyForm = reactive<ProxyForm>({ protocol: 'socks5', host: '', port: '1080', username: '', password: '', name: '' });
+type ProxyForm = {
+  protocol: "socks5" | "socks4";
+  host: string;
+  port: string;
+  username: string;
+  password: string;
+  name: string;
+};
+const newProxy = reactive<ProxyForm>({
+  protocol: "socks5",
+  host: "",
+  port: "1080",
+  username: "",
+  password: "",
+  name: "",
+});
+const editProxyForm = reactive<ProxyForm>({
+  protocol: "socks5",
+  host: "",
+  port: "1080",
+  username: "",
+  password: "",
+  name: "",
+});
 
 function buildProxyUrl(f: ProxyForm): string {
-  const auth = f.username ? `${encodeURIComponent(f.username)}:${encodeURIComponent(f.password)}@` : '';
-  return `${f.protocol}://${auth}${f.host}:${f.port || '1080'}`;
+  const auth = f.username
+    ? `${encodeURIComponent(f.username)}:${encodeURIComponent(f.password)}@`
+    : "";
+  return `${f.protocol}://${auth}${f.host}:${f.port || "1080"}`;
 }
 
-function parseProxyInput(raw: string): Omit<ProxyForm, 'name'> | null {
+function parseProxyInput(raw: string): Omit<ProxyForm, "name"> | null {
   try {
     const normalized = /^socks[45]?:\/\//i.test(raw) ? raw : `socks5://${raw}`;
     const u = new URL(normalized);
-    const proto = u.protocol.replace(':', '').toLowerCase();
+    const proto = u.protocol.replace(":", "").toLowerCase();
     return {
-      protocol: proto === 'socks4' ? 'socks4' : 'socks5',
+      protocol: proto === "socks4" ? "socks4" : "socks5",
       host: u.hostname,
-      port: u.port || '1080',
-      username: decodeURIComponent(u.username || ''),
-      password: decodeURIComponent(u.password || ''),
+      port: u.port || "1080",
+      username: decodeURIComponent(u.username || ""),
+      password: decodeURIComponent(u.password || ""),
     };
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 function onProxyHostInput(form: ProxyForm) {
   const val = form.host;
-  if (val.includes('://') || val.includes('@')) {
+  if (val.includes("://") || val.includes("@")) {
     const parsed = parseProxyInput(val);
     if (parsed) Object.assign(form, parsed);
   }
@@ -712,14 +1184,39 @@ function onProxyHostInput(form: ProxyForm) {
 // ── TG App Clients ─────────────────────────────────────────────────────────────
 
 const appClients = ref<TgAppClient[]>([]);
+const tgClientMode = ref<"default" | "random">("default");
 const appClientsSaving = ref(false);
 const editingClientId = ref<string | null>(null);
-const appClientsMsg = ref('');
-const appClientsError = ref('');
+const appClientsMsg = ref("");
+const appClientsError = ref("");
 
-type AppClientForm = { name: string; deviceModel: string; systemVersion: string; appVersion: string; langCode: string; langPack: string; systemLangCode: string };
-const newClient = reactive<AppClientForm>({ name: '', deviceModel: '', systemVersion: '', appVersion: '', langCode: 'en', langPack: '', systemLangCode: 'en-US' });
-const editClientForm = reactive<AppClientForm>({ name: '', deviceModel: '', systemVersion: '', appVersion: '', langCode: 'en', langPack: '', systemLangCode: 'en-US' });
+type AppClientForm = {
+  name: string;
+  deviceModel: string;
+  systemVersion: string;
+  appVersion: string;
+  langCode: string;
+  langPack: string;
+  systemLangCode: string;
+};
+const newClient = reactive<AppClientForm>({
+  name: "",
+  deviceModel: "",
+  systemVersion: "",
+  appVersion: "",
+  langCode: "en",
+  langPack: "",
+  systemLangCode: "en-US",
+});
+const editClientForm = reactive<AppClientForm>({
+  name: "",
+  deviceModel: "",
+  systemVersion: "",
+  appVersion: "",
+  langCode: "en",
+  langPack: "",
+  systemLangCode: "en-US",
+});
 
 function addClient() {
   if (!newClient.name.trim() || !newClient.deviceModel.trim()) return;
@@ -729,12 +1226,20 @@ function addClient() {
     deviceModel: newClient.deviceModel.trim(),
     systemVersion: newClient.systemVersion.trim(),
     appVersion: newClient.appVersion.trim(),
-    langCode: newClient.langCode.trim() || 'en',
+    langCode: newClient.langCode.trim() || "en",
     langPack: newClient.langPack.trim(),
-    systemLangCode: newClient.systemLangCode.trim() || 'en-US',
+    systemLangCode: newClient.systemLangCode.trim() || "en-US",
     isDefault: false,
   });
-  Object.assign(newClient, { name: '', deviceModel: '', systemVersion: '', appVersion: '', langCode: 'en', langPack: '', systemLangCode: 'en-US' });
+  Object.assign(newClient, {
+    name: "",
+    deviceModel: "",
+    systemVersion: "",
+    appVersion: "",
+    langCode: "en",
+    langPack: "",
+    systemLangCode: "en-US",
+  });
 }
 
 function removeClient(index: number) {
@@ -744,8 +1249,13 @@ function removeClient(index: number) {
 function startEditClient(c: TgAppClient) {
   editingClientId.value = c.id;
   Object.assign(editClientForm, {
-    name: c.name, deviceModel: c.deviceModel, systemVersion: c.systemVersion,
-    appVersion: c.appVersion, langCode: c.langCode, langPack: c.langPack, systemLangCode: c.systemLangCode,
+    name: c.name,
+    deviceModel: c.deviceModel,
+    systemVersion: c.systemVersion,
+    appVersion: c.appVersion,
+    langCode: c.langCode,
+    langPack: c.langPack,
+    systemLangCode: c.systemLangCode,
   });
 }
 
@@ -758,26 +1268,33 @@ function saveClientEdit(index: number) {
     deviceModel: editClientForm.deviceModel.trim(),
     systemVersion: editClientForm.systemVersion.trim(),
     appVersion: editClientForm.appVersion.trim(),
-    langCode: editClientForm.langCode.trim() || 'en',
+    langCode: editClientForm.langCode.trim() || "en",
     langPack: editClientForm.langPack.trim(),
-    systemLangCode: editClientForm.systemLangCode.trim() || 'en-US',
+    systemLangCode: editClientForm.systemLangCode.trim() || "en-US",
   };
   editingClientId.value = null;
 }
 
 function setDefaultClient(index: number) {
-  appClients.value = appClients.value.map((c, i) => ({ ...c, isDefault: i === index }));
+  appClients.value = appClients.value.map((c, i) => ({
+    ...c,
+    isDefault: i === index,
+  }));
 }
 
 async function saveAppClients() {
-  appClientsMsg.value = '';
-  appClientsError.value = '';
+  appClientsMsg.value = "";
+  appClientsError.value = "";
   appClientsSaving.value = true;
   try {
-    await settingsApi.update({ tg_app_clients: JSON.stringify(appClients.value) });
-    appClientsMsg.value = t('settings.saved');
+    await settingsApi.update({
+      tg_app_clients: JSON.stringify(appClients.value),
+      tg_client_mode: tgClientMode.value,
+    });
+    appClientsMsg.value = t("settings.saved");
   } catch (err: any) {
-    appClientsError.value = err.response?.data?.error ?? t('settings.saveFailed');
+    appClientsError.value =
+      err.response?.data?.error ?? t("settings.saveFailed");
   } finally {
     appClientsSaving.value = false;
   }
@@ -806,9 +1323,22 @@ onMounted(async () => {
     form.default_max_retry = Number(s.default_max_retry);
     form.check_daily_run = s.check_daily_run !== "false";
     form.default_ua = s.default_ua ?? "";
-    try { uaPresets.value = JSON.parse(s.ua_presets ?? "[]"); } catch { uaPresets.value = []; }
-    try { proxies.value = JSON.parse(s.proxies ?? "[]"); } catch { proxies.value = []; }
-    try { appClients.value = JSON.parse(s.tg_app_clients ?? "[]"); } catch { appClients.value = []; }
+    try {
+      uaPresets.value = JSON.parse(s.ua_presets ?? "[]");
+    } catch {
+      uaPresets.value = [];
+    }
+    try {
+      proxies.value = JSON.parse(s.proxies ?? "[]");
+    } catch {
+      proxies.value = [];
+    }
+    try {
+      appClients.value = JSON.parse(s.tg_app_clients ?? "[]");
+    } catch {
+      appClients.value = [];
+    }
+    tgClientMode.value = s.tg_client_mode === "random" ? "random" : "default";
     form.default_play_duration = Number(s.default_play_duration ?? 300);
     form.default_device_name = s.default_device_name ?? "Mac";
     form.ai_model = s.ai_model ?? "";
@@ -875,18 +1405,32 @@ async function addProxy() {
   try {
     const result = await settingsApi.testProxy(url);
     if (!result.ok) {
-      proxiesError.value = `${t('settings.proxyTestFailed')}: ${result.error ?? ''}`.trimEnd().replace(/:$/, '');
+      proxiesError.value =
+        `${t("settings.proxyTestFailed")}: ${result.error ?? ""}`
+          .trimEnd()
+          .replace(/:$/, "");
       return;
     }
   } catch {
-    proxiesError.value = t('settings.proxyTestFailed');
+    proxiesError.value = t("settings.proxyTestFailed");
     return;
   } finally {
     proxyTesting.value = false;
   }
 
-  proxies.value.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2), name: newProxy.name.trim(), url });
-  Object.assign(newProxy, { protocol: 'socks5', host: '', port: '1080', username: '', password: '', name: '' });
+  proxies.value.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+    name: newProxy.name.trim(),
+    url,
+  });
+  Object.assign(newProxy, {
+    protocol: "socks5",
+    host: "",
+    port: "1080",
+    username: "",
+    password: "",
+    name: "",
+  });
 }
 
 function removeProxy(index: number) {
@@ -897,11 +1441,11 @@ function startEditProxy(p: Proxy) {
   editingProxyId.value = p.id;
   const parsed = parseProxyInput(p.url);
   Object.assign(editProxyForm, {
-    protocol: parsed?.protocol ?? 'socks5',
-    host: parsed?.host ?? '',
-    port: parsed?.port ?? '1080',
-    username: parsed?.username ?? '',
-    password: parsed?.password ?? '',
+    protocol: parsed?.protocol ?? "socks5",
+    host: parsed?.host ?? "",
+    port: parsed?.port ?? "1080",
+    username: parsed?.username ?? "",
+    password: parsed?.password ?? "",
     name: p.name,
   });
   proxiesMsg.value = "";
@@ -918,17 +1462,24 @@ async function saveProxyEdit(index: number) {
   try {
     const result = await settingsApi.testProxy(url);
     if (!result.ok) {
-      proxiesError.value = `${t('settings.proxyTestFailed')}: ${result.error ?? ''}`.trimEnd().replace(/:$/, '');
+      proxiesError.value =
+        `${t("settings.proxyTestFailed")}: ${result.error ?? ""}`
+          .trimEnd()
+          .replace(/:$/, "");
       return;
     }
   } catch {
-    proxiesError.value = t('settings.proxyTestFailed');
+    proxiesError.value = t("settings.proxyTestFailed");
     return;
   } finally {
     proxyEditTesting.value = false;
   }
 
-  proxies.value[index] = { ...proxies.value[index], name: editProxyForm.name.trim(), url };
+  proxies.value[index] = {
+    ...proxies.value[index],
+    name: editProxyForm.name.trim(),
+    url,
+  };
   editingProxyId.value = null;
 }
 
@@ -992,7 +1543,7 @@ function startEditSupplier(s: AiSupplier) {
 }
 
 async function saveEditSupplier(id: number) {
-  supplierError.value = '';
+  supplierError.value = "";
   supplierSaving.value = true;
   try {
     await aiSuppliersApi.update(id, { ...editForm });
@@ -1006,14 +1557,14 @@ async function saveEditSupplier(id: number) {
 }
 
 async function createSupplier() {
-  supplierError.value = '';
+  supplierError.value = "";
   supplierSaving.value = true;
   try {
     await aiSuppliersApi.create({ ...newSupplierForm });
     showAddSupplier.value = false;
-    newSupplierForm.name = '';
-    newSupplierForm.base_url = '';
-    newSupplierForm.api_key = '';
+    newSupplierForm.name = "";
+    newSupplierForm.base_url = "";
+    newSupplierForm.api_key = "";
     newSupplierForm.timeout_ms = 25000;
     await reloadSuppliers();
   } catch (err: any) {
@@ -1024,7 +1575,7 @@ async function createSupplier() {
 }
 
 async function removeSupplier(id: number) {
-  supplierError.value = '';
+  supplierError.value = "";
   try {
     await aiSuppliersApi.remove(id);
     await reloadSuppliers();
@@ -1036,10 +1587,10 @@ async function removeSupplier(id: number) {
 async function addModel(supplierId: number) {
   const modelId = newModelInputs.value[supplierId]?.trim();
   if (!modelId) return;
-  supplierError.value = '';
+  supplierError.value = "";
   try {
     await aiSuppliersApi.addModel(supplierId, modelId);
-    newModelInputs.value[supplierId] = '';
+    newModelInputs.value[supplierId] = "";
     await reloadSuppliers();
   } catch (err: any) {
     supplierError.value = err.response?.data?.error ?? t("settings.saveFailed");
@@ -1047,7 +1598,7 @@ async function addModel(supplierId: number) {
 }
 
 async function removeModel(supplierId: number, modelId: number) {
-  supplierError.value = '';
+  supplierError.value = "";
   try {
     await aiSuppliersApi.removeModel(supplierId, modelId);
     await reloadSuppliers();
@@ -1083,8 +1634,7 @@ const importMsg = ref("");
 const importError = ref("");
 
 function onFileChange(e: Event) {
-  importFile.value =
-    (e.target as HTMLInputElement).files?.[0] ?? null;
+  importFile.value = (e.target as HTMLInputElement).files?.[0] ?? null;
 }
 
 async function doExport() {
@@ -1170,6 +1720,22 @@ async function saveCredentials() {
 </script>
 
 <style scoped>
+.tg-client-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.radio-opt {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
 .event-pills {
   display: flex;
   gap: 8px;
@@ -1380,7 +1946,9 @@ async function saveCredentials() {
   font-size: 11px;
   line-height: 1;
 }
-.model-chip-del:hover { color: #ef4444; }
+.model-chip-del:hover {
+  color: #ef4444;
+}
 .model-add-row {
   display: flex;
   gap: 6px;
@@ -1391,8 +1959,12 @@ async function saveCredentials() {
   font-size: 12px;
   height: auto;
 }
-.btn-danger { color: #ef4444; }
-.btn-danger:hover { color: #dc2626; }
+.btn-danger {
+  color: #ef4444;
+}
+.btn-danger:hover {
+  color: #dc2626;
+}
 
 .settings-grid {
   display: grid;
@@ -1400,14 +1972,25 @@ async function saveCredentials() {
   gap: 20px;
   align-items: start;
 }
-.s-col-4 { grid-column: span 4; }
-.s-col-6 { grid-column: span 6; }
-.s-col-12 { grid-column: span 12; }
+.s-col-4 {
+  grid-column: span 4;
+}
+.s-col-6 {
+  grid-column: span 6;
+}
+.s-col-12 {
+  grid-column: span 12;
+}
 @media (max-width: 960px) {
-  .s-col-4 { grid-column: span 6; }
+  .s-col-4 {
+    grid-column: span 6;
+  }
 }
 @media (max-width: 640px) {
-  .s-col-4, .s-col-6 { grid-column: span 12; }
+  .s-col-4,
+  .s-col-6 {
+    grid-column: span 12;
+  }
 }
 
 .proxy-edit-panel {

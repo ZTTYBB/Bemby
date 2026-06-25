@@ -1,6 +1,6 @@
 {
   "name": "bemby-backend",
-  "version": "0.9.22",
+  "version": "0.9.24",
   "scripts": {
     "start": "node dist/server.js",
     "build": "tsc",

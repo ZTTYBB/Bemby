@@ -4,6 +4,30 @@ All notable changes to Bemby are documented here.
 
 ---
 
+## v0.9.24
+
+### 中文
+
+- **账号会话失效自动检测** -- 账号页面加载时自动检查所有已启用的认证账号；会话失效（AUTH_KEY_DUPLICATED、SESSION_REVOKED 等）时自动标记为"会话已失效"并显示重新认证按钮
+- **强制重新认证** -- 编辑面板中新增"强制重新认证"按钮，可一键清除现有会话并重置认证状态，无需删除账号
+- **账号拖拽排序** -- 支持在账号列表中通过拖拽手柄对账号进行排序，顺序持久化保存
+- **TG 应用客户端随机模式** -- 设置页面新增"账号默认客户端"选项，可在"使用默认"和"随机选择"之间切换；随机模式下，无指定客户端的账号每次连接将从所有预设中随机挑选
+- **代理徽章** -- 账号列表中使用代理的账号现显示紫色代理徽章（含代理名称）
+- **认证验证码投递修复** -- 使用桌面端客户端预设（Linux、Windows、Mac）时，认证流程不再传递设备参数，避免 Telegram 将验证码路由至不存在的桌面会话；设备配置仅在会话建立后的实时连接中生效
+- **内置邀请链接** -- 消息客户端中点击 `t.me/+HASH` 邀请链接时，将在应用内显示群组预览和加入确认对话框，而非跳转至浏览器
+
+### English
+
+- **Automatic session expiry detection** -- all enabled authenticated accounts are checked on the Accounts page load; sessions invalidated by AUTH_KEY_DUPLICATED, SESSION_REVOKED, and related errors are automatically marked as session_expired and a re-auth button is shown
+- **Force re-auth** -- a Force Re-auth button in the account edit panel clears the existing session and resets auth status without deleting the account
+- **Account drag-and-drop reordering** -- accounts can be reordered by dragging the grip handle; order is persisted
+- **TG app client random mode** -- a new "Default client for accounts" toggle in Settings allows switching between a fixed default and random selection; in random mode, accounts with no explicit client pick one at random from all configured presets on each connection
+- **Proxy badge** -- accounts using a proxy now show a purple badge with the proxy name inline in the accounts list
+- **Auth code delivery fix** -- when a desktop client preset (Linux, Windows, Mac) is configured, device params are no longer passed during the auth code request phase; this prevents Telegram routing the code to a non-existent desktop session; the full device profile is applied only to the live session after authentication
+- **In-app invite links** -- clicking a `t.me/+HASH` invite link in the built-in messenger now shows an in-app group preview and join confirmation dialog instead of opening in the browser
+
+---
+
 ## v0.9.23
 
 ### 中文
