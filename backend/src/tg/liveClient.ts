@@ -524,6 +524,53 @@ export async function getMessages(
   });
 }
 
+export async function getPinnedMessage(
+  entry: LiveEntry,
+  chatId: string,
+): Promise<TgMsgPayload | null> {
+  await ensureEntityCached(entry, chatId);
+  const entity = entry.entityCache.get(chatId);
+  if (!entity) throw new Error("Chat not found");
+
+  let pinnedMsgId: number | null = null;
+
+  if (entity instanceof Api.Channel) {
+    const result = await entry.client.invoke(
+      new Api.channels.GetFullChannel({ channel: entity as any }),
+    );
+    pinnedMsgId = (result.fullChat as any).pinnedMsgId ?? null;
+  } else if (entity instanceof Api.Chat) {
+    const result = await entry.client.invoke(
+      new Api.messages.GetFullChat({ chatId: (entity as Api.Chat).id as any }),
+    );
+    pinnedMsgId = (result.fullChat as any).pinnedMsgId ?? null;
+  }
+
+  if (!pinnedMsgId) return null;
+
+  const msgs = await entry.client.getMessages(entity, { ids: [pinnedMsgId] });
+  if (!msgs.length || !msgs[0]) return null;
+
+  const msg = msgs[0] as Api.Message;
+  return {
+    id: msg.id,
+    text: msg.message ?? "",
+    html: entitiesToHtml(msg.message ?? "", (msg as Api.Message).entities),
+    date: msg.date,
+    fromMe: Boolean(msg.out),
+    fromId: msg.fromId ? peerToChatId(msg.fromId as Api.TypePeer) : null,
+    fromName: null,
+    hasPhoto: msg.media instanceof Api.MessageMediaPhoto,
+    hasDocument: msg.media instanceof Api.MessageMediaDocument,
+    buttons: extractButtons(msg),
+    reactions: null,
+    replyToId: null,
+    replyToText: null,
+    replyToName: null,
+    replyCount: null,
+  };
+}
+
 export async function sendMessage(
   entry: LiveEntry,
   chatId: string,

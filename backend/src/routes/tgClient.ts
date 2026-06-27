@@ -37,6 +37,7 @@ import {
   checkMembership,
   resolveWebApp,
   startBot,
+  getPinnedMessage,
 } from "../tg/liveClient";
 import type { Response } from "express";
 
@@ -110,6 +111,19 @@ router.get("/:accountId/messages/:chatId", async (req, res) => {
     const msgs = await getMessages(entry, chatId, limit, offsetId);
     cacheMessages(accountId, chatId, msgs);
     res.json(msgs);
+  } catch (err: any) {
+    tgError(err, accountId, res);
+  }
+});
+
+// GET /:accountId/chats/:chatId/pinned -- fetch the pinned message for a group/channel
+router.get("/:accountId/chats/:chatId/pinned", async (req, res) => {
+  const accountId = Number(req.params.accountId);
+  const chatId = decodeURIComponent(req.params.chatId);
+  try {
+    const entry = await getLiveClient(accountId);
+    const msg = await getPinnedMessage(entry, chatId);
+    res.json(msg ?? null);
   } catch (err: any) {
     tgError(err, accountId, res);
   }

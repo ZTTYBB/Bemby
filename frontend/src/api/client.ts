@@ -861,6 +861,11 @@ export const tgClientApi = {
       }>(`/tg-client/${accountId}/membership/${encodeURIComponent(chatId)}`)
       .then((r) => r.data),
 
+  pinnedMessage: (accountId: number, chatId: string) =>
+    api
+      .get<TgMessage | null>(`/tg-client/${accountId}/chats/${encodeURIComponent(chatId)}/pinned`)
+      .then((r) => r.data),
+
   startBot: (accountId: number, username: string, startParam: string) =>
     api
       .post<TgDialog>(`/tg-client/${accountId}/start-bot/${encodeURIComponent(username)}`, {

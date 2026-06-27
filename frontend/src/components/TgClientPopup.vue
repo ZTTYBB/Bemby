@@ -246,6 +246,22 @@
               </button>
             </div>
 
+            <!-- Pinned message banner -->
+            <div
+              v-if="pinnedMsg"
+              class="tgc-pinned-bar"
+              @click="jumpToPinned"
+              role="button"
+              tabindex="0"
+              @keydown.enter="jumpToPinned"
+            >
+              <i class="fa-solid fa-thumbtack tgc-pinned-icon"></i>
+              <div class="tgc-pinned-content">
+                <span class="tgc-pinned-label">Pinned Message</span>
+                <span class="tgc-pinned-text">{{ pinnedMsg.text }}</span>
+              </div>
+            </div>
+
             <div
               class="tgc-messages"
               ref="messagesEl"
@@ -1027,6 +1043,7 @@ const searchTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 const activeChatId = ref<string | null>(null);
 const activeChat = ref<TgDialog | null>(null);
 const messages = ref<TgMessage[]>([]);
+const pinnedMsg = ref<TgMessage | null>(null);
 const firstUnreadId = ref<number | null>(null);
 const loadingMessages = ref(false);
 const loadingOlder = ref(false);
@@ -2398,9 +2415,11 @@ async function openChat(dialog: TgDialog, addToHistory = false) {
   pendingJoinChatId.value = null;
   stopMembershipPoll();
   stopBotMsgWatch();
+  pinnedMsg.value = null;
   await fetchMessages();
   markChatRead(dlg.chatId);
   if (dlg.type === "bot") loadBotCommands(dlg.chatId);
+  loadPinnedMessage(); // fire-and-forget -- no need to block chat open
   // Resume background dialog load 2s after messages are shown -- low priority
   if (selectedAccountId.value) {
     const accountId = selectedAccountId.value;
@@ -2426,6 +2445,64 @@ async function clearChatCache() {
   if (!selectedAccountId.value || !activeChatId.value) return;
   await tgClientApi.clearCache(selectedAccountId.value, activeChatId.value);
   await fetchMessages(true);
+}
+
+async function loadPinnedMessage() {
+  if (!selectedAccountId.value || !activeChatId.value) return;
+  const chat = activeChat.value;
+  if (!chat || (chat.type !== 'group' && chat.type !== 'channel')) {
+    pinnedMsg.value = null;
+    return;
+  }
+  try {
+    pinnedMsg.value = await tgClientApi.pinnedMessage(selectedAccountId.value, activeChatId.value);
+  } catch {
+    pinnedMsg.value = null;
+  }
+}
+
+async function jumpToPinned() {
+  if (!pinnedMsg.value || !selectedAccountId.value || !activeChatId.value) return;
+  const id = pinnedMsg.value.id;
+  const inView = messages.value.find((m) => m.id === id);
+  if (inView) {
+    await nextTick();
+    const el = messagesEl.value;
+    if (!el) return;
+    const target = el.querySelector(`[data-msg-id="${id}"]`);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.classList.add('tgc-msg-highlighted');
+      setTimeout(() => target.classList.remove('tgc-msg-highlighted'), 1500);
+    }
+    return;
+  }
+  // Message not in current view -- load context around the pinned message AND
+  // the recent messages so the user can still scroll down to the latest.
+  const [aroundMsgs, recentMsgs] = await Promise.all([
+    tgClientApi.messages(selectedAccountId.value, activeChatId.value, {
+      limit: 30, offsetId: id + 1, fresh: 1,
+    }),
+    tgClientApi.messages(selectedAccountId.value, activeChatId.value, {
+      limit: 30, fresh: 1,
+    }),
+  ]);
+
+  // Merge and deduplicate, keep chronological order
+  const byId = new Map<number, TgMessage>();
+  for (const m of [...aroundMsgs, ...recentMsgs]) byId.set(m.id, m);
+  messages.value = Array.from(byId.values()).sort((a, b) => a.id - b.id);
+  canLoadMore.value = true;
+
+  await nextTick();
+  const el = messagesEl.value;
+  if (!el) return;
+  const target = el.querySelector(`[data-msg-id="${id}"]`);
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('tgc-msg-highlighted');
+    setTimeout(() => target.classList.remove('tgc-msg-highlighted'), 1500);
+  }
 }
 
 function backToDialogs() {
@@ -3206,6 +3283,45 @@ async function addContactSubmit() {
 .tgc-chat-sub {
   font-size: 12px;
   color: #999;
+}
+
+.tgc-pinned-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  background: #f0f4ff;
+  border-bottom: 1px solid #dce3f5;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.tgc-pinned-bar:hover {
+  background: #e4ecff;
+}
+.tgc-pinned-icon {
+  color: #5c7cfa;
+  font-size: 13px;
+  flex-shrink: 0;
+  transform: rotate(45deg);
+}
+.tgc-pinned-content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tgc-pinned-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5c7cfa;
+  line-height: 1.2;
+}
+.tgc-pinned-text {
+  font-size: 13px;
+  color: #444;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tgc-messages {
