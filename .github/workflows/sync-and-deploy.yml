@@ -1,0 +1,54 @@
+name: Sync Upstream & Deploy to HE
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  sync-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream (liveinaus/Bemby)
+        id: sync
+        run: |
+          PREV=$(git rev-parse HEAD)
+          git remote add upstream https://github.com/liveinaus/Bemby.git
+          git fetch upstream --no-tags --quiet
+          git merge upstream/main --no-edit --allow-unrelated-histories 2>&1 || true
+          NOW=$(git rev-parse HEAD)
+          if [ "$PREV" = "$NOW" ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push merged changes
+        if: steps.sync.outputs.has_changes == 'true'
+        run: |
+          git push origin main
+
+      - name: Deploy to HF Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git clone https://user:${HF_TOKEN}@huggingface.co/spaces/ZTTYBB/bemby /tmp/hf-bemby
+          cd /tmp/hf-bemby
+          git config user.name "ZTTYBB"
+          git config user.email "ztyybb@users.noreply.huggingface.co"
+          cp -r $GITHUB_WORKSPACE/* .
+          cp -r $GITHUB_WORKSPACE/.* . 2>/dev/null || true
+          rm -rf node_modules dist .git frontend/node_modules backend/node_modules
+          git add -A
+          git commit -m "Auto-deploy $(date -u '+%Y-%m-%d %H:%M UTC')" || echo "No changes"
+          git push origin main || echo "Push failed"
