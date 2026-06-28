@@ -1,0 +1,40 @@
+name: Deploy Bemby to HF Spaces
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Bemby
+        uses: actions/checkout@v4
+        with:
+          repository: ZTTYBB/Bemby
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: bemby
+
+      - name: Clone HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git clone https://user:${HF_TOKEN}@huggingface.co/spaces/ZTTYBB/bemby /tmp/hf-bemby
+
+      - name: Deploy to HF Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          cd /tmp/hf-bemby
+          git config user.name "ZTTYBB"
+          git config user.email "ztyybb@users.noreply.huggingface.co"
+          
+          # Copy files from checkout directory
+          cp -r /home/runner/work/Bemby/Bemby/bemby/* /home/runner/work/Bemby/Bemby/bemby/.* . 2>/dev/null || true
+          rm -rf node_modules dist .git frontend/node_modules backend/node_modules
+          
+          git add -A
+          git commit -m "Auto-deploy Bemby $(date -u '+%Y-%m-%d %H:%M UTC')" || echo "No changes"
+          git push origin main || echo "Push failed or no changes"
