@@ -30,10 +30,10 @@ jobs:
           git config user.email "ztyybb@users.noreply.huggingface.co"
 
           cp -r $GITHUB_WORKSPACE/* .
-          cp -r $GITH_WORKSPACEO/.* . 2>/dev/null || true
+          cp -r $GITH_WORKSPACE/.* . 2>/dev/null || true
 
           rm -rf node_modules dist .git frontend/node_modules backend/node_modules
 
           git add -A
           git commit -m "Auto-deploy Bemby $(date -u '+%Y-%m-%d %H:%M UTC')" || echo "No changes"
-          git push origin main || echo "Push failed or no changes"
+          git push origin main|| echo "Push failed or no changes"
