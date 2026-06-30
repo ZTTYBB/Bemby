@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   sync-and-deploy:
@@ -38,18 +39,18 @@ jobs:
         run: |
           git push origin main
 
-      - name: Build and push Docker image to HF Registry
+      - name: Build and push Docker image to GitHub Container Registry
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Logging into HF registry..."
-          echo "$HF_TOKEN" | docker login -u ZTTYBB --password-stdin registry.huggingface.co 2>&1
+          echo "Logging into ghcr.io..."
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u ZTTYBB --password-stdin 2>&1
 
           echo "Building Docker image..."
-          docker build -t registry.huggingface.co/ZTTYBB/bemby:latest . 2>&1
+          docker build -t ghcr.io/ztyybb/bemby:latest . 2>&1
 
-          echo "Pushing to HF registry..."
-          docker push registry.huggingface.co/ZTTYBB/bemby:latest 2>&1
+          echo "Pushing to ghcr.io..."
+          docker push ghcr.io/ztyybb/bemby:latest 2>&1
 
       - name: Update HF Space Dockerfile and trigger rebuild
         env:
@@ -61,7 +62,7 @@ jobs:
           git config user.name "ZTTYBB"
           git config user.email "ztyybb@users.noreply.huggingface.co"
 
-          echo "FROM registry.huggingface.co/ZTTYBB/bemby:latest" > Dockerfile
+          echo "FROM ghcr.io/ztyybb/bemby:latest" > Dockerfile
           echo "USER root" >> Dockerfile
           echo "RUN mkdir -p /app/data && chown -R node:node /app" >> Dockerfile
           echo "USER node" >> Dockerfile
