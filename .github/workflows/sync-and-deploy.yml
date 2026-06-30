@@ -55,15 +55,14 @@ jobs:
           git config user.name "ZTTYBB"
           git config user.email "ztyybb@users.noreply.huggingface.co"
 
-          cat > Dockerfile << 'DOCKEREOF'
-FROM registry.huggingface.co/ZTTYBB/bemby:latest
-USER root
-RUN mkdir -p /app/data && chown -R node:node /app
-USER node
-EXPOSE 3000
-ENV PORT=3000
-CMD ["node", "--dns-result-order=ipv4first", "dist/server.js"]
-DOCKEREOF
+          # Write Dockerfile using echo to avoid heredoc indentation issues in YAML
+          echo "FROM registry.huggingface.co/ZTTYBB/bemby:latest" > Dockerfile
+          echo "USER root" >> Dockerfile
+          echo "RUN mkdir -p /app/data && chown -R node:node /app" >> Dockerfile
+          echo "USER node" >> Dockerfile
+          echo "EXPOSE 3000" >> Dockerfile
+          echo "ENV PORT=3000" >> Dockerfile
+          echo 'CMD ["node", "--dns-result-order=ipv4first", "dist/server.js"]' >> Dockerfile
 
           git add Dockerfile
           git commit -m "Update to latest build $(date -u '+%Y-%m-%d %H:%M UTC')" || true
