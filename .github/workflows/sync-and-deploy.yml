@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   sync-and-deploy:
@@ -39,20 +38,7 @@ jobs:
         run: |
           git push origin main
 
-      - name: Build and push Docker image to ghcr.io
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          echo "Logging into ghcr.io..."
-          echo "$GH_TOKEN" | docker login ghcr.io -u ZTTYBB --password-stdin
-          
-          echo "Building image..."
-          docker build -t ghcr.io/ztyybb/bemby:latest .
-          
-          echo "Pushing image..."
-          docker push ghcr.io/ztyybb/bemby:latest
-
-      - name: Update HF Space Dockerfile and trigger rebuild
+      - name: Update HF Space Dockerfile to use pre-built image
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -61,7 +47,7 @@ jobs:
           git config user.name "ZTTYBB"
           git config user.email "ztyybb@users.noreply.huggingface.co"
 
-          echo "FROM ghcr.io/ztyybb/bemby:latest" > Dockerfile
+          echo "FROM liveinaus/bemby:latest" > Dockerfile
           echo "USER root" >> Dockerfile
           echo "RUN mkdir -p /app/data && chown -R node:node /app" >> Dockerfile
           echo "USER node" >> Dockerfile
