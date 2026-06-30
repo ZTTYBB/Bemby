@@ -38,11 +38,11 @@ jobs:
         run: |
           git push origin main
 
-      - name: Restore pre-built image Dockerfile on HF
-        if: steps.sync.outputs.has_changes == 'true'
+      - name: Update HF Space Dockerfile to use pre-built image
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          echo "Updating HF Space Dockerfile..."
           git clone https://user:${HF_TOKEN}@huggingface.co/spaces/ZTTYBB/bemby /tmp/hf-update
           cd /tmp/hf-update
           git config user.name "ZTTYBB"
