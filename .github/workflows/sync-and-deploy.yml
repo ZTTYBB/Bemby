@@ -42,20 +42,25 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          echo "$HF_TOKEN" | docker login -u ZTTYBB --password-stdin registry.huggingface.co
-          docker build -t registry.huggingface.co/ZTTYBB/bemby:latest .
-          docker push registry.huggingface.co/ZTTYBB/bemby:latest
+          echo "Logging into HF registry..."
+          echo "$HF_TOKEN" | docker login -u ZTTYBB --password-stdin registry.huggingface.co 2>&1
+
+          echo "Building Docker image..."
+          docker build -t registry.huggingface.co/ZTTYBB/bemby:latest . 2>&1
+
+          echo "Pushing to HF registry..."
+          docker push registry.huggingface.co/ZTTYBB/bemby:latest 2>&1
 
       - name: Update HF Space Dockerfile and trigger rebuild
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git clone https://user:${HF_TOKEN}@huggingface.co/spaces/ZTTYBB/bemby /tmp/hf-update
+          echo "Updating HF Space Dockerfile..."
+          git clone https://user:${HF_TOKEN}@huggingface.co/spaces/ZTTYBB/bemby /tmp/hf-update 2>&1
           cd /tmp/hf-update
           git config user.name "ZTTYBB"
           git config user.email "ztyybb@users.noreply.huggingface.co"
 
-          # Write Dockerfile using echo to avoid heredoc indentation issues in YAML
           echo "FROM registry.huggingface.co/ZTTYBB/bemby:latest" > Dockerfile
           echo "USER root" >> Dockerfile
           echo "RUN mkdir -p /app/data && chown -R node:node /app" >> Dockerfile
@@ -66,4 +71,4 @@ jobs:
 
           git add Dockerfile
           git commit -m "Update to latest build $(date -u '+%Y-%m-%d %H:%M UTC')" || true
-          git push origin main
+          git push origin main 2>&1
