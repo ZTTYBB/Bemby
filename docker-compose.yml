@@ -1,0 +1,15 @@
+services:
+  bemby:
+    image: liveinaus/bemby:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - /docker/bemby-data:/app/data
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}    # change this
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme} # change this
+      # Secret used to sign login tokens — set to any long random string, e.g. openssl rand -hex 32
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      # Optional: set a timezone, e.g. TZ=Australia/Sydney (defaults to UTC)
+      # TZ: ${TZ:-UTC}
