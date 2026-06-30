@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   sync-and-deploy:
@@ -39,36 +38,18 @@ jobs:
         run: |
           git push origin main
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to HF Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: registry.huggingface.co
-          username: ZTTYBB
-          password: ${{ secrets.HF_TOKEN }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: registry.huggingface.co/ZTTYBB/bemby:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Update HF Space Dockerfile and trigger rebuild
+      - name: Restore pre-built image Dockerfile on HF
+        if: steps.sync.outputs.has_changes == 'true'
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          echo "Updating HF Space Dockerfile..."
-          git clone https://user:${HF_TOKEN}@huggingface.co/spaces/ZTTYBB/bemby /tmp/hf-update 2>&1
+          git clone https://user:${HF_TOKEN}@huggingface.co/spaces/ZTTYBB/bemby /tmp/hf-update
           cd /tmp/hf-update
           git config user.name "ZTTYBB"
           git config user.email "ztyybb@users.noreply.huggingface.co"
 
-          echo "FROM registry.huggingface.co/ZTTYBB/bemby:latest" > Dockerfile
+          # Use pre-built image (reliable for HF Spaces)
+          echo "FROM liveinaus/bemby:latest" > Dockerfile
           echo "USER root" >> Dockerfile
           echo "RUN mkdir -p /app/data && chown -R node:node /app" >> Dockerfile
           echo "USER node" >> Dockerfile
@@ -77,5 +58,5 @@ jobs:
           echo 'CMD ["node", "--dns-result-order=ipv4first", "dist/server.js"]' >> Dockerfile
 
           git add Dockerfile
-          git commit -m "Update to latest build $(date -u '+%Y-%m-%d %H:%M UTC')" || true
-          git push origin main 2>&1
+          git commit -m "Auto-deploy $(date -u '+%Y-%m-%d %H:%M UTC')" || true
+          git push origin main
