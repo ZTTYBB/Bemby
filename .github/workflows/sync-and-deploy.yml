@@ -38,16 +38,30 @@ jobs:
         run: |
           git push origin main
 
-      - name: Update HF Space Dockerfile to use pre-built image
+      - name: Build and push Docker image to Docker Hub
+        env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+        run: |
+          echo "Logging into Docker Hub..."
+          echo "$DOCKER_PAT" | docker login -u zttybb --password-stdin
+
+          echo "Building image..."
+          docker build -t zttybb/bemby:latest .
+
+          echo "Pushing to Docker Hub..."
+          docker push zttybb/bemby:latest
+
+      - name: Update HF Space Dockerfile and trigger rebuild
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          echo "Updating HF Space Dockerfile..."
           git clone https://user:${HF_TOKEN}@huggingface.co/spaces/ZTTYBB/bemby /tmp/hf-update
           cd /tmp/hf-update
           git config user.name "ZTTYBB"
           git config user.email "ztyybb@users.noreply.huggingface.co"
 
-          echo "FROM liveinaus/bemby:latest" > Dockerfile
+          echo "FROM zttybb/bemby:latest" > Dockerfile
           echo "USER root" >> Dockerfile
           echo "RUN mkdir -p /app/data && chown -R node:node /app" >> Dockerfile
           echo "USER node" >> Dockerfile
