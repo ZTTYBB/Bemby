@@ -42,19 +42,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to HF Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: registry.huggingface.co
           username: ZTTYBB
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.HF_TOKEN }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ghcr.io/ztyybb/bemby:latest
+          tags: registry.huggingface.co/ZTTYBB/bemby:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -68,7 +68,7 @@ jobs:
           git config user.name "ZTTYBB"
           git config user.email "ztyybb@users.noreply.huggingface.co"
 
-          echo "FROM ghcr.io/ztyybb/bemby:latest" > Dockerfile
+          echo "FROM registry.huggingface.co/ZTTYBB/bemby:latest" > Dockerfile
           echo "USER root" >> Dockerfile
           echo "RUN mkdir -p /app/data && chown -R node:node /app" >> Dockerfile
           echo "USER node" >> Dockerfile
