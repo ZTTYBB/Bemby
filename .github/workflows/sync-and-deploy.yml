@@ -38,31 +38,33 @@ jobs:
         run: |
           git push origin main
 
-      - name: Deploy to HF Spaces
+      - name: Build and push Docker image to HF Registry
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git clone https://user:${HF_TOKEN}@huggingface.co/spaces/ZTTYBB/bemby /tmp/hf-bemby
-          cd /tmp/hf-bemby
+          echo "$HF_TOKEN" | docker login -u ZTTYBB --password-stdin registry.huggingface.co
+          docker build -t registry.huggingface.co/ZTTYBB/bemby:latest .
+          docker push registry.huggingface.co/ZTTYBB/bemby:latest
+
+      - name: Update HF Space Dockerfile and trigger rebuild
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git clone https://user:${HF_TOKEN}@huggingface.co/spaces/ZTTYBB/bemby /tmp/hf-update
+          cd /tmp/hf-update
           git config user.name "ZTTYBB"
           git config user.email "ztyybb@users.noreply.huggingface.co"
 
-          # Clean everything except .git
-          git rm -r --cached . 2>/dev/null || true
-          find . -not -path './.git/*' -not -path './.git' -not -name '.' -delete 2>/dev/null || true
+          cat > Dockerfile << 'DOCKEREOF'
+FROM registry.huggingface.co/ZTTYBB/bemby:latest
+USER root
+RUN mkdir -p /app/data && chown -R node:node /app
+USER node
+EXPOSE 3000
+ENV PORT=3000
+CMD ["node", "--dns-result-order=ipv4first", "dist/server.js"]
+DOCKEREOF
 
-          # Copy all files from GitHub (using cp loop for reliability)
-          for item in "$GITHUB_WORKSPACE"/* "$GITHUB_WORKSPACE"/.*; do
-            name=$(basename "$item")
-            [ "$name" = "." ] && continue
-            [ "$name" = ".." ] && continue
-            [ "$name" = ".git" ] && continue
-            cp -r "$item" . 2>/dev/null || true
-          done
-
-          # Clean up dev artifacts
-          rm -rf node_modules dist frontend/node_modules backend/node_modules
-
-          git add -A
-          git commit -m "Auto-deploy $(date -u '+%Y-%m-%d %H:%M UTC')" || echo "No changes"
-          git push origin main || echo "Push failed"
+          git add Dockerfile
+          git commit -m "Update to latest build $(date -u '+%Y-%m-%d %H:%M UTC')" || true
+          git push origin main
