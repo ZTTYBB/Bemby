@@ -218,6 +218,7 @@ export type CustomAction =
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
+      cfChallenge?: boolean;
     }
   | {
       type: "click_message_button";
@@ -227,6 +228,7 @@ export type CustomAction =
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
+      cfChallenge?: boolean;
     }
   | {
       type: "enter_captcha";

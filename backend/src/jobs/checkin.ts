@@ -5,6 +5,7 @@ import { StringSession } from 'telegram/sessions';
 import type { TgProxy } from '../types';
 import type { TgDeviceParams } from '../auth/tgAuth';
 import { NewMessage, NewMessageEvent, Raw } from 'telegram/events';
+import { loadCheckinUrl } from './cloudflare';
 
 export type CheckinAttemptLog = {
   attempt: number;
@@ -38,6 +39,12 @@ export type CheckinAttemptLog = {
   totalMs?: number;
   replyTimeoutMs?: number;
   errorName?: string;
+  /** Host of the Cloudflare-gated checkin URL that was opened (full URL is sensitive). */
+  cfHost?: string;
+  /** A Cloudflare "I am not a bot" challenge was encountered on that URL. */
+  cfChallenged?: boolean;
+  /** The challenge was cleared (or the page loaded with none). */
+  cfPassed?: boolean;
 };
 
 export class CheckinError extends Error {
@@ -472,6 +479,24 @@ export async function parseMessages(
   return { html, hasMedia, images, buttons };
 }
 
+// Finds a URL inline button (e.g. the "我不是机器人" Cloudflare link some bots send).
+// These are KeyboardButtonUrl, not clickable callbacks, so they carry the web
+// checkin address in `.url`. When `matchText` is given, only a button whose label
+// contains it is returned.
+export function findUrlButton(msg: Api.Message | undefined, matchText?: string): { text: string; url: string } | undefined {
+  const markup = (msg as any)?.replyMarkup;
+  if (!(markup instanceof Api.ReplyInlineMarkup)) return undefined;
+  for (const row of markup.rows) {
+    for (const btn of row.buttons) {
+      if (btn instanceof Api.KeyboardButtonUrl) {
+        const text = (btn as any).text as string;
+        if (!matchText || text.includes(matchText)) return { text, url: btn.url };
+      }
+    }
+  }
+  return undefined;
+}
+
 // Collects ALL bot messages; resolves when one has buttons, times out otherwise
 function waitForBotReply(
   client: TelegramClient,
@@ -672,6 +697,8 @@ export async function runCheckin(
   deviceParams?: TgDeviceParams,
   successContains?: string,
   failContains?: string,
+  cfChallenge = false,
+  webProxyUrl?: string,
 ): Promise<CheckinAttemptLog> {
   const attemptStart = Date.now();
   const log: CheckinAttemptLog = {
@@ -757,12 +784,23 @@ export async function runCheckin(
     const peer = await client.getInputEntity(botUsername);
     const botPeerId = await client.getPeerId(botUsername);
     let clicked = false;
+    // Set when the checkin completes by opening a web URL behind Cloudflare
+    // (e.g. a "我不是机器人" link) rather than by a callback.
+    let urlToOpen: string | undefined;
 
     for (const row of allBtnRows) {
       for (const btn of row.buttons) {
         const btnText = (btn as any).text as string;
         const matches = useExactMatch ? btnText === targetText : btnText.includes(targetText);
         if (matches) {
+          // A URL button carries the web checkin address; it isn't clickable via
+          // callback, so we open it in a browser (below) to pass the CF check.
+          if (btn instanceof Api.KeyboardButtonUrl) {
+            urlToOpen = btn.url;
+            log.buttonClicked = btnText;
+            clicked = true;
+            break;
+          }
           if (!(btn instanceof Api.KeyboardButtonCallback)) {
             const typeName = (btn as any).className ?? btn.constructor?.name ?? 'unknown';
             throw new Error(
@@ -786,6 +824,8 @@ export async function runCheckin(
           if (answer.message) log.callbackAnswer = answer.message;
           console.log(`[checkin] callback answer: message="${answer.message ?? ''}" url="${(answer as any).url ?? ''}" alert=${(answer as any).alert ?? false}`);
           clicked = true;
+          // The bot may answer with a URL to open (a web checkin / CF page).
+          if ((answer as any).url) urlToOpen = (answer as any).url as string;
 
           // If the bot already confirmed via toast (answer.message), allow a short
           // grace window for any follow-up edit/message; otherwise wait longer.
@@ -811,6 +851,9 @@ export async function runCheckin(
               log.buttonResponseImage = bp.images[0];
               log.buttonResponseButtons = bp.buttons.length ? bp.buttons : undefined;
             }
+            // A follow-up URL button (e.g. "我不是机器人") takes precedence as the
+            // step that actually completes the checkin.
+            if (!urlToOpen) urlToOpen = findUrlButton(responseMsg)?.url;
           }
           break;
         }
@@ -821,9 +864,29 @@ export async function runCheckin(
     const notFoundLabel = isAiBtn(checkinButton) ? `{aiBtn} -> "${targetText}"` : `"${checkinButton}"`;
     if (!clicked) throw new Error(`Button ${notFoundLabel} not found in bot reply`);
 
-    // Check success/fail text in callback answer or button response
+    // Some bots complete the checkin only after a Cloudflare-gated web page is
+    // opened (e.g. a "我不是机器人" URL button). Load it in a headless browser to
+    // pass the "I am not a bot" challenge, then match on the resulting page.
+    let cfPageText = '';
+    if (urlToOpen) {
+      if (!cfChallenge) {
+        throw new Error(
+          'Checkin requires opening a Cloudflare-protected page ("I am not a bot"). Enable "Solve Cloudflare challenge" for this job.',
+        );
+      }
+      const result = await loadCheckinUrl(urlToOpen, webProxyUrl);
+      log.cfHost = result.finalHost;
+      log.cfChallenged = result.challenged;
+      log.cfPassed = result.ok;
+      if (!result.ok) {
+        throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
+      }
+      cfPageText = result.text;
+    }
+
+    // Check success/fail text in callback answer, button response, or CF page
     if (successContains || failContains) {
-      const texts = [log.callbackAnswer ?? '', htmlToText(log.buttonResponseHtml ?? '')].filter(Boolean).join('\n');
+      const texts = [log.callbackAnswer ?? '', htmlToText(log.buttonResponseHtml ?? ''), cfPageText].filter(Boolean).join('\n');
       if (failContains && texts.includes(failContains)) {
         throw new Error(`Reply indicates failure: "${failContains}" detected`);
       }
