@@ -340,6 +340,7 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
+      cfChallenge?: boolean;
     }
   | {
       type: "click_message_button";
@@ -350,6 +351,7 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
+      cfChallenge?: boolean;
     }
   | {
       type: "ai_multiple_btn";

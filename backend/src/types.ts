@@ -110,6 +110,8 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
+      /** Open a Cloudflare-gated URL button/answer (e.g. "我不是机器人") in a headless browser to pass the "I am not a bot" check. */
+      cfChallenge?: boolean;
     }
   | {
       // Click a button on the latest message from a specific contact (bot/group/user),
@@ -123,6 +125,8 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
+      /** Open a Cloudflare-gated URL button/answer (e.g. "我不是机器人") in a headless browser to pass the "I am not a bot" check. */
+      cfChallenge?: boolean;
     }
   | {
       // AI selects and clicks multiple buttons in order. The AI returns a JSON array of
@@ -165,6 +169,8 @@ export type CheckinConfig = {
   successContains?: string;
   failContains?: string;
   proxyId?: string;
+  /** Open a Cloudflare-gated checkin URL (e.g. "我不是机器人") in a headless browser to pass the "I am not a bot" check. */
+  cfChallenge?: boolean;
 };
 
 export type AutoregConfig = {
@@ -226,6 +232,12 @@ export type CustomStepLog = {
   jobAttempt?: number;
   /** Which action-level attempt this is, 1-based (only set when action maxRetries > 0) */
   actionAttempt?: number;
+  /** Host of the Cloudflare-gated URL opened for this click (full URL is sensitive). */
+  cfHost?: string;
+  /** A Cloudflare "I am not a bot" challenge was encountered. */
+  cfChallenged?: boolean;
+  /** The challenge was cleared (or the page loaded with none). */
+  cfPassed?: boolean;
 };
 
 export type EmbywatchConfig = {
