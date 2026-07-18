@@ -1,9 +1,9 @@
-import type { Browser, Page } from "puppeteer-core";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
-import { addExtra } from "puppeteer-extra";
-import Stealth from "puppeteer-extra-plugin-stealth";
+import { spawn } from "node:child_process";
+import { connect } from "puppeteer-real-browser";
+type Browser = Awaited<ReturnType<typeof connect>>["browser"];
+type Page = Awaited<ReturnType<typeof connect>>["page"];
 
 // Completes a checkin that hands back a URL behind Cloudflare's "I am not a bot"
 // (managed challenge / Turnstile). A real headless Chromium loads the URL and
@@ -91,107 +91,52 @@ const POLL_MS = 1_000;
 // Let a post-challenge redirect/render settle before scraping text.
 const SETTLE_MS = 1_500;
 
-// Chromium schemes we can hand to --proxy-server. MTProto/other schemes are skipped.
-const PROXY_SCHEMES = new Set(["http:", "https:", "socks4:", "socks5:"]);
-
-// Splits a proxy URL into the pieces Chromium needs: --proxy-server takes only
-// scheme://host:port, and http(s) auth is applied separately via authenticate().
-function parseProxy(proxyUrl?: string): {
-  server?: string;
-  username?: string;
-  password?: string;
-  isSocks: boolean;
-} {
-  if (!proxyUrl) return { isSocks: false };
+// Builds the http(s)/socks proxy option puppeteer-real-browser expects.
+function proxyOption(proxyUrl?: string): { host: string; port: number; username?: string; password?: string } | undefined {
+  if (!proxyUrl) return undefined;
   try {
     const u = new URL(proxyUrl);
-    if (!PROXY_SCHEMES.has(u.protocol)) return { isSocks: false };
+    if (!u.port) return undefined;
     return {
-      server: `${u.protocol}//${u.host}`,
+      host: u.hostname,
+      port: Number(u.port),
       username: u.username ? decodeURIComponent(u.username) : undefined,
       password: u.password ? decodeURIComponent(u.password) : undefined,
-      isSocks: u.protocol.startsWith("socks"),
     };
   } catch {
-    return { isSocks: false };
+    return undefined;
   }
 }
 
-// Starts a virtual X display so Chromium can run headed (much better Turnstile
-// odds than headless). Returns null if Xvfb isn't available -- caller falls back
-// to headless.
-async function startXvfb(display: string): Promise<ChildProcess | null> {
-  const bin = ["/usr/bin/Xvfb", "/usr/local/bin/Xvfb"].find((p) => existsSync(p)) ?? "Xvfb";
-  try {
-    const proc = spawn(bin, [display, "-screen", "0", "1280x800x24", "-nolisten", "tcp"], {
-      stdio: "ignore",
-    });
-    await new Promise((r) => setTimeout(r, 1500));
-    if (proc.exitCode !== null) return null;
-    return proc;
-  } catch {
-    return null;
-  }
-}
-
-// Launches Chromium with stealth evasions, headed under Xvfb when possible. The
-// returned xvfb process (if any) must be killed by the caller.
-async function launchBrowser(proxyServer?: string): Promise<{ browser: Browser; xvfb: ChildProcess | null }> {
-  const core = await import("puppeteer-core");
-  const puppeteer = addExtra(core as any);
-  puppeteer.use(Stealth());
-
+// Launches a real (rebrowser-patched) Chromium via puppeteer-real-browser: headed
+// under an auto-managed Xvfb display with a real cursor, and turnstile:true so it
+// auto-clicks Cloudflare Turnstile. This is the realistic path to pass Turnstile.
+async function launchBrowser(proxyUrl?: string): Promise<{ browser: Browser; page: Page }> {
   const executablePath = chromiumExecutable();
   if (!executablePath) {
     throw new Error(
       "Chromium not installed. Enable Cloudflare solving in Settings to install it into the data dir.",
     );
   }
-  const args = [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--disable-blink-features=AutomationControlled",
-    "--window-size=1280,800",
-    "--lang=en-US,en",
-  ];
-  if (proxyServer) args.push(`--proxy-server=${proxyServer}`);
 
-  const env: Record<string, string> = { ...(process.env as Record<string, string>) };
   // A data-dir (alt-root) install keeps its shared libs and fonts inside the root.
+  // Set these on our own env (not customConfig.envVars, which would REPLACE the
+  // environment and clobber the DISPLAY puppeteer-real-browser sets for Xvfb);
+  // the Chromium child inherits both from us.
   if (executablePath.startsWith(cfChromiumRoot())) {
     const root = cfChromiumRoot();
-    env.LD_LIBRARY_PATH = [`${root}/usr/lib`, `${root}/lib`, `${root}/usr/lib/chromium`, process.env.LD_LIBRARY_PATH]
+    process.env.LD_LIBRARY_PATH = [`${root}/usr/lib`, `${root}/lib`, `${root}/usr/lib/chromium`, process.env.LD_LIBRARY_PATH]
       .filter(Boolean)
       .join(":");
-    env.FONTCONFIG_PATH = `${root}/etc/fonts`;
+    process.env.FONTCONFIG_PATH = `${root}/etc/fonts`;
   }
 
-  // Unique-ish display so concurrent solves don't clash on the X socket.
-  const display = `:${100 + (Date.now() % 800)}`;
-  const xvfb = await startXvfb(display);
-  let headless = true;
-  if (xvfb) {
-    env.DISPLAY = display;
-    headless = false;
-  } else {
-    console.warn("[cloudflare] Xvfb unavailable; running headless (lower Turnstile pass rate)");
-  }
-
-  const browser = await puppeteer.launch({ executablePath, headless, args, env } as any);
-  return { browser, xvfb };
-}
-
-// Light evasions so the managed challenge treats us as a normal browser.
-async function harden(page: Page, browser: Browser): Promise<void> {
-  const ua = (await browser.userAgent()).replace(/Headless/gi, "");
-  await page.setUserAgent(ua);
-  await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-    Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
-    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+  return connect({
+    headless: false,
+    turnstile: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--window-size=1280,800"],
+    customConfig: { chromePath: executablePath },
+    proxy: proxyOption(proxyUrl),
   });
 }
 
@@ -276,20 +221,19 @@ export async function loadCheckinUrl(url: string, proxyUrl?: string): Promise<Ch
       return "";
     }
   })();
-  const { server, username, password, isSocks } = parseProxy(proxyUrl);
-  if (isSocks && (username || password)) {
-    console.warn("[cloudflare] SOCKS proxy auth is not supported by Chromium; attempting without credentials");
-  }
-
   let browser: Browser | undefined;
-  let xvfb: ChildProcess | null = null;
   try {
-    ({ browser, xvfb } = await launchBrowser(server));
-    const page = await browser.newPage();
-    await harden(page, browser);
-    if (server && !isSocks && username) {
-      await page.authenticate({ username, password: password ?? "" });
-    }
+    const launched = await launchBrowser(proxyUrl);
+    browser = launched.browser;
+    const page = launched.page;
+
+    // In dev the backend runs via tsx/esbuild, which wraps functions passed to
+    // page.evaluate() with a __name() helper that doesn't exist in the browser.
+    // Shim it (string form, so this injection itself isn't instrumented) so the
+    // evaluate() calls below work under tsx too; tsc production builds don't need it.
+    await page
+      .evaluateOnNewDocument("window.__name = window.__name || function (a) { return a; };")
+      .catch(() => {});
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS }).catch(() => {
       // The challenge page may abort/redirect mid-load; the poll below is the
@@ -335,6 +279,5 @@ export async function loadCheckinUrl(url: string, proxyUrl?: string): Promise<Ch
     return { ok: false, challenged: false, text: "", finalHost };
   } finally {
     await browser?.close().catch(() => {});
-    xvfb?.kill();
   }
 }
