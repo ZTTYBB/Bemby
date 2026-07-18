@@ -16,12 +16,36 @@ import {
   parseAiInputLength,
   recognizeCaptchaWithAI,
   buildCaptchaPrompt,
+  findUrlButton,
 } from "./checkin";
+import { loadCheckinUrl } from "./cloudflare";
 import type { CustomConfig, CustomStepLog } from "../types";
 
 export type CustomJobLog = {
   steps: CustomStepLog[];
 };
+
+// Opens a Cloudflare-gated URL (e.g. a "我不是机器人" button/answer) in a headless
+// browser to pass the "I am not a bot" check, recording the outcome on the step.
+// Returns the final page's visible text for success/fail matching.
+async function passCloudflare(
+  url: string,
+  cfChallenge: boolean | undefined,
+  step: CustomStepLog,
+  webProxyUrl?: string,
+): Promise<string> {
+  if (!cfChallenge) {
+    throw new Error(
+      'This click opens a Cloudflare-protected page ("I am not a bot"). Enable "Solve Cloudflare challenge" for this action.',
+    );
+  }
+  const cf = await loadCheckinUrl(url, webProxyUrl);
+  step.cfHost = cf.finalHost;
+  step.cfChallenged = cf.challenged;
+  step.cfPassed = cf.ok;
+  if (!cf.ok) throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
+  return cf.text;
+}
 
 export class CustomJobError extends Error {
   constructor(
@@ -485,6 +509,7 @@ export async function runCustom(
   signal?: AbortSignal,
   proxy?: TgProxy,
   deviceParams?: TgDeviceParams,
+  webProxyUrl?: string,
 ): Promise<CustomJobLog> {
   const log: CustomJobLog = { steps: [] };
   const jobMaxRetries = config.maxRetries ?? 1;
@@ -920,6 +945,22 @@ export async function runCustom(
                         : btnText.includes(targetText);
                       if (!matches) continue;
 
+                      // A URL button (e.g. "我不是机器人") carries the web checkin
+                      // address; open it in a browser to pass the Cloudflare check.
+                      if (btn instanceof Api.KeyboardButtonUrl) {
+                        const cfText = await passCloudflare(btn.url, action.cfChallenge, step, webProxyUrl);
+                        clicked = true;
+                        step.clickedButton = btnText;
+                        step.result = `Opened URL button "${btnText}"`;
+                        if (action.failContains && cfText.includes(action.failContains)) {
+                          throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
+                        }
+                        if (action.successContains && !cfText.includes(action.successContains)) {
+                          throw new Error(`Expected success indicator "${action.successContains}" not found in response`);
+                        }
+                        break;
+                      }
+
                       // Abort controller scoped to this click attempt -- prevents stale listeners
                       // from interfering with later steps if GetBotCallbackAnswer throws.
                       const clickAbort = new AbortController();
@@ -1018,9 +1059,15 @@ export async function runCustom(
                           : undefined;
                       }
 
-                      // Check success/fail text in callback answer or response messages
+                      // A URL to open (callback answer or a follow-up "我不是机器人"
+                      // button) completes the checkin only after passing Cloudflare.
+                      let cfText = '';
+                      const cfUrl = (answer as any).url || responses.map((r) => findUrlButton(r.msg)).find(Boolean)?.url;
+                      if (cfUrl) cfText = await passCloudflare(cfUrl, action.cfChallenge, step, webProxyUrl);
+
+                      // Check success/fail text in callback answer, response, or CF page
                       if (action.successContains || action.failContains) {
-                        const texts = [answer.message ?? '', ...responses.map((r) => r.msg.message ?? '')].filter(Boolean).join('\n');
+                        const texts = [answer.message ?? '', ...responses.map((r) => r.msg.message ?? ''), cfText].filter(Boolean).join('\n');
                         if (action.failContains && texts.includes(action.failContains)) {
                           throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
                         }
@@ -1193,6 +1240,22 @@ export async function runCustom(
                         : btnText.includes(targetText);
                       if (!matches) continue;
 
+                      // A URL button (e.g. "我不是机器人") carries the web checkin
+                      // address; open it in a browser to pass the Cloudflare check.
+                      if (btn instanceof Api.KeyboardButtonUrl) {
+                        const cfText = await passCloudflare(btn.url, action.cfChallenge, step, webProxyUrl);
+                        clicked = true;
+                        step.clickedButton = btnText;
+                        step.result = `Opened URL button "${btnText}"`;
+                        if (action.failContains && cfText.includes(action.failContains)) {
+                          throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
+                        }
+                        if (action.successContains && !cfText.includes(action.successContains)) {
+                          throw new Error(`Expected success indicator "${action.successContains}" not found in response`);
+                        }
+                        break;
+                      }
+
                       const clickAbort = new AbortController();
                       const forwardAbort = () => clickAbort.abort();
                       signal?.addEventListener("abort", forwardAbort, {
@@ -1285,8 +1348,14 @@ export async function runCustom(
                           : undefined;
                       }
 
+                      // A URL to open (callback answer or a follow-up "我不是机器人"
+                      // button) completes the checkin only after passing Cloudflare.
+                      let cfText = '';
+                      const cfUrl = (answer as any).url || responses.map((r) => findUrlButton(r.msg)).find(Boolean)?.url;
+                      if (cfUrl) cfText = await passCloudflare(cfUrl, action.cfChallenge, step, webProxyUrl);
+
                       if (action.successContains || action.failContains) {
-                        const texts = [answer.message ?? '', ...responses.map((r) => r.msg.message ?? '')].filter(Boolean).join('\n');
+                        const texts = [answer.message ?? '', ...responses.map((r) => r.msg.message ?? ''), cfText].filter(Boolean).join('\n');
                         if (action.failContains && texts.includes(action.failContains)) {
                           throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
                         }

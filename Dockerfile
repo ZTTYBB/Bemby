@@ -22,8 +22,22 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# su-exec lets the entrypoint fix data-dir ownership as root, then drop to `node`
-RUN apk add --no-cache su-exec
+# su-exec lets the entrypoint fix data-dir ownership as root, then drop to `node`.
+# chromium + fonts power the headless Cloudflare "I am not a bot" solve for checkins
+# (used by puppeteer-core). The alpine chromium package covers amd64 and arm64.
+RUN apk add --no-cache \
+      su-exec \
+      chromium \
+      nss \
+      freetype \
+      harfbuzz \
+      ttf-freefont \
+      font-noto-cjk \
+ && ln -sf /usr/bin/chromium /usr/bin/chromium-browser 2>/dev/null || true
+
+# puppeteer-core drives the system chromium; never try to download its own.
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 COPY --from=backend-builder /app/node_modules ./node_modules
 COPY --from=backend-builder /app/dist        ./dist
