@@ -166,6 +166,8 @@ export async function runJob(
             checkinDevice,
             checkinCfg.successContains,
             checkinCfg.failContains,
+            checkinCfg.cfChallenge ?? false,
+            checkinProxyUrl,
           );
           detailLogs?.push(log);
           break;
@@ -215,6 +217,7 @@ export async function runJob(
             signal,
             customProxy,
             customDevice,
+            customProxyUrl,
           );
           detailLogs?.push(customLog);
           break;
