@@ -3,6 +3,7 @@ import { db } from "../db/database";
 import { refreshScheduler, purgeOldLogs } from "../scheduler";
 import { SocksClient } from "socks";
 import { parseTgProxy } from "../jobs/runner";
+import { installCfChromium, isChromiumInstalled } from "../jobs/cloudflare";
 
 const router = Router();
 
@@ -29,6 +30,7 @@ export const ALLOWED_KEYS = [
   "account_display_with_tg_name",
   "log_retention_days",
   "schedule_min_gap_minutes",
+  "cf_solver_enabled",
 ];
 
 /** Settings keys that must never be sent to the client. */
@@ -74,6 +76,8 @@ function getClientSettings(): Record<string, string> {
   }
   // Synthetic flag so the client can gate AI features without seeing the key
   result.ai_key_configured = aiKeyConfigured() ? "true" : "false";
+  // Whether the on-demand Cloudflare-solver browser is present
+  result.cf_chromium_installed = isChromiumInstalled() ? "true" : "false";
   return result;
 }
 
@@ -109,6 +113,32 @@ router.put("/", (req, res) => {
   if ("log_retention_days" in updates) purgeOldLogs();
 
   res.json(getClientSettings());
+});
+
+// POST /cf-solver/install -- install Chromium on demand into the data dir so the
+// Cloudflare "I am not a bot" solver can run. Long-running (downloads ~150MB).
+let cfInstalling = false;
+router.post("/cf-solver/install", async (_req, res) => {
+  if (isChromiumInstalled()) {
+    res.json({ ok: true, installed: true, message: "Already installed" });
+    return;
+  }
+  if (cfInstalling) {
+    res.status(409).json({ ok: false, message: "Install already in progress" });
+    return;
+  }
+  cfInstalling = true;
+  try {
+    const result = await installCfChromium();
+    if (result.ok) {
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('cf_solver_enabled', 'true')").run();
+    }
+    res.json({ ok: result.ok, installed: result.ok, output: result.output.slice(-1500) });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, message: err?.message ?? "Install failed" });
+  } finally {
+    cfInstalling = false;
+  }
 });
 
 // Test TCP reachability through a SOCKS proxy (target: 1.1.1.1:80)
