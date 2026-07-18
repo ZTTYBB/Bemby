@@ -765,6 +765,13 @@
             <input v-model.trim="checkinFailContains" class="form-input" :placeholder="t('jobs.failContainsPlaceholder')" />
             <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.failContainsHint') }}</div>
           </div>
+          <div class="form-group">
+            <label class="form-checkbox-label">
+              <input type="checkbox" v-model="checkinCfChallenge" :disabled="!!form.templateId" />
+              {{ t('jobs.custom.labelCfChallenge') }}
+            </label>
+            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+          </div>
         </template>
 
         <div v-if="form.jobType === 'embywatch' && !form.templateId" class="form-row">
@@ -1161,6 +1168,7 @@ const btnCustom = ref('')
 const btnAiHint = ref('')
 const checkinSuccessContains = ref('')
 const checkinFailContains = ref('')
+const checkinCfChallenge = ref(false)
 
 function setCmdState(val: string) {
   if (CMD_PRESETS.has(val)) { cmdDropdown.value = val; cmdCustom.value = ''; }
@@ -1204,6 +1212,7 @@ function onJobTypeChange() {
   btnAiHint.value = '';
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
+  checkinCfChallenge.value = false;
   setCmdState(''); setBtnState('');
 }
 
@@ -1433,6 +1442,7 @@ function openAdd() {
   Object.assign(autoregCfg, defaultAutoregCfg());
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
+  checkinCfChallenge.value = false;
   setCmdState(''); setBtnState('');
   formError.value = '';
   showForm.value = true;
@@ -1452,12 +1462,14 @@ function openEdit(j: Job) {
   setBtnState(j.checkinButton === '签到' ? '' : (j.checkinButton ?? ''));
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
+  checkinCfChallenge.value = false;
   if (j.jobType === 'checkin' && j.config) {
     try {
       let cfg = JSON.parse(j.config);
       if (typeof cfg === 'string') cfg = JSON.parse(cfg);
       checkinSuccessContains.value = cfg.successContains ?? '';
       checkinFailContains.value = cfg.failContains ?? '';
+      checkinCfChallenge.value = cfg.cfChallenge ?? false;
     } catch { /* ignore */ }
   }
   if (j.jobType === 'embywatch') {
@@ -1705,7 +1717,9 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Record<
   if (form.jobType === 'checkin') {
     const s = checkinSuccessContains.value.trim();
     const f = checkinFailContains.value.trim();
-    if (s || f) return { ...(s ? { successContains: s } : {}), ...(f ? { failContains: f } : {}) };
+    const cf = checkinCfChallenge.value;
+    if (s || f || cf)
+      return { ...(s ? { successContains: s } : {}), ...(f ? { failContains: f } : {}), ...(cf ? { cfChallenge: true } : {}) };
   }
   return null;
 }
