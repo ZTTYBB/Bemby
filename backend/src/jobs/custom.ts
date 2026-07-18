@@ -934,6 +934,20 @@ export async function runCustom(
                     }
                   }
 
+                  // The target may already have arrived on an earlier follow-up (e.g.
+                  // a "Verify" prompt sent alongside other messages), so it isn't the
+                  // "current" buttons message. Scan recent history before matching.
+                  if (!markupContainsTarget(buttonsMsg)) {
+                    const recent = (await client
+                      .getMessages(botUsername, { limit: 8 })
+                      .catch(() => [])) as Api.Message[];
+                    const hit = recent.find((m) => markupContainsTarget(m));
+                    if (hit) {
+                      buttonsMsg = hit;
+                      lastButtonsMsg = hit;
+                    }
+                  }
+
                   const rows = (
                     (buttonsMsg as any).replyMarkup as Api.ReplyInlineMarkup
                   ).rows;
@@ -945,13 +959,14 @@ export async function runCustom(
                         : btnText.includes(targetText);
                       if (!matches) continue;
 
-                      // A URL button (e.g. "我不是机器人") carries the web checkin
+                      // A URL button ("我不是机器人") or a WebApp/Mini-App button
+                      // (FutureEcho's "Verify" -> a Turnstile page) carries the web
                       // address; open it in a browser to pass the Cloudflare check.
-                      if (btn instanceof Api.KeyboardButtonUrl) {
+                      if (btn instanceof Api.KeyboardButtonUrl || btn instanceof Api.KeyboardButtonWebView) {
                         const cfText = await passCloudflare(btn.url, action.cfChallenge, step, webProxyUrl);
                         clicked = true;
                         step.clickedButton = btnText;
-                        step.result = `Opened URL button "${btnText}"`;
+                        step.result = `Opened "${btnText}"`;
                         if (action.failContains && cfText.includes(action.failContains)) {
                           throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
                         }
@@ -985,7 +1000,7 @@ export async function runCustom(
 
                       const callbackData = (btn as Api.KeyboardButtonCallback)
                         .data;
-                      let answer: Api.messages.BotCallbackAnswer;
+                      let answer: Api.messages.BotCallbackAnswer | undefined;
                       try {
                         answer = (await client.invoke(
                           new Api.messages.GetBotCallbackAnswer({
@@ -994,13 +1009,19 @@ export async function runCustom(
                             data: callbackData,
                           }),
                         )) as Api.messages.BotCallbackAnswer;
-                      } catch (err) {
-                        clickAbort.abort();
-                        signal?.removeEventListener("abort", forwardAbort);
-                        throw err;
+                      } catch (err: any) {
+                        // Some bots never answer the callback (they act via a follow-up
+                        // message / Cloudflare page), so Telegram returns
+                        // BOT_RESPONSE_TIMEOUT. Keep the listeners alive and read the
+                        // follow-up instead of failing.
+                        if (!/BOT_RESPONSE_TIMEOUT/.test(err?.message ?? "")) {
+                          clickAbort.abort();
+                          signal?.removeEventListener("abort", forwardAbort);
+                          throw err;
+                        }
                       }
 
-                      if (answer.message) step.callbackAnswer = answer.message;
+                      if (answer?.message) step.callbackAnswer = answer.message;
                       clicked = true;
                       step.retryCount = retryCount;
 
@@ -1062,12 +1083,17 @@ export async function runCustom(
                       // A URL to open (callback answer or a follow-up "我不是机器人"
                       // button) completes the checkin only after passing Cloudflare.
                       let cfText = '';
-                      const cfUrl = (answer as any).url || responses.map((r) => findUrlButton(r.msg)).find(Boolean)?.url;
-                      if (cfUrl) cfText = await passCloudflare(cfUrl, action.cfChallenge, step, webProxyUrl);
+                      // Only chase a Cloudflare URL from the response when this action
+                      // opted in; otherwise an incidental URL/WebApp button (e.g. a
+                      // "Verify" the user handles in a later action) must be ignored.
+                      const cfUrl = action.cfChallenge
+                        ? ((answer as any)?.url || responses.map((r) => findUrlButton(r.msg)).find(Boolean)?.url)
+                        : undefined;
+                      if (cfUrl) cfText = await passCloudflare(cfUrl, true, step, webProxyUrl);
 
                       // Check success/fail text in callback answer, response, or CF page
                       if (action.successContains || action.failContains) {
-                        const texts = [answer.message ?? '', ...responses.map((r) => r.msg.message ?? ''), cfText].filter(Boolean).join('\n');
+                        const texts = [answer?.message ?? '', ...responses.map((r) => r.msg.message ?? ''), cfText].filter(Boolean).join('\n');
                         if (action.failContains && texts.includes(action.failContains)) {
                           throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
                         }
@@ -1229,6 +1255,16 @@ export async function runCustom(
                     }
                   }
 
+                  // The target may already have arrived on an earlier follow-up, so it
+                  // isn't the "current" buttons message. Scan recent chat history.
+                  if (!markupContainsTarget(buttonsMsg)) {
+                    const recent = (await client
+                      .getMessages(entity, { limit: 8 })
+                      .catch(() => [])) as Api.Message[];
+                    const hit = recent.find((m) => markupContainsTarget(m));
+                    if (hit) buttonsMsg = hit;
+                  }
+
                   const rows = (
                     (buttonsMsg as any).replyMarkup as Api.ReplyInlineMarkup
                   ).rows;
@@ -1240,13 +1276,14 @@ export async function runCustom(
                         : btnText.includes(targetText);
                       if (!matches) continue;
 
-                      // A URL button (e.g. "我不是机器人") carries the web checkin
+                      // A URL button ("我不是机器人") or a WebApp/Mini-App button
+                      // (FutureEcho's "Verify" -> a Turnstile page) carries the web
                       // address; open it in a browser to pass the Cloudflare check.
-                      if (btn instanceof Api.KeyboardButtonUrl) {
+                      if (btn instanceof Api.KeyboardButtonUrl || btn instanceof Api.KeyboardButtonWebView) {
                         const cfText = await passCloudflare(btn.url, action.cfChallenge, step, webProxyUrl);
                         clicked = true;
                         step.clickedButton = btnText;
-                        step.result = `Opened URL button "${btnText}"`;
+                        step.result = `Opened "${btnText}"`;
                         if (action.failContains && cfText.includes(action.failContains)) {
                           throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
                         }
@@ -1278,7 +1315,7 @@ export async function runCustom(
 
                       const callbackData = (btn as Api.KeyboardButtonCallback)
                         .data;
-                      let answer: Api.messages.BotCallbackAnswer;
+                      let answer: Api.messages.BotCallbackAnswer | undefined;
                       try {
                         answer = (await client.invoke(
                           new Api.messages.GetBotCallbackAnswer({
@@ -1287,13 +1324,19 @@ export async function runCustom(
                             data: callbackData,
                           }),
                         )) as Api.messages.BotCallbackAnswer;
-                      } catch (err) {
-                        clickAbort.abort();
-                        signal?.removeEventListener("abort", forwardAbort);
-                        throw err;
+                      } catch (err: any) {
+                        // Some bots never answer the callback (they act via a follow-up
+                        // message / Cloudflare page), so Telegram returns
+                        // BOT_RESPONSE_TIMEOUT. Keep the listeners alive and read the
+                        // follow-up instead of failing.
+                        if (!/BOT_RESPONSE_TIMEOUT/.test(err?.message ?? "")) {
+                          clickAbort.abort();
+                          signal?.removeEventListener("abort", forwardAbort);
+                          throw err;
+                        }
                       }
 
-                      if (answer.message) step.callbackAnswer = answer.message;
+                      if (answer?.message) step.callbackAnswer = answer.message;
                       clicked = true;
                       step.retryCount = retryCount;
 
@@ -1351,11 +1394,16 @@ export async function runCustom(
                       // A URL to open (callback answer or a follow-up "我不是机器人"
                       // button) completes the checkin only after passing Cloudflare.
                       let cfText = '';
-                      const cfUrl = (answer as any).url || responses.map((r) => findUrlButton(r.msg)).find(Boolean)?.url;
-                      if (cfUrl) cfText = await passCloudflare(cfUrl, action.cfChallenge, step, webProxyUrl);
+                      // Only chase a Cloudflare URL from the response when this action
+                      // opted in; otherwise an incidental URL/WebApp button (e.g. a
+                      // "Verify" the user handles in a later action) must be ignored.
+                      const cfUrl = action.cfChallenge
+                        ? ((answer as any)?.url || responses.map((r) => findUrlButton(r.msg)).find(Boolean)?.url)
+                        : undefined;
+                      if (cfUrl) cfText = await passCloudflare(cfUrl, true, step, webProxyUrl);
 
                       if (action.successContains || action.failContains) {
-                        const texts = [answer.message ?? '', ...responses.map((r) => r.msg.message ?? ''), cfText].filter(Boolean).join('\n');
+                        const texts = [answer?.message ?? '', ...responses.map((r) => r.msg.message ?? ''), cfText].filter(Boolean).join('\n');
                         if (action.failContains && texts.includes(action.failContains)) {
                           throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
                         }
