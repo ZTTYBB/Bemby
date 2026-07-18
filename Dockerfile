@@ -30,29 +30,29 @@ ENV NODE_ENV=production
 ENV NODE_OPTIONS="--max-old-space-size=512"
 
 # su-exec lets the entrypoint fix data-dir ownership as root, then drop to `node`.
-# chromium + fonts power the headless Cloudflare "I am not a bot" solve for checkins
-# (used by puppeteer-core). The alpine chromium package covers amd64 and arm64.
-RUN apk add --no-cache \
-      su-exec \
-      chromium \
-      nss \
-      freetype \
-      harfbuzz \
-      ttf-freefont \
-      font-noto-cjk \
- && ln -sf /usr/bin/chromium /usr/bin/chromium-browser 2>/dev/null || true
+# doas lets the non-root `node` app run ONLY the Chromium install script as root:
+# the browser for the Cloudflare "I am not a bot" solver is installed on demand
+# into the data dir (keeping the image small), which needs apk + root.
+# xvfb is a small virtual X server so that browser can run headed (far better
+# Turnstile pass rate than headless); the heavy browser itself stays on demand.
+RUN apk add --no-cache su-exec doas xvfb
 
-# puppeteer-core drives the system chromium; never try to download its own.
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# puppeteer-core never downloads its own browser; the installer places a musl-native
+# Chromium under the data dir and the app resolves it at launch.
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 COPY --from=backend-builder /app/node_modules ./node_modules
 COPY --from=backend-builder /app/dist        ./dist
 COPY --from=backend-builder /app/package.json ./package.json
 COPY --from=frontend-builder /frontend/dist  ./public
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY docker/install-cf-chromium.sh /usr/local/bin/install-cf-chromium
 
-RUN mkdir -p /app/data && chmod +x /usr/local/bin/docker-entrypoint.sh
+# Allow `node` to run just the install script as root, nothing else.
+RUN mkdir -p /app/data /etc/doas.d \
+ && chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/install-cf-chromium \
+ && printf 'permit nopass node as root cmd /usr/local/bin/install-cf-chromium\n' > /etc/doas.d/cf-chromium.conf \
+ && chmod 0600 /etc/doas.d/cf-chromium.conf
 
 EXPOSE 3000
 

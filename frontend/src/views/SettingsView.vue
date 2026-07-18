@@ -115,6 +115,32 @@
         </div>
       </div>
 
+      <!-- Cloudflare solver -->
+      <div class="card s-col-4">
+        <div class="card-body">
+          <div class="card-section-title">{{ t("settings.cfSolver.title") }}</div>
+          <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+            {{ t("settings.cfSolver.hint") }}
+          </p>
+          <div v-if="cfInstallMsg" class="success-msg">{{ cfInstallMsg }}</div>
+          <div v-if="cfInstallError" class="error-msg">{{ cfInstallError }}</div>
+          <p style="font-size: 12px; margin: 0 0 12px">
+            {{ t("settings.cfSolver.status") }}:
+            <strong :style="{ color: cfChromiumInstalled ? '#2e9e5b' : '#c47f17' }">
+              {{ cfChromiumInstalled ? t("settings.cfSolver.stateInstalled") : t("settings.cfSolver.stateNotInstalled") }}
+            </strong>
+          </p>
+          <button
+            class="btn btn-primary"
+            :disabled="cfInstalling || cfChromiumInstalled"
+            @click="installCfSolver"
+          >
+            <i class="fa-solid fa-download"></i>
+            {{ cfInstalling ? t("settings.cfSolver.installing") : t("settings.cfSolver.installBtn") }}
+          </button>
+        </div>
+      </div>
+
       <!-- Admin credentials -->
       <div class="card s-col-4">
         <div class="card-body">
@@ -1445,6 +1471,32 @@ const notifySaving = ref(false);
 const notifyMsg = ref("");
 const notifyError = ref("");
 
+// Cloudflare "I am not a bot" solver: an optional headless browser installed on
+// demand into the data dir (keeps the image small).
+const cfChromiumInstalled = ref(false);
+const cfInstalling = ref(false);
+const cfInstallMsg = ref("");
+const cfInstallError = ref("");
+
+async function installCfSolver() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfInstalling.value = true;
+  try {
+    const res = await settingsApi.installCfSolver();
+    if (res.ok) {
+      cfChromiumInstalled.value = true;
+      cfInstallMsg.value = t("settings.cfSolver.installed");
+    } else {
+      cfInstallError.value = res.message || res.output || t("settings.cfSolver.failed");
+    }
+  } catch (e: any) {
+    cfInstallError.value = e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.failed");
+  } finally {
+    cfInstalling.value = false;
+  }
+}
+
 const uaPresets = ref<UAPreset[]>([]);
 const newPresetName = ref("");
 const newPresetValue = ref("");
@@ -1775,6 +1827,7 @@ onMounted(async () => {
     form.ai_model = s.ai_model ?? "";
     form.ai_default_model_id = s.ai_default_model_id ?? "";
     form.ai_fallback_enabled = s.ai_fallback_enabled !== "false";
+    cfChromiumInstalled.value = s.cf_chromium_installed === "true";
     notifyForm.username = s.notify_tg_username ?? "";
     try {
       if (s.notify_tg_events)

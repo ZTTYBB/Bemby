@@ -977,6 +977,10 @@ export type Settings = {
   account_display_with_tg_name?: string;
   /** Days to keep job logs; "0" keeps all logs. */
   log_retention_days?: string;
+  /** "true" once the user has enabled the on-demand Cloudflare solver. */
+  cf_solver_enabled?: string;
+  /** Server-computed: "true" when the Cloudflare-solver browser is installed. */
+  cf_chromium_installed?: string;
 };
 
 export const settingsApi = {
@@ -986,6 +990,12 @@ export const settingsApi = {
   testProxy: (url: string) =>
     api
       .post<{ ok: boolean; error?: string }>("/settings/test-proxy", { url })
+      .then((r) => r.data),
+  installCfSolver: () =>
+    api
+      .post<{ ok: boolean; installed?: boolean; output?: string; message?: string }>(
+        "/settings/cf-solver/install",
+      )
       .then((r) => r.data),
 };
 

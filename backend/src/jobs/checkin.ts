@@ -573,22 +573,98 @@ export async function parseMessages(
   return { html, hasMedia, images, buttons };
 }
 
-// Finds a URL inline button (e.g. the "我不是机器人" Cloudflare link some bots send).
-// These are KeyboardButtonUrl, not clickable callbacks, so they carry the web
-// checkin address in `.url`. When `matchText` is given, only a button whose label
-// contains it is returned.
+// Finds an openable inline button that carries a web address rather than a
+// callback: a URL button (e.g. "我不是机器人") or a WebApp/Mini-App button (e.g.
+// FutureEcho's "🔐 Verify" -> a Cloudflare Turnstile page). Both hold the address
+// in `.url`. When `matchText` is given, only a button whose label contains it
+// is returned.
 export function findUrlButton(msg: Api.Message | undefined, matchText?: string): { text: string; url: string } | undefined {
   const markup = (msg as any)?.replyMarkup;
   if (!(markup instanceof Api.ReplyInlineMarkup)) return undefined;
   for (const row of markup.rows) {
     for (const btn of row.buttons) {
-      if (btn instanceof Api.KeyboardButtonUrl) {
-        const text = (btn as any).text as string;
-        if (!matchText || text.includes(matchText)) return { text, url: btn.url };
-      }
+      const url =
+        btn instanceof Api.KeyboardButtonUrl || btn instanceof Api.KeyboardButtonWebView
+          ? btn.url
+          : undefined;
+      if (!url) continue;
+      const text = (btn as any).text as string;
+      if (!matchText || text.includes(matchText)) return { text, url };
     }
   }
   return undefined;
+}
+
+// Scans several recent bot messages for an openable web button. Bots often send
+// the verify prompt as one of several follow-up messages (error + prompt + fresh
+// menu), so the single raced reply isn't enough.
+async function findUrlButtonRecent(
+  client: TelegramClient,
+  botUsername: string,
+  signal?: AbortSignal,
+): Promise<{ text: string; url: string } | undefined> {
+  if (signal?.aborted) return undefined;
+  try {
+    const msgs = (await client.getMessages(botUsername, { limit: 6 })) as Api.Message[];
+    for (const m of msgs) {
+      const found = findUrlButton(m);
+      if (found) return found;
+    }
+  } catch {
+    /* ignore fetch errors, fall back to the raced reply */
+  }
+  return undefined;
+}
+
+// A verify page (e.g. FutureEcho's Turnstile) only unlocks the checkin; after it
+// passes, the bot expects the checkin button clicked again. Best-effort re-click
+// on the latest menu, returning the follow-up text for success/fail matching.
+// Never throws -- a failed re-click just yields no extra text.
+async function reclickCheckinButton(
+  client: TelegramClient,
+  botUsername: string,
+  buttonText: string,
+  replyTimeoutMs: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  try {
+    if (signal?.aborted) return '';
+    await new Promise(r => setTimeout(r, 3000)); // let the bot register the verification
+    const msgs = (await client.getMessages(botUsername, { limit: 6 })) as Api.Message[];
+    const menu = msgs.find(m => (m as any).replyMarkup instanceof Api.ReplyInlineMarkup);
+    if (!menu) return '';
+    const markup = (menu as any).replyMarkup as Api.ReplyInlineMarkup;
+    let target: Api.KeyboardButtonCallback | undefined;
+    for (const row of markup.rows)
+      for (const btn of row.buttons)
+        if (btn instanceof Api.KeyboardButtonCallback && ((btn as any).text as string).includes(buttonText)) target = btn;
+    if (!target) return '';
+
+    const peer = await client.getInputEntity(botUsername);
+    const botPeerId = await client.getPeerId(botUsername);
+    const editP = waitForBotMessageEdit(client, menu.id, replyTimeoutMs, signal, botPeerId);
+    const newP = waitForNewBotMessage(client, botUsername, replyTimeoutMs, signal);
+    let answer: Api.messages.BotCallbackAnswer | undefined;
+    try {
+      answer = (await client.invoke(
+        new Api.messages.GetBotCallbackAnswer({ peer, msgId: menu.id, data: target.data }),
+      )) as Api.messages.BotCallbackAnswer;
+    } catch (err: any) {
+      if (!/BOT_RESPONSE_TIMEOUT/.test(err?.message ?? '')) throw err;
+    }
+    const capP = new Promise<Api.Message | null>(r =>
+      setTimeout(() => r(null), Math.min(replyTimeoutMs, 15_000)),
+    );
+    const resp = await Promise.race([editP, newP, capP]);
+    const parts = [answer?.message ?? ''];
+    if (resp && !signal?.aborted) {
+      const bp = await parseMessages([resp], client, signal);
+      parts.push(htmlToText(bp.html ?? ''));
+    }
+    return parts.filter(Boolean).join('\n');
+  } catch {
+    return '';
+  }
 }
 
 // Collects ALL bot messages; resolves when one has buttons, times out otherwise
@@ -920,7 +996,8 @@ export async function runCheckin(
           } catch (err: any) {
             // BOT_RESPONSE_TIMEOUT means the click reached the bot but it never called
             // answerCallbackQuery -- the check-in may still have registered (the bot edits
-            // the message). Fall through and let the edit/new-message watchers below decide.
+            // the message or acts via a follow-up Cloudflare page). Fall through and let
+            // the edit/new-message watchers below decide.
             if (!err?.message?.includes('BOT_RESPONSE_TIMEOUT')) throw err;
             callbackTimedOut = true;
           }
@@ -930,7 +1007,7 @@ export async function runCheckin(
           console.log(`[checkin] callback answer: message="${answer?.message ?? ''}" url="${(answer as any)?.url ?? ''}" alert=${(answer as any)?.alert ?? false}`);
           clicked = true;
           // The bot may answer with a URL to open (a web checkin / CF page).
-          if ((answer as any).url) urlToOpen = (answer as any).url as string;
+          if ((answer as any)?.url) urlToOpen = (answer as any).url as string;
 
           // If the bot already confirmed via toast (answer.message), allow a short
           // grace window for any follow-up edit/message; otherwise wait longer.
@@ -992,10 +1069,17 @@ export async function runCheckin(
     const notFoundLabel = isAiBtn(checkinButton) ? `{aiBtn} -> "${targetText}"` : `"${checkinButton}"`;
     if (!clicked) throw new Error(`Button ${notFoundLabel} not found in bot reply`);
 
-    // Some bots complete the checkin only after a Cloudflare-gated web page is
-    // opened (e.g. a "我不是机器人" URL button). Load it in a headless browser to
-    // pass the "I am not a bot" challenge, then match on the resulting page.
+    // The verify/CF prompt is often one of several follow-up messages, so fall
+    // back to scanning recent messages if the raced reply didn't carry it.
+    if (cfChallenge && !urlToOpen) {
+      urlToOpen = (await findUrlButtonRecent(client, botUsername, signal))?.url;
+    }
+
+    // Some bots complete (or unlock) the checkin only after a Cloudflare-gated web
+    // page is opened: a "我不是机器人" URL button, or a WebApp "Verify" button
+    // leading to a Cloudflare Turnstile page. Open it headless to pass the check.
     let cfPageText = '';
+    let reclickText = '';
     if (urlToOpen) {
       if (!cfChallenge) {
         throw new Error(
@@ -1010,11 +1094,13 @@ export async function runCheckin(
         throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
       }
       cfPageText = result.text;
+      // Verify pages only unlock the checkin; re-click the button to register it.
+      reclickText = await reclickCheckinButton(client, botUsername, log.buttonClicked ?? checkinButton, replyTimeoutMs, signal);
     }
 
-    // Check success/fail text in callback answer, button response, or CF page
+    // Check success/fail text in callback answer, button response, CF page, or re-click
     if (successContains || failContains) {
-      const texts = [log.callbackAnswer ?? '', htmlToText(log.buttonResponseHtml ?? ''), cfPageText].filter(Boolean).join('\n');
+      const texts = [log.callbackAnswer ?? '', htmlToText(log.buttonResponseHtml ?? ''), cfPageText, reclickText].filter(Boolean).join('\n');
       if (failContains && texts.includes(failContains)) {
         throw new Error(`Reply indicates failure: "${failContains}" detected`);
       }
