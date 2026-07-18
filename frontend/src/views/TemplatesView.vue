@@ -704,6 +704,13 @@
               <input v-model.trim="tplCheckinFailContains" class="form-input" :placeholder="t('jobs.failContainsPlaceholder')" />
               <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.failContainsHint') }}</div>
             </div>
+            <div class="form-group">
+              <label class="form-checkbox-label">
+                <input type="checkbox" v-model="tplCheckinCfChallenge" />
+                {{ t('jobs.custom.labelCfChallenge') }}
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+            </div>
           </template>
 
           <div v-if="proxiesList.length" class="form-group">
@@ -1151,6 +1158,7 @@ const btnCustom = ref('');
 const btnAiHint = ref('');
 const tplCheckinSuccessContains = ref('');
 const tplCheckinFailContains = ref('');
+const tplCheckinCfChallenge = ref(false);
 
 function setCmdState(val: string) {
   if (CMD_PRESETS.has(val)) { cmdDropdown.value = val; cmdCustom.value = ''; }
@@ -1191,6 +1199,7 @@ function onJobTypeChange() {
   btnAiHint.value = '';
   tplCheckinSuccessContains.value = '';
   tplCheckinFailContains.value = '';
+  tplCheckinCfChallenge.value = false;
   Object.assign(autoregCfg, defaultAutoregCfg());
   setCmdState(''); setBtnState('');
 }
@@ -1359,10 +1368,12 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
     const s = tplCheckinSuccessContains.value.trim();
     const f = tplCheckinFailContains.value.trim();
     const proxy = tplProxyId.value;
-    if (s || f || proxy) return {
+    const cf = tplCheckinCfChallenge.value;
+    if (s || f || proxy || cf) return {
       ...(s ? { successContains: s } : {}),
       ...(f ? { failContains: f } : {}),
       ...(proxy ? { proxyId: proxy } : {}),
+      ...(cf ? { cfChallenge: true } : {}),
     } as unknown as CustomConfig;
     return null;
   }
@@ -1422,6 +1433,7 @@ function openAdd() {
   customJobMaxRetries.value = 1;
   tplCheckinSuccessContains.value = '';
   tplCheckinFailContains.value = '';
+  tplCheckinCfChallenge.value = false;
   Object.assign(autoregCfg, defaultAutoregCfg());
   setCmdState(''); setBtnState('');
   formError.value = '';
@@ -1572,10 +1584,11 @@ function openEdit(tpl: JobTemplate) {
     tplCheckinFailContains.value = '';
     if (tpl.config) {
       try {
-        const cfg = JSON.parse(tpl.config) as { proxyId?: string; successContains?: string; failContains?: string };
+        const cfg = JSON.parse(tpl.config) as { proxyId?: string; successContains?: string; failContains?: string; cfChallenge?: boolean };
         tplProxyId.value = cfg.proxyId ?? '';
         tplCheckinSuccessContains.value = cfg.successContains ?? '';
         tplCheckinFailContains.value = cfg.failContains ?? '';
+        tplCheckinCfChallenge.value = cfg.cfChallenge ?? false;
       } catch { /* ignore */ }
     }
   }
