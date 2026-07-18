@@ -58,6 +58,10 @@
         <button class="btn btn-secondary" @click="openImport">
           <i class="fa-solid fa-file-import"></i> {{ t("accounts.importBtn") }}
         </button>
+        <button class="btn btn-secondary" @click="openBulkAdd">
+          <i class="fa-solid fa-layer-group"></i>
+          {{ t("accounts.bulkAdd.btn") }}
+        </button>
         <button class="btn btn-primary" @click="openAdd">
           <i class="fa-solid fa-plus"></i> {{ t("accounts.addBtn") }}
         </button>
@@ -1094,6 +1098,105 @@
       </div>
     </div>
 
+    <!-- Bulk add modal -->
+    <div v-if="showBulkAdd" class="modal-backdrop">
+      <div class="modal modal-lg">
+        <h3 class="modal-title">{{ t("accounts.bulkAdd.title") }}</h3>
+
+        <!-- Input step -->
+        <template v-if="!bulkBatch">
+          <p class="bulk-add-hint">{{ t("accounts.bulkAdd.hint") }}</p>
+          <div v-if="bulkAddError" class="error-msg">{{ bulkAddError }}</div>
+          <div class="form-group">
+            <textarea
+              v-model="bulkAddText"
+              class="form-input bulk-add-textarea"
+              :placeholder="bulkAddPlaceholder"
+              rows="12"
+              spellcheck="false"
+            ></textarea>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="closeBulkAdd">
+              <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+            </button>
+            <button
+              class="btn btn-primary"
+              :disabled="bulkAddBusy || !bulkAddText.trim()"
+              @click="startBulk"
+            >
+              <i class="fa-solid fa-play"></i>
+              {{ t("accounts.bulkAdd.start") }}
+            </button>
+          </div>
+        </template>
+
+        <!-- Progress step -->
+        <template v-else>
+          <div class="bulk-add-progress-head">
+            <span>
+              {{ t("accounts.bulkAdd.progressLabel") }}:
+              {{ bulkDoneCount }} / {{ bulkBatch.total }}
+            </span>
+            <span
+              v-if="bulkBatch.running"
+              class="bulk-add-running"
+            >
+              <i class="fa-solid fa-spinner fa-spin"></i>
+              {{ t("accounts.bulkAdd.running") }}
+            </span>
+            <span v-else class="bulk-add-finished">
+              <i class="fa-solid fa-circle-check"></i>
+              {{ t("accounts.bulkAdd.finished") }}
+            </span>
+          </div>
+          <div class="bulk-add-list">
+            <div
+              v-for="item in bulkBatch.items"
+              :key="item.index"
+              class="bulk-add-item"
+            >
+              <span
+                class="bulk-add-status-dot"
+                :class="`status-${item.status}`"
+              ></span>
+              <div class="bulk-add-item-body">
+                <div class="bulk-add-item-top">
+                  <strong>{{ item.accountName }}</strong>
+                  <span class="bulk-add-phone">{{ item.phoneNumber }}</span>
+                  <span class="bulk-add-item-status">
+                    {{ t(`accounts.bulkAdd.status.${item.status}`) }}
+                  </span>
+                </div>
+                <div
+                  v-if="item.error"
+                  class="bulk-add-item-msg bulk-add-item-error"
+                >
+                  {{ item.error }}
+                </div>
+                <div v-else-if="item.message" class="bulk-add-item-msg">
+                  {{ item.message }}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button
+              v-if="bulkBatch.running"
+              class="btn btn-danger"
+              :disabled="bulkAddBusy"
+              @click="cancelBulk"
+            >
+              <i class="fa-solid fa-stop"></i> {{ t("accounts.bulkAdd.cancel") }}
+            </button>
+            <button v-else class="btn btn-primary" @click="closeBulkAdd">
+              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <!-- Auth modal -->
     <div v-if="showAuth" class="modal-backdrop">
       <div class="modal">
@@ -1290,6 +1393,7 @@ import {
   type SessionInfo,
   type PasswordInfo,
   type Passkey,
+  type BulkAddBatch,
 } from "../api/client";
 import { t, locale } from "../i18n";
 import { usePersistedRef } from "../composables/usePersistedRef";
@@ -1756,6 +1860,88 @@ const authBusy = ref(false);
 const isCodeViaApp = ref(false);
 const resendBusy = ref(false);
 
+// ── Bulk add state ────────────────────────────────────────────────────────────
+const showBulkAdd = ref(false);
+const bulkAddText = ref("");
+const bulkAddError = ref("");
+const bulkAddBusy = ref(false);
+const bulkBatch = ref<BulkAddBatch | null>(null);
+let bulkPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+const bulkAddPlaceholder =
+  "+917507166497----https://example.com/getcode?id=80323dfc-9002-4083-a997-7ea29346d620\n+918719968726----https://example.com/getcode?id=0eaa294a-8d56-4aa4-bec9-6192356fadfc";
+
+const bulkDoneCount = computed(
+  () =>
+    bulkBatch.value?.items.filter(
+      (i) => i.status === "done" || i.status === "failed",
+    ).length ?? 0,
+);
+
+function openBulkAdd() {
+  bulkAddText.value = "";
+  bulkAddError.value = "";
+  // Keep showing a batch that is still running from a previous open
+  if (!bulkBatch.value?.running) bulkBatch.value = null;
+  showBulkAdd.value = true;
+  if (bulkBatch.value?.running) pollBulk();
+}
+
+function closeBulkAdd() {
+  showBulkAdd.value = false;
+  stopBulkPoll();
+  if (!bulkBatch.value?.running) {
+    bulkBatch.value = null;
+    load();
+  }
+}
+
+function stopBulkPoll() {
+  if (bulkPollTimer) {
+    clearTimeout(bulkPollTimer);
+    bulkPollTimer = null;
+  }
+}
+
+async function pollBulk() {
+  stopBulkPoll();
+  try {
+    const batch = await accountsApi.bulkAddStatus();
+    bulkBatch.value = batch;
+    if (batch?.running) {
+      bulkPollTimer = setTimeout(pollBulk, 2000);
+    } else {
+      await load();
+    }
+  } catch {
+    bulkPollTimer = setTimeout(pollBulk, 4000);
+  }
+}
+
+async function startBulk() {
+  bulkAddError.value = "";
+  bulkAddBusy.value = true;
+  try {
+    bulkBatch.value = await accountsApi.bulkAdd(bulkAddText.value);
+    pollBulk();
+  } catch (err: any) {
+    bulkAddError.value =
+      err.response?.data?.error ?? t("accounts.bulkAdd.startFailed");
+  } finally {
+    bulkAddBusy.value = false;
+  }
+}
+
+async function cancelBulk() {
+  bulkAddBusy.value = true;
+  try {
+    await accountsApi.bulkAddCancel();
+    await pollBulk();
+  } finally {
+    bulkAddBusy.value = false;
+  }
+}
+
 // Lazy-load each tab's data the first time it is opened
 watch(editTab, (tab) => {
   if (editTarget.value?.authStatus !== "authenticated") return;
@@ -1782,6 +1968,16 @@ onMounted(async () => {
     if (a.authStatus === "authenticated" && !a.tgDisplayName) {
       fetchMeta(a.id); // fire-and-forget, shows spinner in cell
     }
+  }
+  // Resume tracking a bulk-add batch still running from a previous page load.
+  try {
+    const batch = await accountsApi.bulkAddStatus();
+    if (batch?.running) {
+      bulkBatch.value = batch;
+      pollBulk();
+    }
+  } catch {
+    // Non-critical
   }
 });
 
@@ -2725,5 +2921,134 @@ tr.drag-over td {
   height: 1px;
   background: #f0f0f0;
   margin: 4px 0;
+}
+
+/* ── Bulk add ── */
+.modal-lg {
+  width: 640px;
+}
+
+.bulk-add-hint {
+  color: #666;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.bulk-add-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.bulk-add-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.bulk-add-running {
+  color: #1296db;
+  font-weight: 500;
+}
+
+.bulk-add-finished {
+  color: #52c41a;
+  font-weight: 500;
+}
+
+.bulk-add-list {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  max-height: 50vh;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bulk-add-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #eee;
+  border-radius: 8px;
+}
+
+.bulk-add-status-dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  background: #d0d0d0;
+}
+.bulk-add-status-dot.status-done {
+  background: #52c41a;
+}
+.bulk-add-status-dot.status-failed {
+  background: #ff4d4f;
+}
+.bulk-add-status-dot.status-pending,
+.bulk-add-status-dot.status-waiting {
+  background: #d0d0d0;
+}
+.bulk-add-status-dot.status-requesting_code,
+.bulk-add-status-dot.status-fetching_code,
+.bulk-add-status-dot.status-submitting_code,
+.bulk-add-status-dot.status-submitting_2fa {
+  background: #1296db;
+  animation: bulk-pulse 1s ease-in-out infinite;
+}
+
+@keyframes bulk-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.bulk-add-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.bulk-add-item-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.bulk-add-phone {
+  color: #666;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.bulk-add-item-status {
+  margin-left: auto;
+  font-size: 12px;
+  color: #888;
+}
+
+.bulk-add-item-msg {
+  font-size: 12px;
+  color: #999;
+  margin-top: 3px;
+  word-break: break-word;
+}
+
+.bulk-add-item-error {
+  color: #ff4d4f;
 }
 </style>

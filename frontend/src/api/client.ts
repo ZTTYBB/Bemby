@@ -107,6 +107,36 @@ export type Account = {
   resolvedDeviceModel?: string | null;
 };
 
+export type BulkAddItemStatus =
+  | "pending"
+  | "requesting_code"
+  | "fetching_code"
+  | "submitting_code"
+  | "submitting_2fa"
+  | "waiting"
+  | "done"
+  | "failed";
+
+export type BulkAddItem = {
+  index: number;
+  phoneNumber: string;
+  apiUrl: string;
+  accountId: number | null;
+  accountName: string | null;
+  status: BulkAddItemStatus;
+  message: string;
+  error: string | null;
+};
+
+export type BulkAddBatch = {
+  id: string;
+  createdAt: string;
+  running: boolean;
+  cancelled: boolean;
+  total: number;
+  items: BulkAddItem[];
+};
+
 // The account's own editable Telegram profile
 export type TgOwnProfile = {
   firstName: string;
@@ -537,6 +567,16 @@ export const accountsApi = {
     api.put("/accounts/reorder", { items }).then((r) => r.data),
   bulkUpdateNotes: (ids: number[], notes: string | null) =>
     api.put("/accounts/bulk-notes", { ids, notes }).then((r) => r.data),
+  bulkAdd: (text: string) =>
+    api.post<BulkAddBatch>("/accounts/bulk-add", { text }).then((r) => r.data),
+  bulkAddStatus: () =>
+    api
+      .get<BulkAddBatch | null>("/accounts/bulk-add/status")
+      .then((r) => r.data),
+  bulkAddCancel: () =>
+    api
+      .post<{ cancelled: boolean }>("/accounts/bulk-add/cancel")
+      .then((r) => r.data),
   forceReauth: (id: number) =>
     api.post<Account>(`/accounts/${id}/force-reauth`).then((r) => r.data),
   getPasswordInfo: (id: number) =>

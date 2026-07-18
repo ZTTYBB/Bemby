@@ -22,6 +22,11 @@ import {
   type PasswordInfo,
 } from "../auth/tgAuth";
 import { checkSpamStatus } from "../jobs/checkin";
+import {
+  startBulkAdd,
+  getBulkAddStatus,
+  cancelBulkAdd,
+} from "../jobs/bulkAdd";
 import type { AuthStatus } from "../types";
 import { parseTgProxy } from "../jobs/runner";
 import { resolveAppClientParams, previewDeviceModel } from "../tg/appClient";
@@ -291,6 +296,32 @@ router.post("/", (req, res) => {
     .prepare("SELECT * FROM tg_accounts WHERE id = ?")
     .get(result.lastInsertRowid) as AccountRow;
   res.status(201).json(toJson(row));
+});
+
+// POST /bulk-add -- create accounts from "phone----apiUrl" lines, then
+// authenticate them one by one using codes/2FA served by each API page
+router.post("/bulk-add", (req, res) => {
+  const { text } = req.body as { text?: string };
+  if (!text || !text.trim()) {
+    res.status(400).json({ error: "text is required" });
+    return;
+  }
+  const result = startBulkAdd(text);
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.status(201).json(result.batch);
+});
+
+// GET /bulk-add/status -- current batch progress (null if none has run)
+router.get("/bulk-add/status", (_req, res) => {
+  res.json(getBulkAddStatus());
+});
+
+// POST /bulk-add/cancel -- stop the running batch after the current step
+router.post("/bulk-add/cancel", (_req, res) => {
+  res.json({ cancelled: cancelBulkAdd() });
 });
 
 // PUT /reorder -- update sort_order for multiple accounts at once
