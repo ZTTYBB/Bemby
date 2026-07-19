@@ -10,9 +10,12 @@ mkdir -p "$ROOT"
 
 # --initdb bootstraps a fresh apk database inside ROOT; the browser and all its
 # musl shared libs land under ROOT so they survive restarts on the data volume.
+# --keys-dir points at the host's trusted signing keys; without it --initdb leaves
+# ROOT/etc/apk/keys empty and every APKINDEX is rejected as an UNTRUSTED signature.
 apk add --no-cache \
   --root "$ROOT" \
   --initdb \
+  --keys-dir /etc/apk/keys \
   --arch "$(apk --print-arch)" \
   --repositories-file /etc/apk/repositories \
   chromium nss freetype harfbuzz ttf-freefont font-noto-cjk
