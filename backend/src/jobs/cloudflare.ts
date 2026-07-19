@@ -125,7 +125,16 @@ async function launchBrowser(proxyUrl?: string): Promise<{ browser: Browser; pag
   // the Chromium child inherits both from us.
   if (executablePath.startsWith(cfChromiumRoot())) {
     const root = cfChromiumRoot();
-    process.env.LD_LIBRARY_PATH = [`${root}/usr/lib`, `${root}/lib`, `${root}/usr/lib/chromium`, process.env.LD_LIBRARY_PATH]
+    // usr/lib/pulseaudio holds libpulsecommon-*.so, a private dep of libpulse.so.0
+    // that Chromium NEEDs; without it on the path the musl loader aborts (exit 127)
+    // before the DevTools port opens, surfacing to puppeteer as ECONNREFUSED.
+    process.env.LD_LIBRARY_PATH = [
+      `${root}/usr/lib`,
+      `${root}/lib`,
+      `${root}/usr/lib/chromium`,
+      `${root}/usr/lib/pulseaudio`,
+      process.env.LD_LIBRARY_PATH,
+    ]
       .filter(Boolean)
       .join(":");
     process.env.FONTCONFIG_PATH = `${root}/etc/fonts`;
