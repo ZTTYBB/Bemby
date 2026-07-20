@@ -294,7 +294,7 @@ const zh = {
       newPassword: "新 2FA 密码",
       repeatPassword: "确认新 2FA 密码",
       removeDevices: "同时移除其他所有登录设备",
-      removePasskeys: "同时移除所有通行密钥（Passkeys）",
+      removePasskeys: "同时移除其他所有通行密钥（保留 Bemby 管理的）",
       notesAppend: "成功后追加备注",
       notesAppendPlaceholder: "例如：已于今日轮换 2FA",
       notesAppendHint: "仅在该账户全部操作成功后，将此文本追加到备注",
@@ -317,6 +317,19 @@ const zh = {
         working: "处理中",
         done: "完成",
         failed: "失败",
+      },
+    },
+    bulkPasskey: {
+      btn: "批量添加通行密钥",
+      title: "批量添加通行密钥",
+      intro:
+        "将为所选 {n} 个已认证账户添加通行密钥。已在 Bemby 中存有通行密钥的账户将跳过（并验证其有效性）。",
+      noTargets: "所选账户中没有已认证的账户。",
+      start: "开始",
+      result: {
+        added: "已添加通行密钥",
+        skippedValid: "已存在有效通行密钥，跳过",
+        existingInvalid: "已存在的通行密钥无效，未添加，请检查",
       },
     },
     bulkClean: {
@@ -390,6 +403,9 @@ const zh = {
       sendFailed: "验证码发送失败",
       verifyFailed: "验证失败",
       twoFaFailed: "二步验证失败",
+      codeInvalid: "验证码错误",
+      codeExpired: "验证码已过期，请重新获取",
+      flood: "操作过于频繁，请稍后再试",
       apiCredsRequired:
         "请填写 API ID 和 API Hash（或在设置中配置全局默认凭据）",
       namePhoneRequired: "请填写显示名称和手机号码",
@@ -1192,7 +1208,7 @@ const en: typeof zh = {
       newPassword: "New 2FA password",
       repeatPassword: "Confirm new 2FA password",
       removeDevices: "Also remove all other logged-in devices",
-      removePasskeys: "Also remove all passkeys",
+      removePasskeys: "Also remove all other passkeys (keep Bemby-managed)",
       notesAppend: "Append to notes on success",
       notesAppendPlaceholder: "e.g. 2FA rotated today",
       notesAppendHint:
@@ -1216,6 +1232,19 @@ const en: typeof zh = {
         working: "Working",
         done: "Done",
         failed: "Failed",
+      },
+    },
+    bulkPasskey: {
+      btn: "Bulk Add Passkey",
+      title: "Bulk Add Passkey",
+      intro:
+        "Add a passkey to the {n} selected authenticated account(s). Accounts that already have a passkey stored in Bemby are skipped (and their passkey is verified).",
+      noTargets: "None of the selected accounts are authenticated.",
+      start: "Start",
+      result: {
+        added: "passkey added",
+        skippedValid: "already has a valid passkey, skipped",
+        existingInvalid: "existing passkey is invalid, not added -- please check",
       },
     },
     bulkClean: {
@@ -1292,6 +1321,9 @@ const en: typeof zh = {
       sendFailed: "Failed to send code",
       verifyFailed: "Verification failed",
       twoFaFailed: "2FA failed",
+      codeInvalid: "Invalid verification code",
+      codeExpired: "Verification code expired, please request a new one",
+      flood: "Too many attempts, please try again later",
       apiCredsRequired:
         "API ID and API Hash are required (or configure global defaults in Settings)",
       namePhoneRequired: "Display name and phone number are required",

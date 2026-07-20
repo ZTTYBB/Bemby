@@ -1305,6 +1305,7 @@ router.post("/:id/auth/request", async (req, res) => {
     ).run(account.id);
     res.json({ method: "code", message: "Verification code sent", isCodeViaApp });
   } catch (err: any) {
+    if (rpcBadRequest(res, err, 'auth/request')) return;
     internalError(res, err, 'auth/request');
   }
 });
@@ -1321,6 +1322,7 @@ router.post("/:id/auth/resend", async (req, res) => {
     await resendCodeAsSms(account.id);
     res.json({ ok: true });
   } catch (err: any) {
+    if (rpcBadRequest(res, err, 'auth/resend')) return;
     internalError(res, err, 'auth/resend');
   }
 });
@@ -1362,6 +1364,7 @@ router.post("/:id/auth/verify", async (req, res) => {
         .json({ error: "Invalid auth state or missing credentials" });
     }
   } catch (err: any) {
+    if (rpcBadRequest(res, err, 'auth/verify')) return;
     internalError(res, err, 'auth/verify');
   }
 });

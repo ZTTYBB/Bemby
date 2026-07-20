@@ -84,6 +84,14 @@
         </button>
         <button
           v-if="bulkMgmtEnabled && selectedIds.size > 0"
+          class="btn btn-secondary"
+          @click="openBulkPasskey"
+        >
+          <i class="fa-solid fa-key"></i>
+          {{ t("accounts.bulkPasskey.btn") }} ({{ selectedIds.size }})
+        </button>
+        <button
+          v-if="bulkMgmtEnabled && selectedIds.size > 0"
           class="btn btn-danger"
           @click="openBulkClean"
         >
@@ -1723,6 +1731,110 @@
       </div>
     </div>
 
+    <!-- Bulk add passkey modal -->
+    <div v-if="showBulkPasskey" class="modal-backdrop">
+      <div class="modal modal-lg">
+        <h3 class="modal-title">
+          <i class="fa-solid fa-key" style="margin-right: 8px"></i>
+          {{ t("accounts.bulkPasskey.title") }}
+        </h3>
+
+        <!-- Config step -->
+        <template v-if="!bulkPasskeyRunning && !bulkPasskeyDoneAll">
+          <div v-if="!bulkPasskeyTargets.length" class="warn-box">
+            {{ t("accounts.bulkPasskey.noTargets") }}
+          </div>
+          <template v-else>
+            <p class="bulk-add-hint">
+              {{
+                t("accounts.bulkPasskey.intro").replace(
+                  "{n}",
+                  String(bulkPasskeyTargets.length),
+                )
+              }}
+            </p>
+            <div class="bulk-clean-accounts">
+              <div
+                v-for="a in bulkPasskeyTargets"
+                :key="a.id"
+                class="bulk-clean-account"
+              >
+                <strong>{{ a.name }}</strong>
+                <span class="bulk-add-phone">{{ a.phoneNumber }}</span>
+              </div>
+            </div>
+          </template>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="closeBulkPasskey">
+              <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+            </button>
+            <button
+              v-if="bulkPasskeyTargets.length"
+              class="btn btn-primary"
+              @click="startBulkPasskey"
+            >
+              <i class="fa-solid fa-key"></i>
+              {{ t("accounts.bulkPasskey.start") }}
+            </button>
+          </div>
+        </template>
+
+        <!-- Progress step -->
+        <template v-else>
+          <div class="bulk-add-progress-head">
+            <span>
+              {{ t("accounts.bulkCred.progressLabel") }}:
+              {{ bulkPasskeyDoneCount }} / {{ bulkPasskeyTargets.length }}
+            </span>
+            <span v-if="bulkPasskeyRunning" class="bulk-add-running">
+              <i class="fa-solid fa-spinner fa-spin"></i>
+              {{ t("accounts.bulkCred.running") }}
+            </span>
+            <span v-else class="bulk-add-finished">
+              <i class="fa-solid fa-circle-check"></i>
+              {{ t("accounts.bulkAdd.finished") }}
+            </span>
+          </div>
+          <div class="bulk-add-list">
+            <div
+              v-for="item in bulkPasskeyProgress"
+              :key="item.id"
+              class="bulk-add-item"
+            >
+              <span
+                class="bulk-add-status-dot"
+                :class="`status-${item.status}`"
+              ></span>
+              <div class="bulk-add-item-body">
+                <div class="bulk-add-item-top">
+                  <strong>{{ item.name }}</strong>
+                  <span class="bulk-add-item-status">
+                    {{ t(`accounts.bulkCred.status.${item.status}`) }}
+                  </span>
+                </div>
+                <div
+                  v-if="item.message"
+                  class="bulk-add-item-msg"
+                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
+                >
+                  {{ item.message }}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button
+              class="btn btn-primary"
+              :disabled="bulkPasskeyRunning"
+              @click="closeBulkPasskey"
+            >
+              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <!-- Bulk clean modal -->
     <div v-if="showBulkClean" class="modal-backdrop">
       <div class="modal modal-lg">
@@ -2954,14 +3066,16 @@ async function startBulkCred() {
         parts.push(t("accounts.bulkCred.result.devicesRemoved"));
       }
       if (bulkCredForm.removePasskeys) {
-        const { passkeys } = await accountsApi.getPasskeys(item.id);
-        for (const pk of passkeys) {
+        const { passkeys, storedIds } = await accountsApi.getPasskeys(item.id);
+        // Keep passkeys Bemby manages; remove all others.
+        const toRemove = passkeys.filter((pk) => !storedIds.includes(pk.id));
+        for (const pk of toRemove) {
           await accountsApi.deletePasskey(item.id, pk.id);
         }
         parts.push(
           t("accounts.bulkCred.result.passkeysRemoved").replace(
             "{n}",
-            String(passkeys.length),
+            String(toRemove.length),
           ),
         );
       }
@@ -2983,6 +3097,77 @@ async function startBulkCred() {
   }
   bulkCredRunning.value = false;
   bulkCredDoneAll.value = true;
+  await load();
+}
+
+// ── Bulk add passkey state ────────────────────────────────────────────────────
+const showBulkPasskey = ref(false);
+const bulkPasskeyRunning = ref(false);
+const bulkPasskeyDoneAll = ref(false);
+const bulkPasskeyTargets = ref<Account[]>([]);
+const bulkPasskeyProgress = ref<BulkCredItem[]>([]);
+
+const bulkPasskeyDoneCount = computed(
+  () =>
+    bulkPasskeyProgress.value.filter(
+      (i) => i.status === "done" || i.status === "failed",
+    ).length,
+);
+
+function openBulkPasskey() {
+  bulkPasskeyTargets.value = accounts.value.filter(
+    (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
+  );
+  bulkPasskeyRunning.value = false;
+  bulkPasskeyDoneAll.value = false;
+  bulkPasskeyProgress.value = [];
+  showBulkPasskey.value = true;
+}
+
+function closeBulkPasskey() {
+  if (bulkPasskeyRunning.value) return;
+  showBulkPasskey.value = false;
+}
+
+async function startBulkPasskey() {
+  if (bulkPasskeyRunning.value || !bulkPasskeyTargets.value.length) return;
+  bulkPasskeyProgress.value = bulkPasskeyTargets.value.map((a) => ({
+    id: a.id,
+    name: a.name,
+    status: "pending",
+    message: "",
+  }));
+  bulkPasskeyRunning.value = true;
+  // Sequential to avoid Telegram flood limits.
+  for (const item of bulkPasskeyProgress.value) {
+    item.status = "working";
+    try {
+      const { storedIds } = await accountsApi.getPasskeys(item.id);
+      if (storedIds.length) {
+        // Already has a Bemby-managed passkey -- do not add another; verify it.
+        const v = await accountsApi.verifyPasskey(item.id, storedIds[0]);
+        if (v.ok) {
+          item.status = "done";
+          item.message = t("accounts.bulkPasskey.result.skippedValid");
+        } else {
+          item.status = "failed";
+          item.message = t("accounts.bulkPasskey.result.existingInvalid");
+        }
+      } else {
+        await accountsApi.registerPasskey(item.id);
+        item.status = "done";
+        item.message = t("accounts.bulkPasskey.result.added");
+      }
+    } catch (e: any) {
+      item.status = "failed";
+      item.message =
+        e?.response?.data?.error ??
+        e?.message ??
+        t("accounts.bulkCred.errors.failed");
+    }
+  }
+  bulkPasskeyRunning.value = false;
+  bulkPasskeyDoneAll.value = true;
   await load();
 }
 
@@ -3634,6 +3819,19 @@ function closeAuth() {
   showAuth.value = false;
 }
 
+// Translate known Telegram auth refusal codes into readable, localised messages.
+function authErrorText(raw: string): string {
+  if (!raw) return t("accounts.errors.verifyFailed");
+  if (raw.includes("PASSWORD_HASH_INVALID"))
+    return t("accounts.twoFaWrongPassword");
+  if (raw.includes("PHONE_CODE_INVALID") || raw.includes("PHONE_CODE_EMPTY"))
+    return t("accounts.errors.codeInvalid");
+  if (raw.includes("PHONE_CODE_EXPIRED"))
+    return t("accounts.errors.codeExpired");
+  if (raw.startsWith("FLOOD")) return t("accounts.errors.flood");
+  return raw;
+}
+
 async function sendCode() {
   if (!authTarget.value) return;
   authError.value = "";
@@ -3654,8 +3852,9 @@ async function sendCode() {
       authStep.value = "code";
     }
   } catch (err: any) {
-    authError.value =
-      err.response?.data?.error ?? t("accounts.errors.sendFailed");
+    authError.value = authErrorText(
+      err.response?.data?.error ?? err.message ?? "",
+    );
   } finally {
     authBusy.value = false;
   }
@@ -3690,8 +3889,9 @@ async function verifyCode() {
       await load();
     }
   } catch (err: any) {
-    authError.value =
-      err.response?.data?.error ?? t("accounts.errors.verifyFailed");
+    authError.value = authErrorText(
+      err.response?.data?.error ?? err.message ?? "",
+    );
   } finally {
     authBusy.value = false;
   }
@@ -3708,8 +3908,9 @@ async function verify2fa() {
     showAuth.value = false;
     await load();
   } catch (err: any) {
-    authError.value =
-      err.response?.data?.error ?? t("accounts.errors.twoFaFailed");
+    authError.value = authErrorText(
+      err.response?.data?.error ?? err.message ?? "",
+    );
   } finally {
     authBusy.value = false;
   }
