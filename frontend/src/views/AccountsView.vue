@@ -16,44 +16,59 @@
         >
           {{ allSelected ? t("common.deselectAll") : t("common.selectAll") }}
         </button>
-        <button
-          v-if="selectedIds.size > 0"
-          class="btn btn-secondary"
-          :disabled="spamBulkRunning"
-          @click="checkSpamBulk"
-        >
-          <i class="fa-solid fa-user-shield"></i>
-          {{ t("accounts.checkSpamSelected") }} ({{ selectedIds.size }})
-        </button>
-        <label
-          v-if="selectedIds.size > 0"
-          class="spam-gap-inline"
-          :title="t('accounts.bulkGap.hint')"
-        >
-          {{ t("accounts.bulkGap.short") }}
-          <input
-            v-model.number="spamBulkGapSeconds"
-            type="number"
-            min="0"
-            class="form-input"
-          />
-        </label>
-        <button
-          v-if="selectedIds.size > 0"
-          class="btn btn-secondary"
-          @click="openBulkNotes"
-        >
-          <i class="fa-solid fa-note-sticky"></i>
-          {{ t("accounts.setNotesSelected") }} ({{ selectedIds.size }})
-        </button>
-        <button
-          v-if="selectedIds.size > 0"
-          class="btn btn-secondary"
-          @click="openExportWarn"
-        >
-          <i class="fa-solid fa-file-export"></i>
-          {{ t("accounts.exportSelectedBtn") }} ({{ selectedIds.size }})
-        </button>
+        <!-- Bulk actions on the current selection, consolidated into one menu -->
+        <div v-if="selectedIds.size > 0" class="bulk-menu">
+          <button class="btn btn-secondary" @click="bulkMenuOpen = !bulkMenuOpen">
+            <i class="fa-solid fa-list-check"></i>
+            {{ t("accounts.bulkActions.btn") }} ({{ selectedIds.size }})
+            <i class="fa-solid fa-caret-down" style="margin-left: 4px"></i>
+          </button>
+          <div
+            v-if="bulkMenuOpen"
+            class="bulk-menu-backdrop"
+            @click="bulkMenuOpen = false"
+          ></div>
+          <div v-if="bulkMenuOpen" class="bulk-menu-list">
+            <button
+              class="bulk-menu-item"
+              :disabled="spamBulkRunning"
+              @click="runBulk(openBulkSpam)"
+            >
+              <i class="fa-solid fa-user-shield"></i>
+              {{ t("accounts.checkSpamSelected") }}
+            </button>
+            <button class="bulk-menu-item" @click="runBulk(openBulkNotes)">
+              <i class="fa-solid fa-note-sticky"></i>
+              {{ t("accounts.setNotesSelected") }}
+            </button>
+            <button class="bulk-menu-item" @click="runBulk(openExportWarn)">
+              <i class="fa-solid fa-file-export"></i>
+              {{ t("accounts.exportSelectedBtn") }}
+            </button>
+            <template v-if="bulkMgmtEnabled">
+              <div class="bulk-menu-divider"></div>
+              <button class="bulk-menu-item" @click="runBulk(openBulkCred)">
+                <i class="fa-solid fa-user-lock"></i>
+                {{ t("accounts.bulkCred.btn") }}
+              </button>
+              <button class="bulk-menu-item" @click="runBulk(openBulkEmail)">
+                <i class="fa-solid fa-envelope"></i>
+                {{ t("accounts.bulkEmail.btn") }}
+              </button>
+              <button class="bulk-menu-item" @click="runBulk(openBulkPasskey)">
+                <i class="fa-solid fa-key"></i>
+                {{ t("accounts.bulkPasskey.btn") }}
+              </button>
+              <button
+                class="bulk-menu-item danger"
+                @click="runBulk(openBulkClean)"
+              >
+                <i class="fa-solid fa-broom"></i>
+                {{ t("accounts.bulkClean.btn") }}
+              </button>
+            </template>
+          </div>
+        </div>
         <button v-else class="btn btn-secondary" @click="openExportWarn">
           <i class="fa-solid fa-file-export"></i> {{ t("accounts.exportBtn") }}
         </button>
@@ -78,38 +93,6 @@
         >
           <i class="fa-solid fa-layer-group"></i>
           {{ t("accounts.bulkAdd.btn") }}
-        </button>
-        <button
-          v-if="bulkMgmtEnabled && selectedIds.size > 0"
-          class="btn btn-secondary"
-          @click="openBulkCred"
-        >
-          <i class="fa-solid fa-user-lock"></i>
-          {{ t("accounts.bulkCred.btn") }} ({{ selectedIds.size }})
-        </button>
-        <button
-          v-if="bulkMgmtEnabled && selectedIds.size > 0"
-          class="btn btn-secondary"
-          @click="openBulkEmail"
-        >
-          <i class="fa-solid fa-envelope"></i>
-          {{ t("accounts.bulkEmail.btn") }} ({{ selectedIds.size }})
-        </button>
-        <button
-          v-if="bulkMgmtEnabled && selectedIds.size > 0"
-          class="btn btn-secondary"
-          @click="openBulkPasskey"
-        >
-          <i class="fa-solid fa-key"></i>
-          {{ t("accounts.bulkPasskey.btn") }} ({{ selectedIds.size }})
-        </button>
-        <button
-          v-if="bulkMgmtEnabled && selectedIds.size > 0"
-          class="btn btn-danger"
-          @click="openBulkClean"
-        >
-          <i class="fa-solid fa-broom"></i>
-          {{ t("accounts.bulkClean.btn") }} ({{ selectedIds.size }})
         </button>
         <button class="btn btn-primary" @click="openAdd">
           <i class="fa-solid fa-plus"></i> {{ t("accounts.addBtn") }}
@@ -1878,6 +1861,53 @@
       </div>
     </div>
 
+    <!-- Bulk spam-check modal -->
+    <div v-if="showBulkSpam" class="modal-backdrop">
+      <div class="modal">
+        <h3 class="modal-title">
+          <i class="fa-solid fa-user-shield" style="margin-right: 8px"></i>
+          {{ t("accounts.checkSpamSelected") }}
+        </h3>
+        <div v-if="!bulkSpamTargetCount" class="warn-box">
+          {{ t("accounts.bulkClean.noTargets") }}
+        </div>
+        <template v-else>
+          <p class="bulk-add-hint">
+            {{
+              t("accounts.bulkSpam.intro").replace(
+                "{n}",
+                String(bulkSpamTargetCount),
+              )
+            }}
+          </p>
+          <div class="form-group">
+            <label class="form-label">{{ t("accounts.bulkGap.label") }}</label>
+            <input
+              v-model.number="spamBulkGapSeconds"
+              type="number"
+              min="0"
+              class="form-input"
+            />
+            <div class="form-hint">{{ t("accounts.bulkGap.hint") }}</div>
+          </div>
+        </template>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" @click="showBulkSpam = false">
+            <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+          </button>
+          <button
+            v-if="bulkSpamTargetCount"
+            class="btn btn-primary"
+            :disabled="spamBulkRunning"
+            @click="startBulkSpamCheck"
+          >
+            <i class="fa-solid fa-user-shield"></i>
+            {{ t("accounts.bulkClean.start") }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Bulk clean modal -->
     <div v-if="showBulkClean" class="modal-backdrop">
       <div class="modal modal-lg">
@@ -2496,6 +2526,26 @@ async function checkSpam(a: Account) {
 
 const spamBulkRunning = ref(false);
 const spamBulkGapSeconds = ref(30);
+const showBulkSpam = ref(false);
+
+const bulkSpamTargetCount = computed(
+  () =>
+    accounts.value.filter(
+      (a) =>
+        selectedIds.value.has(a.id) &&
+        a.authStatus === "authenticated" &&
+        !a.disabled,
+    ).length,
+);
+
+function openBulkSpam() {
+  showBulkSpam.value = true;
+}
+
+function startBulkSpamCheck() {
+  showBulkSpam.value = false;
+  checkSpamBulk();
+}
 
 async function checkSpamBulk() {
   if (spamBulkRunning.value) return;
@@ -2556,6 +2606,12 @@ async function saveBulkNotes() {
 
 // ── Selection state ───────────────────────────────────────────────────────────
 const selectedIds = ref(new Set<number>());
+const bulkMenuOpen = ref(false);
+// Close the bulk-actions menu, then run the chosen action.
+function runBulk(fn: () => unknown) {
+  bulkMenuOpen.value = false;
+  fn();
+}
 const allSelected = computed(
   () =>
     accounts.value.length > 0 &&
@@ -4623,15 +4679,59 @@ tr.drag-over td {
   font-size: 12px;
 }
 
-.spam-gap-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #666;
+.bulk-menu {
+  position: relative;
+  display: inline-block;
 }
-.spam-gap-inline .form-input {
-  width: 64px;
+.bulk-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+.bulk-menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 100;
+  min-width: 220px;
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+}
+.bulk-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  color: #1a1a2e;
+  cursor: pointer;
+  text-align: left;
+}
+.bulk-menu-item:not(:disabled):hover {
+  background: #f5f5f7;
+}
+.bulk-menu-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.bulk-menu-item.danger {
+  color: #e63946;
+}
+.bulk-menu-item i {
+  width: 16px;
+  text-align: center;
+}
+.bulk-menu-divider {
+  height: 1px;
+  background: #f0f0f0;
+  margin: 4px 0;
 }
 
 .bulk-add-item-status {

@@ -333,10 +333,15 @@ const zh = {
         existingInvalid: "已存在的通行密钥无效，未添加，请检查",
       },
     },
+    bulkActions: {
+      btn: "批量操作",
+    },
+    bulkSpam: {
+      intro: "将检测所选 {n} 个已认证账户的账号状态（是否受限/封禁）。",
+    },
     bulkGap: {
       label: "每个账户之间的间隔（秒）",
       hint: "顺序处理时每个账户之间的等待时间，用于避免 Telegram 触发频率限制（0 表示不等待）。",
-      short: "间隔(秒)",
     },
     bulkClean: {
       btn: "批量清理",
@@ -1254,10 +1259,16 @@ const en: typeof zh = {
         existingInvalid: "existing passkey is invalid, not added -- please check",
       },
     },
+    bulkActions: {
+      btn: "Bulk Actions",
+    },
+    bulkSpam: {
+      intro:
+        "Check the account status (limited / banned) of the {n} selected authenticated account(s).",
+    },
     bulkGap: {
       label: "Gap between accounts (seconds)",
       hint: "Wait time between each account while processing sequentially, to avoid Telegram flood limits (0 = no wait).",
-      short: "Gap (s)",
     },
     bulkClean: {
       btn: "Bulk Clean",
