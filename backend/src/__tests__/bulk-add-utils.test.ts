@@ -11,7 +11,11 @@ vi.mock("../db/database", () => ({
 }));
 
 import { describe, it, expect, vi } from "vitest";
-import { parseBulkAddInput, extractApiCredentials } from "../jobs/bulkAdd";
+import {
+  parseBulkAddInput,
+  extractApiCredentials,
+  extractField,
+} from "../jobs/bulkAdd";
 
 describe("parseBulkAddInput", () => {
   it("parses phone----apiUrl lines, trimming whitespace", () => {
@@ -38,16 +42,26 @@ describe("parseBulkAddInput", () => {
     expect(lines).toHaveLength(1);
   });
 
-  it("reports lines missing the separator", () => {
-    const { lines, errors } = parseBulkAddInput("+1----http://x\nnosep");
-    expect(lines).toHaveLength(1);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain("Missing");
+  it("treats a line without a separator as a phone-only account", () => {
+    const { lines, errors } = parseBulkAddInput("+1----http://x\n+61412345678");
+    expect(errors).toEqual([]);
+    expect(lines).toEqual([
+      { phoneNumber: "+1", apiUrl: "http://x" },
+      { phoneNumber: "+61412345678", apiUrl: "" },
+    ]);
   });
 
-  it("reports incomplete lines (empty phone or url)", () => {
-    const { errors } = parseBulkAddInput("----http://x\n+1----");
-    expect(errors).toHaveLength(2);
+  it("treats an empty url after the separator as phone-only", () => {
+    const { lines, errors } = parseBulkAddInput("+1----");
+    expect(errors).toEqual([]);
+    expect(lines).toEqual([{ phoneNumber: "+1", apiUrl: "" }]);
+  });
+
+  it("reports lines with an empty phone number", () => {
+    const { lines, errors } = parseBulkAddInput("----http://x");
+    expect(lines).toHaveLength(0);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("Missing phone number");
   });
 });
 
@@ -75,5 +89,33 @@ describe("extractApiCredentials", () => {
   it("handles an empty (not-yet-ready) code value", () => {
     const empty = `<input id="code" value="" readonly><input id="pass2fa" value="bemby">`;
     expect(extractApiCredentials(empty)).toEqual({ code: "", pass2fa: "bemby" });
+  });
+
+  it("reads from custom field ids", () => {
+    const custom = `<input id="otp" value="99887"><input id="tfa" value="secret">`;
+    expect(
+      extractApiCredentials(
+        custom,
+        { fieldId: "otp" },
+        { fieldId: "tfa" },
+      ),
+    ).toEqual({ code: "99887", pass2fa: "secret" });
+  });
+
+  it("reads via a custom regex (capture group 1)", () => {
+    const page = "Your code is 123456 and password is hunter2.";
+    expect(
+      extractApiCredentials(
+        page,
+        { regex: "code is (\\d+)" },
+        { regex: "password is (\\w+)" },
+      ),
+    ).toEqual({ code: "123456", pass2fa: "hunter2" });
+  });
+
+  it("returns empty string for an invalid regex instead of throwing", () => {
+    expect(extractField("<input id=\"code\" value=\"1\">", { regex: "(" })).toBe(
+      "",
+    );
   });
 });

@@ -16,6 +16,7 @@ export type BulkAddItemStatus =
   | "submitting_code"
   | "submitting_2fa"
   | "waiting"
+  | "created"
   | "done"
   | "failed";
 
@@ -57,14 +58,16 @@ export function parseBulkAddInput(text: string): {
     .filter(Boolean);
   for (const line of raw) {
     const idx = line.indexOf(SEPARATOR);
+    // No separator -> phone-only line: the account is created but not
+    // authenticated (there is no API page to read a code from).
     if (idx === -1) {
-      errors.push(`Missing "${SEPARATOR}" separator: ${line}`);
+      lines.push({ phoneNumber: line, apiUrl: "" });
       continue;
     }
     const phoneNumber = line.slice(0, idx).trim();
     const apiUrl = line.slice(idx + SEPARATOR.length).trim();
-    if (!phoneNumber || !apiUrl) {
-      errors.push(`Incomplete line: ${line}`);
+    if (!phoneNumber) {
+      errors.push(`Missing phone number: ${line}`);
       continue;
     }
     lines.push({ phoneNumber, apiUrl });
@@ -72,23 +75,73 @@ export function parseBulkAddInput(text: string): {
   return { lines, errors };
 }
 
-// Pulls the verification code and 2FA password out of the getcode page HTML.
-// The page renders them as readonly inputs: <input id="code" value="42344">
-// and <input id="pass2fa" value="bemby">.
-export function extractApiCredentials(html: string): {
-  code: string;
-  pass2fa: string;
-} {
-  const readValue = (id: string): string => {
-    const tag = html.match(
-      new RegExp(`<input[^>]*\\bid=["']${id}["'][^>]*>`, "i"),
-    )?.[0];
-    return tag?.match(/\bvalue=["']([^"']*)["']/i)?.[1]?.trim() ?? "";
-  };
-  return { code: readValue("code"), pass2fa: readValue("pass2fa") };
+// How to pull a single value out of the getcode page HTML. A regex (with a
+// capture group for the value) takes precedence; otherwise the value is read
+// from the readonly <input> carrying the given id.
+export type FieldExtractor = { fieldId?: string; regex?: string };
+
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export function extractField(html: string, ex: FieldExtractor): string {
+  if (ex.regex && ex.regex.trim()) {
+    try {
+      return new RegExp(ex.regex, "i").exec(html)?.[1]?.trim() ?? "";
+    } catch {
+      return "";
+    }
+  }
+  const id = ex.fieldId?.trim() || "code";
+  const tag = html.match(
+    new RegExp(`<input[^>]*\\bid=["']${escapeRegex(id)}["'][^>]*>`, "i"),
+  )?.[0];
+  return tag?.match(/\bvalue=["']([^"']*)["']/i)?.[1]?.trim() ?? "";
 }
 
-type BulkAddTimings = {
+// Pulls the verification code and 2FA password out of the getcode page HTML.
+// The page renders them as readonly inputs: <input id="code" value="42344">
+// and <input id="pass2fa" value="bemby">. Defaults reproduce that layout.
+export function extractApiCredentials(
+  html: string,
+  codeEx: FieldExtractor = { fieldId: "code" },
+  twoFaEx: FieldExtractor = { fieldId: "pass2fa" },
+): { code: string; pass2fa: string } {
+  return {
+    code: extractField(html, codeEx),
+    pass2fa: extractField(html, twoFaEx),
+  };
+}
+
+// User-supplied, per-batch customisation. Everything is optional and falls
+// back to the defaults below.
+export type BulkAddOptions = {
+  /** Pause between accounts, in seconds (default 70). */
+  gapSeconds?: number;
+  /** Prefix for the generated Bemby name, e.g. "A_" -> A_1, A_2 (default "A_"). */
+  namePrefix?: string;
+  /**
+   * Where the name's number starts. "total" continues from the current account
+   * count (default); "batch" numbers this batch from 1.
+   */
+  nameIndexMode?: "total" | "batch";
+  /** Zero-pad the name number to this many digits; 0/omitted = auto. */
+  namePadDigits?: number;
+  /** Notes template; "{apiUrl}" is replaced per account (default "Automatically added via {apiUrl}"). */
+  notesTemplate?: string;
+  /** HTML input id holding the verification code (default "code"). */
+  codeFieldId?: string;
+  /** Advanced: regex (capture group 1) for the code, overrides codeFieldId. */
+  codeRegex?: string;
+  /** Where the 2FA password comes from (default "api"). */
+  twoFaMode?: "api" | "fixed";
+  /** HTML input id holding the 2FA password (default "pass2fa"). */
+  twoFaFieldId?: string;
+  /** Advanced: regex (capture group 1) for the 2FA password, overrides twoFaFieldId. */
+  twoFaRegex?: string;
+  /** Fixed 2FA password, used when twoFaMode is "fixed". */
+  twoFaFixed?: string;
+};
+
+type BulkAddConfig = {
   /** Wait after requesting a code before first polling the API page. */
   initialWaitMs: number;
   /** Wait after a failed/empty page fetch before retrying (rate limit). */
@@ -97,14 +150,41 @@ type BulkAddTimings = {
   betweenAccountsMs: number;
   /** Max attempts to read a code from the API page. */
   maxFetchAttempts: number;
+  namePrefix: string;
+  nameIndexMode: "total" | "batch";
+  namePadDigits: number;
+  notesTemplate: string;
+  codeEx: FieldExtractor;
+  twoFaMode: "api" | "fixed";
+  twoFaEx: FieldExtractor;
+  twoFaFixed: string;
 };
 
-const DEFAULT_TIMINGS: BulkAddTimings = {
-  initialWaitMs: 15_000,
-  rateLimitWaitMs: 120_000,
-  betweenAccountsMs: 60_000,
-  maxFetchAttempts: 5,
-};
+const DEFAULT_GAP_SECONDS = 70;
+const DEFAULT_NAME_PREFIX = "A_";
+const DEFAULT_NOTES_TEMPLATE = "Automatically added via {apiUrl}";
+
+function resolveConfig(opts?: BulkAddOptions): BulkAddConfig {
+  const gap = Number(opts?.gapSeconds);
+  return {
+    initialWaitMs: 15_000,
+    rateLimitWaitMs: 120_000,
+    betweenAccountsMs:
+      Number.isFinite(gap) && gap >= 0
+        ? gap * 1000
+        : DEFAULT_GAP_SECONDS * 1000,
+    maxFetchAttempts: 5,
+    namePrefix: opts?.namePrefix ?? DEFAULT_NAME_PREFIX,
+    nameIndexMode: opts?.nameIndexMode === "batch" ? "batch" : "total",
+    namePadDigits:
+      Number(opts?.namePadDigits) > 0 ? Math.floor(Number(opts?.namePadDigits)) : 0,
+    notesTemplate: opts?.notesTemplate ?? DEFAULT_NOTES_TEMPLATE,
+    codeEx: { fieldId: opts?.codeFieldId, regex: opts?.codeRegex },
+    twoFaMode: opts?.twoFaMode === "fixed" ? "fixed" : "api",
+    twoFaEx: { fieldId: opts?.twoFaFieldId, regex: opts?.twoFaRegex },
+    twoFaFixed: opts?.twoFaFixed ?? "",
+  };
+}
 
 let current: BulkAddBatch | null = null;
 
@@ -156,6 +236,7 @@ function sleep(ms: number, batch: BulkAddBatch): Promise<void> {
 
 async function fetchApiCredentials(
   url: string,
+  config: BulkAddConfig,
 ): Promise<{ code: string; pass2fa: string }> {
   const resp = await fetch(url, {
     headers: {
@@ -165,7 +246,7 @@ async function fetchApiCredentials(
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const html = await resp.text();
-  return extractApiCredentials(html);
+  return extractApiCredentials(html, config.codeEx, config.twoFaEx);
 }
 
 type AccountRow = {
@@ -180,7 +261,7 @@ type AccountRow = {
 async function authenticateAccount(
   batch: BulkAddBatch,
   item: BulkAddItem,
-  timings: BulkAddTimings,
+  config: BulkAddConfig,
 ): Promise<void> {
   const account = db
     .prepare("SELECT * FROM tg_accounts WHERE id = ?")
@@ -222,25 +303,25 @@ async function authenticateAccount(
   // is sent, and it rate-limits -- back off on failure/empty result)
   item.status = "fetching_code";
   item.message = "Waiting for code to arrive on API page";
-  await sleep(timings.initialWaitMs, batch);
+  await sleep(config.initialWaitMs, batch);
   if (batch.cancelled) throw new Error("Cancelled");
 
   let apiCreds: { code: string; pass2fa: string } | null = null;
-  for (let attempt = 1; attempt <= timings.maxFetchAttempts; attempt++) {
+  for (let attempt = 1; attempt <= config.maxFetchAttempts; attempt++) {
     if (batch.cancelled) throw new Error("Cancelled");
     try {
-      const r = await fetchApiCredentials(item.apiUrl);
+      const r = await fetchApiCredentials(item.apiUrl, config);
       if (r.code) {
         apiCreds = r;
         break;
       }
-      item.message = `Code not ready (attempt ${attempt}/${timings.maxFetchAttempts})`;
+      item.message = `Code not ready (attempt ${attempt}/${config.maxFetchAttempts})`;
     } catch (err: any) {
-      item.message = `Fetch failed (attempt ${attempt}/${timings.maxFetchAttempts}): ${err?.message ?? err}`;
+      item.message = `Fetch failed (attempt ${attempt}/${config.maxFetchAttempts}): ${err?.message ?? err}`;
     }
-    if (attempt < timings.maxFetchAttempts) {
-      item.message += ` -- retrying in ${Math.round(timings.rateLimitWaitMs / 1000)}s`;
-      await sleep(timings.rateLimitWaitMs, batch);
+    if (attempt < config.maxFetchAttempts) {
+      item.message += ` -- retrying in ${Math.round(config.rateLimitWaitMs / 1000)}s`;
+      await sleep(config.rateLimitWaitMs, batch);
     }
   }
   if (!apiCreds)
@@ -254,11 +335,18 @@ async function authenticateAccount(
     db.prepare(
       "UPDATE tg_accounts SET auth_status = 'pending_2fa' WHERE id = ?",
     ).run(account.id);
-    if (!apiCreds.pass2fa)
-      throw new Error("2FA required but the API page has no password");
+    // Fixed mode uses the batch password; otherwise take it from the API page.
+    const pass2fa =
+      config.twoFaMode === "fixed" ? config.twoFaFixed : apiCreds.pass2fa;
+    if (!pass2fa)
+      throw new Error(
+        config.twoFaMode === "fixed"
+          ? "2FA required but no fixed password was provided"
+          : "2FA required but the API page has no password",
+      );
     item.status = "submitting_2fa";
     item.message = "Submitting 2FA password";
-    const session = await submitPassword(account.id, apiCreds.pass2fa);
+    const session = await submitPassword(account.id, pass2fa);
     db.prepare(
       "UPDATE tg_accounts SET auth_status = 'authenticated', session_string = ? WHERE id = ?",
     ).run(session, account.id);
@@ -274,25 +362,32 @@ async function authenticateAccount(
 
 async function runBatch(
   batch: BulkAddBatch,
-  timings: BulkAddTimings,
+  config: BulkAddConfig,
 ): Promise<void> {
   try {
     for (let i = 0; i < batch.items.length; i++) {
       if (batch.cancelled) break;
       const item = batch.items[i];
+      // Phone-only line: account already created, no API page to authenticate
+      // against -- leave it unauthenticated and skip the inter-account gap.
+      if (!item.apiUrl) {
+        item.status = "created";
+        item.message = "Added without authentication";
+        continue;
+      }
       try {
-        await authenticateAccount(batch, item, timings);
+        await authenticateAccount(batch, item, config);
       } catch (err: any) {
         item.status = "failed";
         item.error = err?.message ?? String(err);
         item.message = "Failed";
       }
-      // Pause before the next account (skip after the last / on cancel)
-      if (i < batch.items.length - 1 && !batch.cancelled) {
-        const next = batch.items[i + 1];
+      // Pause before the next account that needs authentication
+      const next = batch.items[i + 1];
+      if (next && next.apiUrl && !batch.cancelled) {
         next.status = "waiting";
-        next.message = `Waiting ${Math.round(timings.betweenAccountsMs / 1000)}s before next account`;
-        await sleep(timings.betweenAccountsMs, batch);
+        next.message = `Waiting ${Math.round(config.betweenAccountsMs / 1000)}s before next account`;
+        await sleep(config.betweenAccountsMs, batch);
       }
     }
   } finally {
@@ -301,8 +396,11 @@ async function runBatch(
 }
 
 // Creates the accounts for the parsed lines, returning the created items.
-// Name = A_(current account count + 1), incrementing per account.
-function createAccounts(lines: ParsedBulkLine[]): BulkAddItem[] {
+// Name = {prefix}(current account count + 1), incrementing per account.
+function createAccounts(
+  lines: ParsedBulkLine[],
+  config: BulkAddConfig,
+): BulkAddItem[] {
   const proxies = readSettingList<{ id: string }>("proxies");
   const clients = readSettingList<{ id: string }>("tg_app_clients");
 
@@ -314,7 +412,17 @@ function createAccounts(lines: ParsedBulkLine[]): BulkAddItem[] {
     .get() as { m: number };
 
   const items: BulkAddItem[] = [];
-  let count = countRow.c;
+  // "total" continues the numbering from the existing account count; "batch"
+  // restarts at 1 for this run. namePadDigits zero-pads the number; 0 means
+  // auto (no padding for "total", at least 2 digits for "batch").
+  const isBatch = config.nameIndexMode === "batch";
+  let count = isBatch ? 0 : countRow.c;
+  const padWidth =
+    config.namePadDigits > 0
+      ? config.namePadDigits
+      : isBatch
+        ? Math.max(2, String(lines.length).length)
+        : 0;
   let sortOrder = maxRow.m;
 
   const insert = db.prepare(
@@ -322,10 +430,11 @@ function createAccounts(lines: ParsedBulkLine[]): BulkAddItem[] {
   );
 
   lines.forEach((line, index) => {
-    const name = `A_${count + 1}`;
+    const num = count + 1;
+    const name = `${config.namePrefix}${padWidth ? String(num).padStart(padWidth, "0") : num}`;
     const proxyId = pickRandom(proxies)?.id ?? null;
     const appClientId = pickRandom(clients)?.id ?? null;
-    const notes = `Automatically added via ${line.apiUrl}`;
+    const notes = config.notesTemplate.replace(/\{apiUrl\}/g, line.apiUrl);
     const res = insert.run(
       name,
       line.phoneNumber,
@@ -356,7 +465,7 @@ export type StartBulkAddResult =
 
 export function startBulkAdd(
   text: string,
-  overrides?: Partial<BulkAddTimings>,
+  options?: BulkAddOptions,
 ): StartBulkAddResult {
   if (current?.running) {
     return { ok: false, error: "A bulk-add batch is already running" };
@@ -369,7 +478,9 @@ export function startBulkAdd(
   if (!lines.length) {
     return { ok: false, error: "No valid account lines provided" };
   }
-  if (!getDefaultTgApiCredentials()) {
+  // Credentials are only needed for accounts that will be authenticated.
+  const needsAuth = lines.some((l) => l.apiUrl);
+  if (needsAuth && !getDefaultTgApiCredentials()) {
     return {
       ok: false,
       error:
@@ -377,8 +488,8 @@ export function startBulkAdd(
     };
   }
 
-  const timings = { ...DEFAULT_TIMINGS, ...overrides };
-  const items = createAccounts(lines);
+  const config = resolveConfig(options);
+  const items = createAccounts(lines, config);
 
   const batch: BulkAddBatch = {
     id: crypto.randomUUID(),
@@ -389,6 +500,6 @@ export function startBulkAdd(
     items,
   };
   current = batch;
-  void runBatch(batch, timings);
+  void runBatch(batch, config);
   return { ok: true, batch };
 }

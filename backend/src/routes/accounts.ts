@@ -26,6 +26,7 @@ import {
   startBulkAdd,
   getBulkAddStatus,
   cancelBulkAdd,
+  type BulkAddOptions,
 } from "../jobs/bulkAdd";
 import type { AuthStatus } from "../types";
 import { parseTgProxy } from "../jobs/runner";
@@ -301,12 +302,15 @@ router.post("/", (req, res) => {
 // POST /bulk-add -- create accounts from "phone----apiUrl" lines, then
 // authenticate them one by one using codes/2FA served by each API page
 router.post("/bulk-add", (req, res) => {
-  const { text } = req.body as { text?: string };
+  const { text, options } = req.body as {
+    text?: string;
+    options?: BulkAddOptions;
+  };
   if (!text || !text.trim()) {
     res.status(400).json({ error: "text is required" });
     return;
   }
-  const result = startBulkAdd(text);
+  const result = startBulkAdd(text, options);
   if (!result.ok) {
     res.status(400).json({ error: result.error });
     return;

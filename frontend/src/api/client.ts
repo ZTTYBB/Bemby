@@ -114,8 +114,23 @@ export type BulkAddItemStatus =
   | "submitting_code"
   | "submitting_2fa"
   | "waiting"
+  | "created"
   | "done"
   | "failed";
+
+export type BulkAddOptions = {
+  gapSeconds?: number;
+  namePrefix?: string;
+  nameIndexMode?: "total" | "batch";
+  namePadDigits?: number;
+  notesTemplate?: string;
+  codeFieldId?: string;
+  codeRegex?: string;
+  twoFaMode?: "api" | "fixed";
+  twoFaFieldId?: string;
+  twoFaRegex?: string;
+  twoFaFixed?: string;
+};
 
 export type BulkAddItem = {
   index: number;
@@ -567,8 +582,10 @@ export const accountsApi = {
     api.put("/accounts/reorder", { items }).then((r) => r.data),
   bulkUpdateNotes: (ids: number[], notes: string | null) =>
     api.put("/accounts/bulk-notes", { ids, notes }).then((r) => r.data),
-  bulkAdd: (text: string) =>
-    api.post<BulkAddBatch>("/accounts/bulk-add", { text }).then((r) => r.data),
+  bulkAdd: (text: string, options?: BulkAddOptions) =>
+    api
+      .post<BulkAddBatch>("/accounts/bulk-add", { text, options })
+      .then((r) => r.data),
   bulkAddStatus: () =>
     api
       .get<BulkAddBatch | null>("/accounts/bulk-add/status")

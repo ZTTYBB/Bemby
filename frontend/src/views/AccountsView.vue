@@ -1116,6 +1116,132 @@
               spellcheck="false"
             ></textarea>
           </div>
+
+          <div class="bulk-add-options">
+            <div class="form-section-label">
+              {{ t("accounts.bulkAdd.optionsTitle") }}
+            </div>
+            <div class="bulk-add-options-row">
+              <div class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkAdd.gapLabel")
+                }}</label>
+                <input
+                  v-model.number="bulkOptions.gapSeconds"
+                  type="number"
+                  min="0"
+                  class="form-input"
+                />
+              </div>
+              <div class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkAdd.namePrefixLabel")
+                }}</label>
+                <input v-model="bulkOptions.namePrefix" class="form-input" />
+              </div>
+            </div>
+            <div class="bulk-add-options-row">
+              <div class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkAdd.nameIndexLabel")
+                }}</label>
+                <select v-model="bulkOptions.nameIndexMode" class="form-select">
+                  <option value="total">
+                    {{ t("accounts.bulkAdd.nameIndexTotal") }}
+                  </option>
+                  <option value="batch">
+                    {{ t("accounts.bulkAdd.nameIndexBatch") }}
+                  </option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkAdd.namePadLabel")
+                }}</label>
+                <input
+                  v-model.number="bulkOptions.namePadDigits"
+                  type="number"
+                  min="0"
+                  max="9"
+                  class="form-input"
+                  :placeholder="t('accounts.bulkAdd.namePadAuto')"
+                />
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{
+                t("accounts.bulkAdd.notesLabel")
+              }}</label>
+              <input v-model="bulkOptions.notesTemplate" class="form-input" />
+              <div class="form-hint">{{ t("accounts.bulkAdd.notesHint") }}</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{
+                t("accounts.bulkAdd.twoFaModeLabel")
+              }}</label>
+              <select v-model="bulkOptions.twoFaMode" class="form-select">
+                <option value="api">
+                  {{ t("accounts.bulkAdd.twoFaFromApi") }}
+                </option>
+                <option value="fixed">
+                  {{ t("accounts.bulkAdd.twoFaFixedMode") }}
+                </option>
+              </select>
+            </div>
+            <div v-if="bulkOptions.twoFaMode === 'fixed'" class="form-group">
+              <label class="form-label">{{
+                t("accounts.bulkAdd.twoFaFixedLabel")
+              }}</label>
+              <input
+                v-model="bulkOptions.twoFaFixed"
+                type="password"
+                class="form-input"
+                autocomplete="new-password"
+              />
+            </div>
+            <label class="form-check">
+              <input type="checkbox" v-model="bulkAdvancedRegex" />
+              <span>{{ t("accounts.bulkAdd.advancedToggle") }}</span>
+            </label>
+            <template v-if="!bulkAdvancedRegex">
+              <div class="bulk-add-options-row">
+                <div class="form-group">
+                  <label class="form-label">{{
+                    t("accounts.bulkAdd.codeFieldLabel")
+                  }}</label>
+                  <input v-model="bulkOptions.codeFieldId" class="form-input" />
+                </div>
+                <div v-if="bulkOptions.twoFaMode === 'api'" class="form-group">
+                  <label class="form-label">{{
+                    t("accounts.bulkAdd.twoFaFieldLabel")
+                  }}</label>
+                  <input v-model="bulkOptions.twoFaFieldId" class="form-input" />
+                </div>
+              </div>
+            </template>
+            <template v-else>
+              <div class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkAdd.codeRegexLabel")
+                }}</label>
+                <input
+                  v-model="bulkOptions.codeRegex"
+                  class="form-input bulk-add-mono"
+                />
+              </div>
+              <div v-if="bulkOptions.twoFaMode === 'api'" class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkAdd.twoFaRegexLabel")
+                }}</label>
+                <input
+                  v-model="bulkOptions.twoFaRegex"
+                  class="form-input bulk-add-mono"
+                />
+              </div>
+              <div class="form-hint">{{ t("accounts.bulkAdd.regexHint") }}</div>
+            </template>
+          </div>
+
           <div class="modal-footer">
             <button class="btn btn-ghost" @click="closeBulkAdd">
               <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
@@ -1394,6 +1520,7 @@ import {
   type PasswordInfo,
   type Passkey,
   type BulkAddBatch,
+  type BulkAddOptions,
 } from "../api/client";
 import { t, locale } from "../i18n";
 import { usePersistedRef } from "../composables/usePersistedRef";
@@ -1868,8 +1995,25 @@ const bulkAddBusy = ref(false);
 const bulkBatch = ref<BulkAddBatch | null>(null);
 let bulkPollTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Per-batch options; defaults mirror the backend resolveConfig().
+const bulkAdvancedRegex = ref(false);
+const bulkOptions = reactive({
+  gapSeconds: 70,
+  namePrefix: "A_",
+  nameIndexMode: "total" as "total" | "batch",
+  namePadDigits: 0,
+  notesTemplate: "Automatically added via {apiUrl}",
+  codeFieldId: "code",
+  // Defaults reproduce the field-id parsing; capture group 1 is the value.
+  codeRegex: 'id="code"[^>]*value="([^"]*)"',
+  twoFaMode: "api" as "api" | "fixed",
+  twoFaFieldId: "pass2fa",
+  twoFaRegex: 'id="pass2fa"[^>]*value="([^"]*)"',
+  twoFaFixed: "",
+});
+
 const bulkAddPlaceholder =
-  "+917507166497----https://example.com/getcode?id=80323dfc-9002-4083-a997-7ea29346d620\n+918719968726----https://example.com/getcode?id=0eaa294a-8d56-4aa4-bec9-6192356fadfc";
+  "+12025550143----https://example.com/getcode?id=80323dfc-9002-4083-a997-7ea29346d620\n+12025550178----https://example.com/getcode?id=0eaa294a-8d56-4aa4-bec9-6192356fadfc\n+12025550199";
 
 const bulkDoneCount = computed(
   () =>
@@ -1918,11 +2062,36 @@ async function pollBulk() {
   }
 }
 
+// Only send fields relevant to the chosen 2FA mode / advanced toggle so hidden
+// values don't silently take effect.
+function buildBulkOptions(): BulkAddOptions {
+  const o: BulkAddOptions = {
+    gapSeconds: bulkOptions.gapSeconds,
+    namePrefix: bulkOptions.namePrefix,
+    nameIndexMode: bulkOptions.nameIndexMode,
+    namePadDigits: bulkOptions.namePadDigits,
+    notesTemplate: bulkOptions.notesTemplate,
+    codeFieldId: bulkOptions.codeFieldId,
+    twoFaMode: bulkOptions.twoFaMode,
+  };
+  if (bulkAdvancedRegex.value) o.codeRegex = bulkOptions.codeRegex;
+  if (bulkOptions.twoFaMode === "fixed") {
+    o.twoFaFixed = bulkOptions.twoFaFixed;
+  } else {
+    o.twoFaFieldId = bulkOptions.twoFaFieldId;
+    if (bulkAdvancedRegex.value) o.twoFaRegex = bulkOptions.twoFaRegex;
+  }
+  return o;
+}
+
 async function startBulk() {
   bulkAddError.value = "";
   bulkAddBusy.value = true;
   try {
-    bulkBatch.value = await accountsApi.bulkAdd(bulkAddText.value);
+    bulkBatch.value = await accountsApi.bulkAdd(
+      bulkAddText.value,
+      buildBulkOptions(),
+    );
     pollBulk();
   } catch (err: any) {
     bulkAddError.value =
@@ -2981,6 +3150,58 @@ tr.drag-over td {
   border-radius: 8px;
 }
 
+.bulk-add-options {
+  margin-top: 16px;
+  padding: 16px 18px;
+  background: #f7f8fa;
+  border: 1px solid #ececf0;
+  border-radius: 10px;
+}
+
+.bulk-add-options .form-section-label {
+  margin: 0 0 14px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8a8a94;
+}
+
+.bulk-add-options .form-group {
+  margin-bottom: 12px;
+}
+
+.bulk-add-options .form-hint {
+  margin-top: 5px;
+}
+
+.bulk-add-options-row {
+  display: flex;
+  gap: 12px;
+}
+
+.bulk-add-options-row .form-group {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Divider before the "how to parse" controls */
+.bulk-add-options .form-check {
+  margin: 16px 0 12px;
+  padding-top: 14px;
+  border-top: 1px dashed #e0e0e6;
+  font-size: 13px;
+  font-weight: 500;
+  color: #444;
+  cursor: pointer;
+}
+
+.bulk-add-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  background: #fbfbfd;
+}
+
 .bulk-add-status-dot {
   flex: 0 0 auto;
   width: 10px;
@@ -2991,6 +3212,9 @@ tr.drag-over td {
 }
 .bulk-add-status-dot.status-done {
   background: #52c41a;
+}
+.bulk-add-status-dot.status-created {
+  background: #1296db;
 }
 .bulk-add-status-dot.status-failed {
   background: #ff4d4f;
