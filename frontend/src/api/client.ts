@@ -626,12 +626,31 @@ export const accountsApi = {
       .then((r) => r.data),
   getPasskeys: (id: number) =>
     api
-      .get<{ passkeys: Passkey[] }>(`/accounts/${id}/passkeys`)
-      .then((r) => r.data.passkeys),
+      .get<{ passkeys: Passkey[]; storedIds: string[] }>(
+        `/accounts/${id}/passkeys`,
+      )
+      .then((r) => r.data),
   deletePasskey: (id: number, passkeyId: string) =>
     api
       .delete<{ ok: boolean }>(
         `/accounts/${id}/passkeys/${encodeURIComponent(passkeyId)}`,
+      )
+      .then((r) => r.data),
+  registerPasskey: (id: number, origin?: string) =>
+    api
+      .post<{ passkey: Passkey }>(`/accounts/${id}/passkeys`, { origin })
+      .then((r) => r.data),
+  verifyPasskey: (id: number, passkeyId: string, origin?: string) =>
+    api
+      .post<{
+        ok: boolean;
+        passwordRequired: boolean;
+        userId: string;
+        firstName: string | null;
+        username: string | null;
+      }>(
+        `/accounts/${id}/passkeys/${encodeURIComponent(passkeyId)}/verify`,
+        { origin },
       )
       .then((r) => r.data),
 };

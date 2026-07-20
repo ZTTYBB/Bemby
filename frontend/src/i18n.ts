@@ -364,6 +364,17 @@ const zh = {
     passkeyRemove: "移除",
     passkeyDeleting: "移除中...",
     passkeyRemoveConfirm: "确定要移除通行密钥「{name}」吗？",
+    passkeyAdd: "添加通行密钥",
+    passkeyAdding: "添加中...",
+    passkeyAddHint:
+      "实验性功能：在服务器端完成 WebAuthn 注册流程（不使用浏览器）。仅对此处添加的通行密钥可进行「验证」。",
+    passkeyAdded2: "已添加通行密钥",
+    passkeyVerify: "验证",
+    passkeyVerifying: "验证中...",
+    passkeyVerifyOk: "验证成功：已使用通行密钥登录为 {who}（登录会话已随即注销）。",
+    passkeyVerifyOkPwd:
+      "验证成功：通行密钥已被 Telegram 接受。该账户启用了两步验证，完整登录还需云端密码（本次未创建登录会话）。",
+    passkeyVerifyFailed: "验证失败：登录未返回用户。",
 
     spam: {
       free: "正常",
@@ -1251,6 +1262,18 @@ const en: typeof zh = {
     passkeyRemove: "Remove",
     passkeyDeleting: "Removing...",
     passkeyRemoveConfirm: 'Remove the passkey "{name}"?',
+    passkeyAdd: "Add passkey",
+    passkeyAdding: "Adding...",
+    passkeyAddHint:
+      "Experimental: runs the WebAuthn registration ceremony server-side (no browser). Only passkeys added here can be verified.",
+    passkeyAdded2: "Passkey added",
+    passkeyVerify: "Verify",
+    passkeyVerifying: "Verifying...",
+    passkeyVerifyOk:
+      "Verified: logged in with the passkey as {who} (the login session was logged out immediately).",
+    passkeyVerifyOkPwd:
+      "Verified: Telegram accepted the passkey. This account has 2FA, so a full login also needs the cloud password (no login session was created).",
+    passkeyVerifyFailed: "Verification failed: login returned no user.",
     spam: {
       free: "Free",
       limited: "Limited",

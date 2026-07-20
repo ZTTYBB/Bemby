@@ -996,19 +996,45 @@
                     {{ fmtSessionDate(pk.lastUsageDate) }}
                   </div>
                 </div>
-                <button
-                  class="btn btn-xs btn-danger"
-                  :disabled="deletingPasskeyId === pk.id"
-                  @click="doDeletePasskey(pk)"
-                >
-                  {{
-                    deletingPasskeyId === pk.id
-                      ? t("accounts.passkeyDeleting")
-                      : t("accounts.passkeyRemove")
-                  }}
-                </button>
+                <div style="display: flex; gap: 6px">
+                  <button
+                    v-if="passkeyStoredIds.includes(pk.id)"
+                    class="btn btn-xs btn-secondary"
+                    :disabled="verifyingPasskeyId === pk.id"
+                    @click="doVerifyPasskey(pk)"
+                  >
+                    {{
+                      verifyingPasskeyId === pk.id
+                        ? t("accounts.passkeyVerifying")
+                        : t("accounts.passkeyVerify")
+                    }}
+                  </button>
+                  <button
+                    class="btn btn-xs btn-danger"
+                    :disabled="deletingPasskeyId === pk.id"
+                    @click="doDeletePasskey(pk)"
+                  >
+                    {{
+                      deletingPasskeyId === pk.id
+                        ? t("accounts.passkeyDeleting")
+                        : t("accounts.passkeyRemove")
+                    }}
+                  </button>
+                </div>
               </div>
             </div>
+            <button
+              class="btn btn-sm btn-secondary"
+              style="margin-top: 8px"
+              :disabled="addingPasskey"
+              @click="doAddPasskey"
+            >
+              <i class="fa-solid fa-plus" style="margin-right: 6px"></i>
+              {{ addingPasskey ? t("accounts.passkeyAdding") : t("accounts.passkeyAdd") }}
+            </button>
+            <p class="form-hint" style="margin-top: 6px">
+              {{ t("accounts.passkeyAddHint") }}
+            </p>
           </template>
         </div>
         </div>
@@ -2215,6 +2241,9 @@ const passkeysLoading = ref(false);
 const passkeysError = ref("");
 const passkeysLoaded = ref(false);
 const deletingPasskeyId = ref<string | null>(null);
+const addingPasskey = ref(false);
+const passkeyStoredIds = ref<string[]>([]);
+const verifyingPasskeyId = ref<string | null>(null);
 const loginEmailBusy = ref(false);
 const loginEmailError = ref("");
 const loginEmailMsg = ref("");
@@ -2900,7 +2929,7 @@ async function startBulkCred() {
         parts.push(t("accounts.bulkCred.result.devicesRemoved"));
       }
       if (bulkCredForm.removePasskeys) {
-        const passkeys = await accountsApi.getPasskeys(item.id);
+        const { passkeys } = await accountsApi.getPasskeys(item.id);
         for (const pk of passkeys) {
           await accountsApi.deletePasskey(item.id, pk.id);
         }
@@ -3151,6 +3180,9 @@ function openEdit(a: Account) {
   passkeysLoaded.value = false;
   passkeysError.value = "";
   deletingPasskeyId.value = null;
+  addingPasskey.value = false;
+  passkeyStoredIds.value = [];
+  verifyingPasskeyId.value = null;
   loginEmailBusy.value = false;
   loginEmailError.value = "";
   loginEmailMsg.value = "";
@@ -3365,7 +3397,9 @@ async function loadPasskeys() {
   passkeysLoading.value = true;
   passkeysError.value = "";
   try {
-    passkeys.value = await accountsApi.getPasskeys(editTarget.value.id);
+    const data = await accountsApi.getPasskeys(editTarget.value.id);
+    passkeys.value = data.passkeys;
+    passkeyStoredIds.value = data.storedIds;
     passkeysLoaded.value = true;
   } catch (err: any) {
     passkeysError.value = err.response?.data?.error ?? err.message;
@@ -3387,6 +3421,46 @@ async function doDeletePasskey(pk: Passkey) {
     passkeysError.value = err.response?.data?.error ?? err.message;
   } finally {
     deletingPasskeyId.value = null;
+  }
+}
+
+async function doAddPasskey() {
+  if (!editTarget.value) return;
+  addingPasskey.value = true;
+  passkeysError.value = "";
+  try {
+    await accountsApi.registerPasskey(editTarget.value.id);
+    await loadPasskeys();
+    alert(t("accounts.passkeyAdded2"));
+  } catch (err: any) {
+    passkeysError.value = err.response?.data?.error ?? err.message;
+  } finally {
+    addingPasskey.value = false;
+  }
+}
+
+async function doVerifyPasskey(pk: Passkey) {
+  if (!editTarget.value) return;
+  verifyingPasskeyId.value = pk.id;
+  passkeysError.value = "";
+  try {
+    const r = await accountsApi.verifyPasskey(editTarget.value.id, pk.id);
+    if (r.ok && r.passwordRequired) {
+      alert(t("accounts.passkeyVerifyOkPwd"));
+    } else if (r.ok) {
+      alert(
+        t("accounts.passkeyVerifyOk").replace(
+          "{who}",
+          r.username ? `@${r.username}` : (r.firstName ?? r.userId),
+        ),
+      );
+    } else {
+      passkeysError.value = t("accounts.passkeyVerifyFailed");
+    }
+  } catch (err: any) {
+    passkeysError.value = err.response?.data?.error ?? err.message;
+  } finally {
+    verifyingPasskeyId.value = null;
   }
 }
 

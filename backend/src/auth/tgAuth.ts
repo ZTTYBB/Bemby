@@ -5,8 +5,13 @@ import type { TgProxy } from "../types";
 import {
   invokeGetPasskeys,
   invokeDeletePasskey,
+  invokeRegisterPasskey,
+  invokeVerifyPasskeyLogin,
   type Passkey,
+  type RegisterPasskeyResult,
+  type PasskeyLoginVerification,
 } from "../tg/passkeys";
+import type { PasskeySecret } from "../tg/passkeyStore";
 
 export type TgDeviceParams = {
   deviceModel?: string;
@@ -627,6 +632,61 @@ export async function deletePasskey(
   try {
     await client.connect();
     return await invokeDeletePasskey(client, passkeyId);
+  } finally {
+    await client.destroy().catch(() => undefined);
+  }
+}
+
+// Experimental: registers a new passkey by running the WebAuthn ceremony in Node
+// (no browser). Returns the private key material for a possible future login.
+export async function registerPasskey(
+  apiId: number,
+  apiHash: string,
+  sessionString: string,
+  originOverride?: string,
+  proxy?: TgProxy,
+  deviceParams?: TgDeviceParams,
+): Promise<RegisterPasskeyResult> {
+  const client = makeTgClient(sessionString, apiId, apiHash, proxy, deviceParams);
+  try {
+    await client.connect();
+    return await invokeRegisterPasskey(client, originOverride);
+  } finally {
+    await client.destroy().catch(() => undefined);
+  }
+}
+
+// Verifies a stored passkey by logging in with it on a fresh (empty) session.
+// Passkey login is DC-specific: it must run on the DC where the account lives, so
+// we pin the fresh session to the authorised session's DC (avoids the cross-DC
+// finishPasskeyLogin path, which otherwise fails as PASSKEY_CHALLENGE_EXPIRED).
+export async function verifyPasskeyLogin(
+  apiId: number,
+  apiHash: string,
+  accountSessionString: string,
+  secret: PasskeySecret,
+  originOverride?: string,
+  proxy?: TgProxy,
+  deviceParams?: TgDeviceParams,
+): Promise<PasskeyLoginVerification> {
+  const authed = new StringSession(accountSessionString);
+  const fresh = new StringSession("");
+  fresh.setDC(authed.dcId, authed.serverAddress, authed.port);
+  const client = new TelegramClient(fresh, apiId, apiHash, {
+    connectionRetries: 3,
+    baseLogger: new Logger(LogLevel.NONE),
+    ...(proxy ? { proxy } : {}),
+    ...(deviceParams ?? {}),
+  });
+  try {
+    await client.connect();
+    return await invokeVerifyPasskeyLogin(
+      client,
+      apiId,
+      apiHash,
+      secret,
+      originOverride,
+    );
   } finally {
     await client.destroy().catch(() => undefined);
   }

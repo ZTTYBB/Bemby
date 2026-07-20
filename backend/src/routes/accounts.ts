@@ -19,6 +19,8 @@ import {
   verifyLoginEmail,
   getPasskeys,
   deletePasskey,
+  registerPasskey,
+  verifyPasskeyLogin,
   type PasswordInfo,
 } from "../auth/tgAuth";
 import { checkSpamStatus } from "../jobs/checkin";
@@ -37,6 +39,12 @@ import type { AuthStatus } from "../types";
 import { parseTgProxy } from "../jobs/runner";
 import { resolveAppClientParams, previewDeviceModel } from "../tg/appClient";
 import { isAuthError, markSessionExpired } from "../tg/liveClient";
+import {
+  savePasskeySecret,
+  getPasskeySecret,
+  deletePasskeySecret,
+  storedPasskeyIdsForAccount,
+} from "../tg/passkeyStore";
 import { refreshScheduler } from "../scheduler";
 
 type EncryptedEnvelope = {
@@ -1119,10 +1127,77 @@ router.get("/:id/passkeys", async (req, res) => {
     const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
     const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
     const passkeys = await getPasskeys(apiId, apiHash, account.session_string, proxy, deviceParams);
-    res.json({ passkeys });
+    res.json({ passkeys, storedIds: storedPasskeyIdsForAccount(account.id) });
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
     internalError(res, err, "passkeys/list");
+  }
+});
+
+// POST /:id/passkeys -- register a new passkey (experimental; WebAuthn ceremony run server-side)
+router.post("/:id/passkeys", async (req, res) => {
+  const account = db
+    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
+    .get(req.params.id) as AccountRow | undefined;
+  if (!requireAuth(account, res)) return;
+  try {
+    const { apiId, apiHash } = resolveApiCredentials(account);
+    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
+    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+    const origin = typeof req.body?.origin === "string" ? req.body.origin : undefined;
+    const result = await registerPasskey(
+      apiId,
+      apiHash,
+      account.session_string,
+      origin,
+      proxy,
+      deviceParams,
+    );
+    // Persist the private key so the passkey can later be used/verified for login.
+    savePasskeySecret({
+      accountId: account.id,
+      telegramPasskeyId: result.passkey.id,
+      credentialId: result.credentialId,
+      privateKeyPem: result.privateKeyPem,
+      rpId: result.rpId,
+      userHandle: result.userHandle,
+      createdDate: result.passkey.date,
+    });
+    res.json({ passkey: result.passkey });
+  } catch (err: any) {
+    if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
+    internalError(res, err, "passkeys/register");
+  }
+});
+
+// POST /:id/passkeys/:passkeyId/verify -- prove the passkey works via a real login
+router.post("/:id/passkeys/:passkeyId/verify", async (req, res) => {
+  const account = db
+    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
+    .get(req.params.id) as AccountRow | undefined;
+  if (!requireAuth(account, res)) return;
+  const secret = getPasskeySecret(req.params.passkeyId);
+  if (!secret || secret.accountId !== account!.id) {
+    res.status(404).json({ error: "no stored key for this passkey" });
+    return;
+  }
+  try {
+    const { apiId, apiHash } = resolveApiCredentials(account);
+    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
+    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+    const origin = typeof req.body?.origin === "string" ? req.body.origin : undefined;
+    const result = await verifyPasskeyLogin(
+      apiId,
+      apiHash,
+      account.session_string,
+      secret,
+      origin,
+      proxy,
+      deviceParams,
+    );
+    res.json(result);
+  } catch (err: any) {
+    internalError(res, err, "passkeys/verify");
   }
 });
 
@@ -1144,6 +1219,7 @@ router.delete("/:id/passkeys/:passkeyId", async (req, res) => {
       proxy,
       deviceParams,
     );
+    if (ok) deletePasskeySecret(req.params.passkeyId);
     res.json({ ok });
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
