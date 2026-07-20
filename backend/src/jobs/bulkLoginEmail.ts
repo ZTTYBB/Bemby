@@ -26,9 +26,16 @@ export function buildPlusAddress(gmail: string, suffix: string): string {
   return `${local}+${suffix}@${domain}`;
 }
 
+// Maps digits to letters (0=a, 1=b, ... 9=j). Telegram rejects login-email
+// plus-tags that contain digits, so the whole tag is de-digitised.
+export function digitsToLetters(s: string): string {
+  return s.replace(/[0-9]/g, (d) => String.fromCharCode(97 + Number(d)));
+}
+
 // Expands a tag template into a Gmail plus-tag. Named tokens: {phoneNum},
-// {tgId}, {id}; random tokens ({word:N}, {num:N}, {alpha:N}, {uuid}) come from
-// expandCommand. The result is stripped to address-safe characters.
+// {tgId}, {id}; random tokens ({word:N}, {alpha:N}, {uuid}) come from
+// expandCommand. Digits are mapped to letters (Telegram rejects numeric tags)
+// and the result is stripped to address-safe characters.
 export async function expandEmailTag(
   template: string,
   ctx: {
@@ -44,7 +51,8 @@ export async function expandEmailTag(
     id: String(ctx.accountId),
   };
   if (/\{tgId\}/.test(template)) context.tgId = await ctx.getTgId();
-  const tag = expandCommand(template, context).replace(/[^A-Za-z0-9._-]/g, "");
+  const expanded = digitsToLetters(expandCommand(template, context));
+  const tag = expanded.replace(/[^A-Za-z._-]/g, "");
   if (!tag) throw new Error("Email tag template produced an empty value");
   return tag;
 }

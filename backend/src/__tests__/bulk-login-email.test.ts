@@ -28,12 +28,13 @@ describe("buildPlusAddress", () => {
 describe("expandEmailTag", () => {
   const ctx = { phoneNumber: "+61 412 345 678", accountId: 42, getTgId: noTgId };
 
-  it("expands {phoneNum} to phone digits by default", async () => {
-    expect(await expandEmailTag("{phoneNum}", ctx)).toBe("61412345678");
+  // Telegram rejects numeric email tags, so digits are mapped to letters (0=a..9=j).
+  it("expands {phoneNum} to phone digits mapped to letters", async () => {
+    expect(await expandEmailTag("{phoneNum}", ctx)).toBe("gbebcdefghi");
   });
 
-  it("expands {id} to the account id", async () => {
-    expect(await expandEmailTag("{id}", ctx)).toBe("42");
+  it("expands {id} to the account id mapped to letters", async () => {
+    expect(await expandEmailTag("{id}", ctx)).toBe("ec");
   });
 
   it("fetches {tgId} only when referenced", async () => {
@@ -41,20 +42,20 @@ describe("expandEmailTag", () => {
       ...ctx,
       getTgId: async () => "7623901234",
     };
-    expect(await expandEmailTag("{tgId}", withId)).toBe("7623901234");
+    expect(await expandEmailTag("{tgId}", withId)).toBe("hgcdjabcde");
   });
 
   it("strips address-unsafe characters", async () => {
-    expect(await expandEmailTag("a b@c+{id}", ctx)).toBe("abc42");
+    expect(await expandEmailTag("a b@c+{id}", ctx)).toBe("abcec");
   });
 
   it("throws when the template expands to nothing usable", async () => {
     await expect(expandEmailTag("@@@", ctx)).rejects.toThrow();
   });
 
-  it("expands random {num:N} to the right length", async () => {
+  it("maps any remaining digits to letters (no numbers in the tag)", async () => {
     const tag = await expandEmailTag("{num:5}", ctx);
-    expect(tag).toMatch(/^\d{5}$/);
+    expect(tag).toMatch(/^[a-j]{5}$/);
   });
 });
 

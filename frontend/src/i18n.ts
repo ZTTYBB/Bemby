@@ -257,7 +257,7 @@ const zh = {
       gmailHint: "用于 IMAP 登录的邮箱（收件邮箱）",
       tagLabel: "地址标签模板（+ 后部分）",
       tagHint:
-        "变量：{phoneNum} 手机号数字、{tgId} Telegram 数字 ID、{id} 账户 ID，以及随机 {word:4}、{num:3}、{alpha:8}、{uuid}。",
+        "变量：{phoneNum} 手机号、{tgId} Telegram ID、{id} 账户 ID，以及随机 {word:4}、{alpha:8}、{uuid}。数字会自动转成字母（0=a…9=j），因为 Telegram 不接受含数字的邮箱标签。",
       previewLabel: "预览",
       appPasswordLabel: "Gmail 应用专用密码",
       appPasswordHint:
@@ -332,6 +332,11 @@ const zh = {
         skippedValid: "已存在有效通行密钥，跳过",
         existingInvalid: "已存在的通行密钥无效，未添加，请检查",
       },
+    },
+    bulkGap: {
+      label: "每个账户之间的间隔（秒）",
+      hint: "顺序处理时每个账户之间的等待时间，用于避免 Telegram 触发频率限制（0 表示不等待）。",
+      short: "间隔(秒)",
     },
     bulkClean: {
       btn: "批量清理",
@@ -1172,7 +1177,7 @@ const en: typeof zh = {
       gmailHint: "The mailbox used to log in over IMAP (where codes arrive)",
       tagLabel: "Address tag template (after the +)",
       tagHint:
-        "Variables: {phoneNum} phone digits, {tgId} Telegram numeric ID, {id} account id, plus random {word:4}, {num:3}, {alpha:8}, {uuid}.",
+        "Variables: {phoneNum} phone, {tgId} Telegram ID, {id} account id, plus random {word:4}, {alpha:8}, {uuid}. Digits are mapped to letters (0=a..9=j) since Telegram rejects email tags containing numbers.",
       previewLabel: "Preview",
       appPasswordLabel: "Gmail app password",
       appPasswordHint:
@@ -1248,6 +1253,11 @@ const en: typeof zh = {
         skippedValid: "already has a valid passkey, skipped",
         existingInvalid: "existing passkey is invalid, not added -- please check",
       },
+    },
+    bulkGap: {
+      label: "Gap between accounts (seconds)",
+      hint: "Wait time between each account while processing sequentially, to avoid Telegram flood limits (0 = no wait).",
+      short: "Gap (s)",
     },
     bulkClean: {
       btn: "Bulk Clean",

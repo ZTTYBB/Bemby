@@ -25,6 +25,19 @@
           <i class="fa-solid fa-user-shield"></i>
           {{ t("accounts.checkSpamSelected") }} ({{ selectedIds.size }})
         </button>
+        <label
+          v-if="selectedIds.size > 0"
+          class="spam-gap-inline"
+          :title="t('accounts.bulkGap.hint')"
+        >
+          {{ t("accounts.bulkGap.short") }}
+          <input
+            v-model.number="spamBulkGapSeconds"
+            type="number"
+            min="0"
+            class="form-input"
+          />
+        </label>
         <button
           v-if="selectedIds.size > 0"
           class="btn btn-secondary"
@@ -1476,6 +1489,16 @@
                 <span>{{ bulkEmailExample }}</span>
               </div>
             </div>
+            <div class="form-group">
+              <label class="form-label">{{ t("accounts.bulkGap.label") }}</label>
+              <input
+                v-model.number="bulkEmailForm.gapSeconds"
+                type="number"
+                min="0"
+                class="form-input"
+              />
+              <div class="form-hint">{{ t("accounts.bulkGap.hint") }}</div>
+            </div>
             <div class="bulk-clean-accounts">
               <div
                 v-for="a in bulkEmailTargets"
@@ -1649,6 +1672,16 @@
                 {{ t("accounts.bulkCred.notesAppendHint") }}
               </div>
             </div>
+            <div class="form-group">
+              <label class="form-label">{{ t("accounts.bulkGap.label") }}</label>
+              <input
+                v-model.number="bulkCredForm.gapSeconds"
+                type="number"
+                min="0"
+                class="form-input"
+              />
+              <div class="form-hint">{{ t("accounts.bulkGap.hint") }}</div>
+            </div>
             <div class="bulk-clean-accounts">
               <div
                 v-for="a in bulkCredTargets"
@@ -1753,6 +1786,16 @@
                 )
               }}
             </p>
+            <div class="form-group">
+              <label class="form-label">{{ t("accounts.bulkGap.label") }}</label>
+              <input
+                v-model.number="bulkPasskeyGapSeconds"
+                type="number"
+                min="0"
+                class="form-input"
+              />
+              <div class="form-hint">{{ t("accounts.bulkGap.hint") }}</div>
+            </div>
             <div class="bulk-clean-accounts">
               <div
                 v-for="a in bulkPasskeyTargets"
@@ -1877,6 +1920,16 @@
                 <strong>{{ a.name }}</strong>
                 <span class="bulk-add-phone">{{ a.phoneNumber }}</span>
               </div>
+            </div>
+            <div class="form-group" style="margin-top: 12px">
+              <label class="form-label">{{ t("accounts.bulkGap.label") }}</label>
+              <input
+                v-model.number="bulkCleanGapSeconds"
+                type="number"
+                min="0"
+                class="form-input"
+              />
+              <div class="form-hint">{{ t("accounts.bulkGap.hint") }}</div>
             </div>
             <label class="form-check" style="margin-top: 12px">
               <input type="checkbox" v-model="bulkCleanConfirmChecked" />
@@ -2442,6 +2495,7 @@ async function checkSpam(a: Account) {
 }
 
 const spamBulkRunning = ref(false);
+const spamBulkGapSeconds = ref(30);
 
 async function checkSpamBulk() {
   if (spamBulkRunning.value) return;
@@ -2453,9 +2507,11 @@ async function checkSpamBulk() {
   );
   if (!targets.length) return;
   spamBulkRunning.value = true;
+  const gapMs = Math.max(0, spamBulkGapSeconds.value) * 1000;
   // Run sequentially to avoid Telegram flood limits
-  for (const a of targets) {
-    await checkSpam(a);
+  for (let i = 0; i < targets.length; i++) {
+    await checkSpam(targets[i]);
+    if (i < targets.length - 1 && gapMs > 0) await sleep(gapMs);
   }
   spamBulkRunning.value = false;
 }
@@ -2796,7 +2852,11 @@ const bulkEmailForm = reactive({
   gmail: "",
   appPassword: "",
   tag: "{phoneNum}",
+  gapSeconds: 30,
 });
+
+// Delay helper; used to space out bulk requests and avoid Telegram flood limits.
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const bulkEmailTesting = ref(false);
 const bulkEmailTestOk = ref<boolean | null>(null);
 const bulkEmailTestMsg = ref("");
@@ -2834,7 +2894,7 @@ function previewEmailTag(template: string): string {
     id: acct ? String(acct.id) : "{id}",
     tgId: "1234567890",
   };
-  return template.replace(
+  const expanded = template.replace(
     /\{(\w+)(?::(\d+))?\}/g,
     (match, type: string, lenStr?: string) => {
       if (type in ctx) return ctx[type];
@@ -2847,6 +2907,8 @@ function previewEmailTag(template: string): string {
       return match;
     },
   );
+  // Telegram rejects numeric tags, so digits are mapped to letters (0=a..9=j).
+  return expanded.replace(/[0-9]/g, (d) => String.fromCharCode(97 + Number(d)));
 }
 
 // Preview of the full plus-address the accounts will receive.
@@ -2942,8 +3004,11 @@ async function startBulkEmail() {
     message: "",
   }));
   bulkEmailRunning.value = true;
+  const gapMs = Math.max(0, bulkEmailForm.gapSeconds) * 1000;
+  const items = bulkEmailProgress.value;
   // Sequential: each account waits for its own code to arrive in Gmail
-  for (const item of bulkEmailProgress.value) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     item.status = "working";
     try {
       const r = await accountsApi.autoLoginEmail(
@@ -2961,6 +3026,8 @@ async function startBulkEmail() {
         e?.message ??
         t("accounts.bulkEmail.errors.failed");
     }
+    // Space out requests to avoid Telegram flood limits (skip after the last).
+    if (i < items.length - 1 && gapMs > 0) await sleep(gapMs);
   }
   bulkEmailRunning.value = false;
   bulkEmailDoneAll.value = true;
@@ -2999,6 +3066,7 @@ const bulkCredForm = reactive({
   removeDevices: false,
   removePasskeys: false,
   notesAppend: "",
+  gapSeconds: 30,
 });
 
 const bulkCredDoneCount = computed(
@@ -3052,8 +3120,11 @@ async function startBulkCred() {
     message: "",
   }));
   bulkCredRunning.value = true;
+  const gapMs = Math.max(0, bulkCredForm.gapSeconds) * 1000;
+  const items = bulkCredProgress.value;
   // Sequential to avoid Telegram flood limits
-  for (const item of bulkCredProgress.value) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     item.status = "working";
     try {
       await accountsApi.updateTwoFa(item.id, {
@@ -3105,6 +3176,7 @@ async function startBulkCred() {
         e?.message ??
         t("accounts.bulkCred.errors.failed");
     }
+    if (i < items.length - 1 && gapMs > 0) await sleep(gapMs);
   }
   bulkCredRunning.value = false;
   bulkCredDoneAll.value = true;
@@ -3117,6 +3189,7 @@ const bulkPasskeyRunning = ref(false);
 const bulkPasskeyDoneAll = ref(false);
 const bulkPasskeyTargets = ref<Account[]>([]);
 const bulkPasskeyProgress = ref<BulkCredItem[]>([]);
+const bulkPasskeyGapSeconds = ref(30);
 
 const bulkPasskeyDoneCount = computed(
   () =>
@@ -3149,8 +3222,11 @@ async function startBulkPasskey() {
     message: "",
   }));
   bulkPasskeyRunning.value = true;
+  const gapMs = Math.max(0, bulkPasskeyGapSeconds.value) * 1000;
+  const items = bulkPasskeyProgress.value;
   // Sequential to avoid Telegram flood limits.
-  for (const item of bulkPasskeyProgress.value) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     item.status = "working";
     try {
       const { storedIds } = await accountsApi.getPasskeys(item.id);
@@ -3176,6 +3252,8 @@ async function startBulkPasskey() {
         e?.message ??
         t("accounts.bulkCred.errors.failed");
     }
+    // Space out requests to avoid Telegram flood limits (skip after the last).
+    if (i < items.length - 1 && gapMs > 0) await sleep(gapMs);
   }
   bulkPasskeyRunning.value = false;
   bulkPasskeyDoneAll.value = true;
@@ -3197,6 +3275,7 @@ const bulkCleanRunning = ref(false);
 const bulkCleanDoneAll = ref(false);
 const bulkCleanTargets = ref<Account[]>([]);
 const bulkCleanProgress = ref<BulkCleanItem[]>([]);
+const bulkCleanGapSeconds = ref(30);
 
 const bulkCleanDoneCount = computed(
   () =>
@@ -3231,8 +3310,11 @@ async function startBulkClean() {
     message: "",
   }));
   bulkCleanRunning.value = true;
+  const gapMs = Math.max(0, bulkCleanGapSeconds.value) * 1000;
+  const items = bulkCleanProgress.value;
   // Sequential to avoid Telegram flood limits, one account at a time
-  for (const item of bulkCleanProgress.value) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     item.status = "cleaning";
     try {
       const r = await tgClientApi.cleanAccount(item.id);
@@ -3251,6 +3333,7 @@ async function startBulkClean() {
       item.message =
         e?.response?.data?.error ?? e?.message ?? t("tgc.clean.failed");
     }
+    if (i < items.length - 1 && gapMs > 0) await sleep(gapMs);
   }
   bulkCleanRunning.value = false;
   bulkCleanDoneAll.value = true;
@@ -4538,6 +4621,17 @@ tr.drag-over td {
   color: #666;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+
+.spam-gap-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #666;
+}
+.spam-gap-inline .form-input {
+  width: 64px;
 }
 
 .bulk-add-item-status {
