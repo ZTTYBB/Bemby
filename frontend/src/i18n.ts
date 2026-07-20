@@ -305,6 +305,7 @@ const zh = {
         twoFaChanged: "已修改 2FA",
         devicesRemoved: "已移除其他设备",
         passkeysRemoved: "已移除通行密钥 ({n})",
+        passkeyReadded: "已重新添加 Bemby 通行密钥",
         notesUpdated: "已更新备注",
       },
       errors: {
@@ -1220,6 +1221,7 @@ const en: typeof zh = {
         twoFaChanged: "2FA changed",
         devicesRemoved: "other devices removed",
         passkeysRemoved: "passkeys removed ({n})",
+        passkeyReadded: "Bemby passkey re-added",
         notesUpdated: "notes updated",
       },
       errors: {

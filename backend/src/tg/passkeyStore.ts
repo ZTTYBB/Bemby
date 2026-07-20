@@ -59,6 +59,23 @@ export function deletePasskeySecret(telegramPasskeyId: string): void {
   }
 }
 
+// Drop stored secrets for an account whose passkey no longer exists on Telegram.
+export function pruneAccountPasskeySecrets(
+  accountId: number,
+  liveIds: string[],
+): void {
+  const live = new Set(liveIds);
+  const store = readStore();
+  let changed = false;
+  for (const [id, s] of Object.entries(store)) {
+    if (s.accountId === accountId && !live.has(id)) {
+      delete store[id];
+      changed = true;
+    }
+  }
+  if (changed) writeStore(store);
+}
+
 // Telegram passkey ids that we hold the private key for (for a given account).
 export function storedPasskeyIdsForAccount(accountId: number): string[] {
   return accountPasskeySecrets(accountId).map((s) => s.telegramPasskeyId);

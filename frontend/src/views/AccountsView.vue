@@ -3060,24 +3060,35 @@ async function startBulkCred() {
         currentPassword: bulkCredForm.currentPassword || undefined,
         newPassword: bulkCredForm.newPassword,
       });
+      const hadPasskey = !!accounts.value.find((a) => a.id === item.id)
+        ?.hasPasskey;
       const parts = [t("accounts.bulkCred.result.twoFaChanged")];
       if (bulkCredForm.removeDevices) {
         await accountsApi.terminateOtherSessions(item.id);
         parts.push(t("accounts.bulkCred.result.devicesRemoved"));
       }
-      if (bulkCredForm.removePasskeys) {
+      if (bulkCredForm.removePasskeys || hadPasskey) {
+        // storedIds is server-pruned to passkeys that still exist on Telegram.
         const { passkeys, storedIds } = await accountsApi.getPasskeys(item.id);
-        // Keep passkeys Bemby manages; remove all others.
-        const toRemove = passkeys.filter((pk) => !storedIds.includes(pk.id));
-        for (const pk of toRemove) {
-          await accountsApi.deletePasskey(item.id, pk.id);
+        if (bulkCredForm.removePasskeys) {
+          // Keep passkeys Bemby manages; remove all others.
+          const toRemove = passkeys.filter((pk) => !storedIds.includes(pk.id));
+          for (const pk of toRemove) {
+            await accountsApi.deletePasskey(item.id, pk.id);
+          }
+          parts.push(
+            t("accounts.bulkCred.result.passkeysRemoved").replace(
+              "{n}",
+              String(toRemove.length),
+            ),
+          );
         }
-        parts.push(
-          t("accounts.bulkCred.result.passkeysRemoved").replace(
-            "{n}",
-            String(toRemove.length),
-          ),
-        );
+        // A 2FA password change drops passkeys on Telegram's side; re-add Bemby's
+        // so it survives the credential change.
+        if (hadPasskey && storedIds.length === 0) {
+          await accountsApi.registerPasskey(item.id);
+          parts.push(t("accounts.bulkCred.result.passkeyReadded"));
+        }
       }
       if (append) {
         const acct = accounts.value.find((a) => a.id === item.id);

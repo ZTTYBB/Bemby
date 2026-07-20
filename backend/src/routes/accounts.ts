@@ -49,6 +49,7 @@ import {
   accountPasskeySecrets,
   setAccountPasskeyDc,
   accountHasUsablePasskey,
+  pruneAccountPasskeySecrets,
 } from "../tg/passkeyStore";
 import { refreshScheduler } from "../scheduler";
 
@@ -1139,9 +1140,14 @@ router.get("/:id/passkeys", async (req, res) => {
     const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
     const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
     const passkeys = await getPasskeys(apiId, apiHash, account.session_string, proxy, deviceParams);
+    // Telegram is authoritative: drop stored keys for passkeys that no longer
+    // exist there (e.g. removed when the 2FA password was changed), so storedIds
+    // / hasPasskey stay accurate.
+    pruneAccountPasskeySecrets(account.id, passkeys.map((p) => p.id));
     res.json({ passkeys, storedIds: storedPasskeyIdsForAccount(account.id) });
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
+    if (rpcBadRequest(res, err, "passkeys/list")) return;
     internalError(res, err, "passkeys/list");
   }
 });
@@ -1180,6 +1186,7 @@ router.post("/:id/passkeys", async (req, res) => {
     res.json({ passkey: result.passkey });
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
+    if (rpcBadRequest(res, err, "passkeys/register")) return;
     internalError(res, err, "passkeys/register");
   }
 });
@@ -1211,6 +1218,7 @@ router.post("/:id/passkeys/:passkeyId/verify", async (req, res) => {
     );
     res.json(result);
   } catch (err: any) {
+    if (rpcBadRequest(res, err, "passkeys/verify")) return;
     internalError(res, err, "passkeys/verify");
   }
 });
@@ -1237,6 +1245,7 @@ router.delete("/:id/passkeys/:passkeyId", async (req, res) => {
     res.json({ ok });
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
+    if (rpcBadRequest(res, err, "passkeys/delete")) return;
     internalError(res, err, "passkeys/delete");
   }
 });
