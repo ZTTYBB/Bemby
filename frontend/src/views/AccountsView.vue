@@ -58,9 +58,37 @@
         <button class="btn btn-secondary" @click="openImport">
           <i class="fa-solid fa-file-import"></i> {{ t("accounts.importBtn") }}
         </button>
-        <button class="btn btn-secondary" @click="openBulkAdd">
+        <button
+          v-if="bulkMgmtEnabled"
+          class="btn btn-secondary"
+          @click="openBulkAdd"
+        >
           <i class="fa-solid fa-layer-group"></i>
           {{ t("accounts.bulkAdd.btn") }}
+        </button>
+        <button
+          v-if="bulkMgmtEnabled && selectedIds.size > 0"
+          class="btn btn-secondary"
+          @click="openBulkCred"
+        >
+          <i class="fa-solid fa-user-lock"></i>
+          {{ t("accounts.bulkCred.btn") }} ({{ selectedIds.size }})
+        </button>
+        <button
+          v-if="bulkMgmtEnabled && selectedIds.size > 0"
+          class="btn btn-secondary"
+          @click="openBulkEmail"
+        >
+          <i class="fa-solid fa-envelope"></i>
+          {{ t("accounts.bulkEmail.btn") }} ({{ selectedIds.size }})
+        </button>
+        <button
+          v-if="bulkMgmtEnabled && selectedIds.size > 0"
+          class="btn btn-danger"
+          @click="openBulkClean"
+        >
+          <i class="fa-solid fa-broom"></i>
+          {{ t("accounts.bulkClean.btn") }} ({{ selectedIds.size }})
         </button>
         <button class="btn btn-primary" @click="openAdd">
           <i class="fa-solid fa-plus"></i> {{ t("accounts.addBtn") }}
@@ -1323,6 +1351,472 @@
       </div>
     </div>
 
+    <!-- Bulk change login email modal -->
+    <div v-if="showBulkEmail" class="modal-backdrop">
+      <div class="modal modal-lg">
+        <h3 class="modal-title">
+          <i class="fa-solid fa-envelope" style="margin-right: 8px"></i>
+          {{ t("accounts.bulkEmail.title") }}
+        </h3>
+
+        <!-- Config step -->
+        <template v-if="!bulkEmailRunning && !bulkEmailDoneAll">
+          <div v-if="!bulkEmailTargets.length" class="warn-box">
+            {{ t("accounts.bulkEmail.noTargets") }}
+          </div>
+          <template v-else>
+            <p class="bulk-add-hint">
+              {{
+                t("accounts.bulkEmail.intro").replace(
+                  "{n}",
+                  String(bulkEmailTargets.length),
+                )
+              }}
+            </p>
+            <div v-if="bulkEmailError" class="error-msg">
+              {{ bulkEmailError }}
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{
+                t("accounts.bulkEmail.gmailLabel")
+              }}</label>
+              <input
+                v-model.trim="bulkEmailForm.gmail"
+                class="form-input"
+                placeholder="myemail@gmail.com"
+                autocomplete="off"
+              />
+              <div class="form-hint">
+                {{ t("accounts.bulkEmail.gmailHint") }}
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{
+                t("accounts.bulkEmail.appPasswordLabel")
+              }}</label>
+              <input
+                v-model="bulkEmailForm.appPassword"
+                type="password"
+                class="form-input"
+                autocomplete="off"
+              />
+              <div class="form-hint">
+                {{ t("accounts.bulkEmail.appPasswordHint") }}
+              </div>
+            </div>
+            <div class="bulk-email-test">
+              <span v-if="bulkEmailTestOk === true" class="bulk-email-test-ok">
+                <i class="fa-solid fa-circle-check"></i> {{ bulkEmailTestMsg }}
+              </span>
+              <span
+                v-else-if="bulkEmailTestOk === false"
+                class="bulk-email-test-fail"
+              >
+                <i class="fa-solid fa-circle-xmark"></i> {{ bulkEmailTestMsg }}
+              </span>
+              <button
+                class="btn btn-secondary btn-sm"
+                :disabled="bulkEmailTesting"
+                @click="testBulkEmailGmail"
+              >
+                <i class="fa-solid fa-plug-circle-check"></i>
+                {{
+                  bulkEmailTesting
+                    ? t("accounts.bulkEmail.testing")
+                    : t("accounts.bulkEmail.testBtn")
+                }}
+              </button>
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{
+                t("accounts.bulkEmail.tagLabel")
+              }}</label>
+              <input
+                v-model.trim="bulkEmailForm.tag"
+                class="form-input bulk-add-mono"
+                placeholder="{phoneNum}"
+              />
+              <div class="form-hint">{{ t("accounts.bulkEmail.tagHint") }}</div>
+              <div class="bulk-email-preview">
+                {{ t("accounts.bulkEmail.previewLabel") }}:
+                <span>{{ bulkEmailExample }}</span>
+              </div>
+            </div>
+            <div class="bulk-clean-accounts">
+              <div
+                v-for="a in bulkEmailTargets"
+                :key="a.id"
+                class="bulk-clean-account"
+              >
+                <strong>{{ a.name }}</strong>
+                <span class="bulk-add-phone">{{ a.phoneNumber }}</span>
+              </div>
+            </div>
+          </template>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="closeBulkEmail">
+              <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+            </button>
+            <button
+              v-if="bulkEmailTargets.length"
+              class="btn btn-primary"
+              :disabled="bulkEmailTestOk !== true"
+              :title="
+                bulkEmailTestOk !== true
+                  ? t('accounts.bulkEmail.testRequired')
+                  : ''
+              "
+              @click="startBulkEmail"
+            >
+              <i class="fa-solid fa-envelope"></i>
+              {{ t("accounts.bulkEmail.start") }}
+            </button>
+          </div>
+        </template>
+
+        <!-- Progress step -->
+        <template v-else>
+          <div class="bulk-add-progress-head">
+            <span>
+              {{ t("accounts.bulkEmail.progressLabel") }}:
+              {{ bulkEmailDoneCount }} / {{ bulkEmailTargets.length }}
+            </span>
+            <span v-if="bulkEmailRunning" class="bulk-add-running">
+              <i class="fa-solid fa-spinner fa-spin"></i>
+              {{ t("accounts.bulkEmail.running") }}
+            </span>
+            <span v-else class="bulk-add-finished">
+              <i class="fa-solid fa-circle-check"></i>
+              {{ t("accounts.bulkAdd.finished") }}
+            </span>
+          </div>
+          <div class="bulk-add-list">
+            <div
+              v-for="item in bulkEmailProgress"
+              :key="item.id"
+              class="bulk-add-item"
+            >
+              <span
+                class="bulk-add-status-dot"
+                :class="`status-${item.status}`"
+              ></span>
+              <div class="bulk-add-item-body">
+                <div class="bulk-add-item-top">
+                  <strong>{{ item.name }}</strong>
+                  <span class="bulk-add-item-status">
+                    {{ t(`accounts.bulkEmail.status.${item.status}`) }}
+                  </span>
+                </div>
+                <div
+                  v-if="item.message"
+                  class="bulk-add-item-msg"
+                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
+                >
+                  {{ item.message }}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button
+              class="btn btn-primary"
+              :disabled="bulkEmailRunning"
+              @click="closeBulkEmail"
+            >
+              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Bulk change credential modal -->
+    <div v-if="showBulkCred" class="modal-backdrop">
+      <div class="modal modal-lg">
+        <h3 class="modal-title">
+          <i class="fa-solid fa-user-lock" style="margin-right: 8px"></i>
+          {{ t("accounts.bulkCred.title") }}
+        </h3>
+
+        <!-- Config step -->
+        <template v-if="!bulkCredRunning && !bulkCredDoneAll">
+          <div v-if="!bulkCredTargets.length" class="warn-box">
+            {{ t("accounts.bulkCred.noTargets") }}
+          </div>
+          <template v-else>
+            <p class="bulk-add-hint">
+              {{
+                t("accounts.bulkCred.intro").replace(
+                  "{n}",
+                  String(bulkCredTargets.length),
+                )
+              }}
+            </p>
+            <div v-if="bulkCredError" class="error-msg">{{ bulkCredError }}</div>
+            <div class="form-section-label" style="margin-bottom: 12px">
+              {{ t("accounts.bulkCred.twoFaSection") }}
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{
+                t("accounts.bulkCred.currentPassword")
+              }}</label>
+              <p class="form-hint">
+                {{ t("accounts.bulkCred.currentPasswordHint") }}
+              </p>
+              <input
+                v-model="bulkCredForm.currentPassword"
+                type="password"
+                class="form-input"
+                autocomplete="current-password"
+              />
+            </div>
+            <div class="bulk-add-options-row">
+              <div class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkCred.newPassword")
+                }}</label>
+                <input
+                  v-model="bulkCredForm.newPassword"
+                  type="password"
+                  class="form-input"
+                  autocomplete="new-password"
+                />
+              </div>
+              <div class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkCred.repeatPassword")
+                }}</label>
+                <input
+                  v-model="bulkCredForm.repeatPassword"
+                  type="password"
+                  class="form-input"
+                  autocomplete="new-password"
+                />
+              </div>
+            </div>
+            <label class="form-check" style="margin-top: 4px">
+              <input type="checkbox" v-model="bulkCredForm.removeDevices" />
+              <span>{{ t("accounts.bulkCred.removeDevices") }}</span>
+            </label>
+            <label class="form-check" style="margin-top: 10px">
+              <input type="checkbox" v-model="bulkCredForm.removePasskeys" />
+              <span>{{ t("accounts.bulkCred.removePasskeys") }}</span>
+            </label>
+            <div class="form-group" style="margin-top: 14px">
+              <label class="form-label">{{
+                t("accounts.bulkCred.notesAppend")
+              }}</label>
+              <input
+                v-model="bulkCredForm.notesAppend"
+                class="form-input"
+                :placeholder="t('accounts.bulkCred.notesAppendPlaceholder')"
+              />
+              <div class="form-hint">
+                {{ t("accounts.bulkCred.notesAppendHint") }}
+              </div>
+            </div>
+            <div class="bulk-clean-accounts">
+              <div
+                v-for="a in bulkCredTargets"
+                :key="a.id"
+                class="bulk-clean-account"
+              >
+                <strong>{{ a.name }}</strong>
+                <span class="bulk-add-phone">{{ a.phoneNumber }}</span>
+              </div>
+            </div>
+          </template>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="closeBulkCred">
+              <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+            </button>
+            <button
+              v-if="bulkCredTargets.length"
+              class="btn btn-primary"
+              @click="startBulkCred"
+            >
+              <i class="fa-solid fa-user-lock"></i>
+              {{ t("accounts.bulkCred.start") }}
+            </button>
+          </div>
+        </template>
+
+        <!-- Progress step -->
+        <template v-else>
+          <div class="bulk-add-progress-head">
+            <span>
+              {{ t("accounts.bulkCred.progressLabel") }}:
+              {{ bulkCredDoneCount }} / {{ bulkCredTargets.length }}
+            </span>
+            <span v-if="bulkCredRunning" class="bulk-add-running">
+              <i class="fa-solid fa-spinner fa-spin"></i>
+              {{ t("accounts.bulkCred.running") }}
+            </span>
+            <span v-else class="bulk-add-finished">
+              <i class="fa-solid fa-circle-check"></i>
+              {{ t("accounts.bulkAdd.finished") }}
+            </span>
+          </div>
+          <div class="bulk-add-list">
+            <div
+              v-for="item in bulkCredProgress"
+              :key="item.id"
+              class="bulk-add-item"
+            >
+              <span
+                class="bulk-add-status-dot"
+                :class="`status-${item.status}`"
+              ></span>
+              <div class="bulk-add-item-body">
+                <div class="bulk-add-item-top">
+                  <strong>{{ item.name }}</strong>
+                  <span class="bulk-add-item-status">
+                    {{ t(`accounts.bulkCred.status.${item.status}`) }}
+                  </span>
+                </div>
+                <div
+                  v-if="item.message"
+                  class="bulk-add-item-msg"
+                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
+                >
+                  {{ item.message }}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button
+              class="btn btn-primary"
+              :disabled="bulkCredRunning"
+              @click="closeBulkCred"
+            >
+              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Bulk clean modal -->
+    <div v-if="showBulkClean" class="modal-backdrop">
+      <div class="modal modal-lg">
+        <h3 class="modal-title">
+          <i
+            class="fa-solid fa-broom"
+            style="margin-right: 8px; color: #ff4d4f"
+          ></i>
+          {{ t("accounts.bulkClean.title") }}
+        </h3>
+
+        <!-- Confirm step -->
+        <template v-if="!bulkCleanRunning && !bulkCleanDoneAll">
+          <div v-if="!bulkCleanTargets.length" class="warn-box">
+            {{ t("accounts.bulkClean.noTargets") }}
+          </div>
+          <template v-else>
+            <div class="warn-box">
+              {{
+                t("accounts.bulkClean.intro").replace(
+                  "{n}",
+                  String(bulkCleanTargets.length),
+                )
+              }}
+              <ul class="tgc-clean-list">
+                <li>{{ t("tgc.clean.actionLeaveGroups") }}</li>
+                <li>{{ t("tgc.clean.actionLeaveChannels") }}</li>
+                <li>{{ t("tgc.clean.actionDeleteChats") }}</li>
+                <li>{{ t("tgc.clean.actionRemoveContacts") }}</li>
+                <li>{{ t("tgc.clean.actionRemoveFolders") }}</li>
+              </ul>
+              {{ t("tgc.clean.keptNote") }}
+            </div>
+            <div class="bulk-clean-accounts">
+              <div
+                v-for="a in bulkCleanTargets"
+                :key="a.id"
+                class="bulk-clean-account"
+              >
+                <strong>{{ a.name }}</strong>
+                <span class="bulk-add-phone">{{ a.phoneNumber }}</span>
+              </div>
+            </div>
+            <label class="form-check" style="margin-top: 12px">
+              <input type="checkbox" v-model="bulkCleanConfirmChecked" />
+              <span>{{ t("accounts.bulkClean.confirmCheck") }}</span>
+            </label>
+          </template>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="closeBulkClean">
+              <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+            </button>
+            <button
+              v-if="bulkCleanTargets.length"
+              class="btn btn-danger"
+              :disabled="!bulkCleanConfirmChecked"
+              @click="startBulkClean"
+            >
+              <i class="fa-solid fa-broom"></i>
+              {{ t("accounts.bulkClean.start") }}
+            </button>
+          </div>
+        </template>
+
+        <!-- Progress step -->
+        <template v-else>
+          <div class="bulk-add-progress-head">
+            <span>
+              {{ t("accounts.bulkClean.progressLabel") }}:
+              {{ bulkCleanDoneCount }} / {{ bulkCleanTargets.length }}
+            </span>
+            <span v-if="bulkCleanRunning" class="bulk-add-running">
+              <i class="fa-solid fa-spinner fa-spin"></i>
+              {{ t("accounts.bulkClean.running") }}
+            </span>
+            <span v-else class="bulk-add-finished">
+              <i class="fa-solid fa-circle-check"></i>
+              {{ t("accounts.bulkAdd.finished") }}
+            </span>
+          </div>
+          <div class="bulk-add-list">
+            <div
+              v-for="item in bulkCleanProgress"
+              :key="item.id"
+              class="bulk-add-item"
+            >
+              <span
+                class="bulk-add-status-dot"
+                :class="`status-${item.status}`"
+              ></span>
+              <div class="bulk-add-item-body">
+                <div class="bulk-add-item-top">
+                  <strong>{{ item.name }}</strong>
+                  <span class="bulk-add-item-status">
+                    {{ t(`accounts.bulkClean.status.${item.status}`) }}
+                  </span>
+                </div>
+                <div
+                  v-if="item.message"
+                  class="bulk-add-item-msg"
+                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
+                >
+                  {{ item.message }}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button
+              class="btn btn-primary"
+              :disabled="bulkCleanRunning"
+              @click="closeBulkClean"
+            >
+              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <!-- Auth modal -->
     <div v-if="showAuth" class="modal-backdrop">
       <div class="modal">
@@ -1511,6 +2005,7 @@ import { ref, reactive, computed, onMounted, watch } from "vue";
 import {
   accountsApi,
   settingsApi,
+  tgClientApi,
   type Account,
   type Proxy,
   type TgAppClient,
@@ -1587,7 +2082,12 @@ const settings = ref<{
   tg_client_mode?: string;
   default_tg_api_id?: string;
   default_tg_api_hash?: string;
+  bulk_account_management?: string;
 } | null>(null);
+
+const bulkMgmtEnabled = computed(
+  () => settings.value?.bulk_account_management === "true",
+);
 
 const hasGlobalTgCreds = computed(
   () =>
@@ -2111,6 +2611,402 @@ async function cancelBulk() {
   }
 }
 
+// ── Bulk change login email state ─────────────────────────────────────────────
+type BulkEmailStatus = "pending" | "working" | "done" | "failed";
+type BulkEmailItem = {
+  id: number;
+  name: string;
+  status: BulkEmailStatus;
+  message: string;
+};
+
+const showBulkEmail = ref(false);
+const bulkEmailRunning = ref(false);
+const bulkEmailDoneAll = ref(false);
+const bulkEmailError = ref("");
+const bulkEmailTargets = ref<Account[]>([]);
+const bulkEmailProgress = ref<BulkEmailItem[]>([]);
+const bulkEmailForm = reactive({
+  gmail: "",
+  appPassword: "",
+  tag: "{phoneNum}",
+});
+const bulkEmailTesting = ref(false);
+const bulkEmailTestOk = ref<boolean | null>(null);
+const bulkEmailTestMsg = ref("");
+
+const bulkEmailDoneCount = computed(
+  () =>
+    bulkEmailProgress.value.filter(
+      (i) => i.status === "done" || i.status === "failed",
+    ).length,
+);
+
+// Deterministic sample alphabets so the preview reads as a concrete example
+// without flickering on every render.
+const SAMPLE_ALPHABETS: Record<string, string> = {
+  word: "abcdefghijklmnopqrstuvwxyz",
+  WORD: "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+  num: "1234567890",
+  alpha: "a1b2c3d4e5f6g7h8i9j0",
+};
+
+function sampleToken(alphabet: string, n: number): string {
+  let s = "";
+  for (let i = 0; i < n; i++) s += alphabet[i % alphabet.length];
+  return s;
+}
+
+// Client-side preview of the expanded tag as an example: named tokens use the
+// first target's data (a sample Telegram id for {tgId}); random tokens show a
+// representative sample value.
+function previewEmailTag(template: string): string {
+  const acct = bulkEmailTargets.value[0];
+  const ctx: Record<string, string> = {
+    phoneNum: acct?.phoneNumber?.replace(/\D/g, "") || "{phoneNum}",
+    phone: acct?.phoneNumber?.replace(/\D/g, "") || "{phone}",
+    id: acct ? String(acct.id) : "{id}",
+    tgId: "1234567890",
+  };
+  return template.replace(
+    /\{(\w+)(?::(\d+))?\}/g,
+    (match, type: string, lenStr?: string) => {
+      if (type in ctx) return ctx[type];
+      if (type in SAMPLE_ALPHABETS)
+        return sampleToken(
+          SAMPLE_ALPHABETS[type],
+          lenStr ? parseInt(lenStr, 10) : RANDOM_TOKEN_LENS[type],
+        );
+      if (type === "uuid") return "3f9a2c7e-1b4d-4e8a-9c2f-6d5b8a1e0f37";
+      return match;
+    },
+  );
+}
+
+// Preview of the full plus-address the accounts will receive.
+const bulkEmailExample = computed(() => {
+  const g = bulkEmailForm.gmail || "myemail@gmail.com";
+  const at = g.lastIndexOf("@");
+  const local = at === -1 ? g : g.slice(0, at);
+  const domain = at === -1 ? "gmail.com" : g.slice(at + 1);
+  const tag = previewEmailTag(bulkEmailForm.tag || "{phoneNum}");
+  return `${local}+${tag}@${domain}`;
+});
+
+function openBulkEmail() {
+  bulkEmailTargets.value = accounts.value.filter(
+    (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
+  );
+  bulkEmailError.value = "";
+  bulkEmailRunning.value = false;
+  bulkEmailDoneAll.value = false;
+  bulkEmailProgress.value = [];
+  bulkEmailForm.gmail = "";
+  bulkEmailForm.appPassword = "";
+  bulkEmailForm.tag = "{phoneNum}";
+  bulkEmailTesting.value = false;
+  bulkEmailTestOk.value = null;
+  bulkEmailTestMsg.value = "";
+  showBulkEmail.value = true;
+}
+
+function closeBulkEmail() {
+  if (bulkEmailRunning.value) return;
+  showBulkEmail.value = false;
+}
+
+async function testBulkEmailGmail() {
+  bulkEmailError.value = "";
+  bulkEmailTestOk.value = null;
+  bulkEmailTestMsg.value = "";
+  if (!bulkEmailForm.gmail.includes("@")) {
+    bulkEmailError.value = t("accounts.bulkEmail.errors.gmailRequired");
+    return;
+  }
+  if (!bulkEmailForm.appPassword) {
+    bulkEmailError.value = t("accounts.bulkEmail.errors.appPasswordRequired");
+    return;
+  }
+  bulkEmailTesting.value = true;
+  try {
+    const r = await accountsApi.testGmail(
+      bulkEmailForm.gmail,
+      bulkEmailForm.appPassword,
+    );
+    bulkEmailTestOk.value = r.ok;
+    bulkEmailTestMsg.value = r.ok
+      ? t("accounts.bulkEmail.testOk")
+      : r.error || t("accounts.bulkEmail.testFailed");
+  } catch (e: any) {
+    bulkEmailTestOk.value = false;
+    bulkEmailTestMsg.value =
+      e?.response?.data?.error ??
+      e?.message ??
+      t("accounts.bulkEmail.testFailed");
+  } finally {
+    bulkEmailTesting.value = false;
+  }
+}
+
+async function startBulkEmail() {
+  if (bulkEmailRunning.value) return;
+  bulkEmailError.value = "";
+  if (!bulkEmailForm.gmail.includes("@")) {
+    bulkEmailError.value = t("accounts.bulkEmail.errors.gmailRequired");
+    return;
+  }
+  if (!bulkEmailForm.appPassword) {
+    bulkEmailError.value = t("accounts.bulkEmail.errors.appPasswordRequired");
+    return;
+  }
+  if (bulkEmailTestOk.value !== true) {
+    bulkEmailError.value = t("accounts.bulkEmail.testRequired");
+    return;
+  }
+  if (!bulkEmailForm.tag.trim()) {
+    bulkEmailError.value = t("accounts.bulkEmail.errors.tagRequired");
+    return;
+  }
+  if (!bulkEmailTargets.value.length) return;
+
+  bulkEmailProgress.value = bulkEmailTargets.value.map((a) => ({
+    id: a.id,
+    name: a.name,
+    status: "pending",
+    message: "",
+  }));
+  bulkEmailRunning.value = true;
+  // Sequential: each account waits for its own code to arrive in Gmail
+  for (const item of bulkEmailProgress.value) {
+    item.status = "working";
+    try {
+      const r = await accountsApi.autoLoginEmail(
+        item.id,
+        bulkEmailForm.gmail,
+        bulkEmailForm.appPassword,
+        bulkEmailForm.tag,
+      );
+      item.status = "done";
+      item.message = r.email;
+    } catch (e: any) {
+      item.status = "failed";
+      item.message =
+        e?.response?.data?.error ??
+        e?.message ??
+        t("accounts.bulkEmail.errors.failed");
+    }
+  }
+  bulkEmailRunning.value = false;
+  bulkEmailDoneAll.value = true;
+  await load();
+}
+
+// Editing the credentials invalidates a prior successful test, forcing a re-test
+// before Start becomes available again.
+watch(
+  () => [bulkEmailForm.gmail, bulkEmailForm.appPassword],
+  () => {
+    bulkEmailTestOk.value = null;
+    bulkEmailTestMsg.value = "";
+  },
+);
+
+// ── Bulk change credential state ──────────────────────────────────────────────
+type BulkCredStatus = "pending" | "working" | "done" | "failed";
+type BulkCredItem = {
+  id: number;
+  name: string;
+  status: BulkCredStatus;
+  message: string;
+};
+
+const showBulkCred = ref(false);
+const bulkCredRunning = ref(false);
+const bulkCredDoneAll = ref(false);
+const bulkCredError = ref("");
+const bulkCredTargets = ref<Account[]>([]);
+const bulkCredProgress = ref<BulkCredItem[]>([]);
+const bulkCredForm = reactive({
+  currentPassword: "",
+  newPassword: "",
+  repeatPassword: "",
+  removeDevices: false,
+  removePasskeys: false,
+  notesAppend: "",
+});
+
+const bulkCredDoneCount = computed(
+  () =>
+    bulkCredProgress.value.filter(
+      (i) => i.status === "done" || i.status === "failed",
+    ).length,
+);
+
+// 2FA / device / passkey changes need a live (authenticated) session.
+function openBulkCred() {
+  bulkCredTargets.value = accounts.value.filter(
+    (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
+  );
+  bulkCredError.value = "";
+  bulkCredRunning.value = false;
+  bulkCredDoneAll.value = false;
+  bulkCredProgress.value = [];
+  bulkCredForm.currentPassword = "";
+  bulkCredForm.newPassword = "";
+  bulkCredForm.repeatPassword = "";
+  bulkCredForm.removeDevices = false;
+  bulkCredForm.removePasskeys = false;
+  bulkCredForm.notesAppend = "";
+  showBulkCred.value = true;
+}
+
+function closeBulkCred() {
+  if (bulkCredRunning.value) return;
+  showBulkCred.value = false;
+}
+
+async function startBulkCred() {
+  if (bulkCredRunning.value) return;
+  bulkCredError.value = "";
+  if (!bulkCredForm.newPassword) {
+    bulkCredError.value = t("accounts.bulkCred.errors.newPasswordRequired");
+    return;
+  }
+  if (bulkCredForm.newPassword !== bulkCredForm.repeatPassword) {
+    bulkCredError.value = t("accounts.bulkCred.errors.passwordMismatch");
+    return;
+  }
+  if (!bulkCredTargets.value.length) return;
+
+  const append = bulkCredForm.notesAppend.trim();
+  bulkCredProgress.value = bulkCredTargets.value.map((a) => ({
+    id: a.id,
+    name: a.name,
+    status: "pending",
+    message: "",
+  }));
+  bulkCredRunning.value = true;
+  // Sequential to avoid Telegram flood limits
+  for (const item of bulkCredProgress.value) {
+    item.status = "working";
+    try {
+      await accountsApi.updateTwoFa(item.id, {
+        currentPassword: bulkCredForm.currentPassword || undefined,
+        newPassword: bulkCredForm.newPassword,
+      });
+      const parts = [t("accounts.bulkCred.result.twoFaChanged")];
+      if (bulkCredForm.removeDevices) {
+        await accountsApi.terminateOtherSessions(item.id);
+        parts.push(t("accounts.bulkCred.result.devicesRemoved"));
+      }
+      if (bulkCredForm.removePasskeys) {
+        const passkeys = await accountsApi.getPasskeys(item.id);
+        for (const pk of passkeys) {
+          await accountsApi.deletePasskey(item.id, pk.id);
+        }
+        parts.push(
+          t("accounts.bulkCred.result.passkeysRemoved").replace(
+            "{n}",
+            String(passkeys.length),
+          ),
+        );
+      }
+      if (append) {
+        const acct = accounts.value.find((a) => a.id === item.id);
+        const base = acct?.notes ? `${acct.notes}\n` : "";
+        await accountsApi.update(item.id, { notes: base + append });
+        parts.push(t("accounts.bulkCred.result.notesUpdated"));
+      }
+      item.status = "done";
+      item.message = parts.join(", ");
+    } catch (e: any) {
+      item.status = "failed";
+      item.message =
+        e?.response?.data?.error ??
+        e?.message ??
+        t("accounts.bulkCred.errors.failed");
+    }
+  }
+  bulkCredRunning.value = false;
+  bulkCredDoneAll.value = true;
+  await load();
+}
+
+// ── Bulk clean state ──────────────────────────────────────────────────────────
+type BulkCleanStatus = "pending" | "cleaning" | "done" | "failed";
+type BulkCleanItem = {
+  id: number;
+  name: string;
+  status: BulkCleanStatus;
+  message: string;
+};
+
+const showBulkClean = ref(false);
+const bulkCleanConfirmChecked = ref(false);
+const bulkCleanRunning = ref(false);
+const bulkCleanDoneAll = ref(false);
+const bulkCleanTargets = ref<Account[]>([]);
+const bulkCleanProgress = ref<BulkCleanItem[]>([]);
+
+const bulkCleanDoneCount = computed(
+  () =>
+    bulkCleanProgress.value.filter(
+      (i) => i.status === "done" || i.status === "failed",
+    ).length,
+);
+
+// Clean only applies to accounts with a live (authenticated) session.
+function openBulkClean() {
+  bulkCleanTargets.value = accounts.value.filter(
+    (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
+  );
+  bulkCleanConfirmChecked.value = false;
+  bulkCleanRunning.value = false;
+  bulkCleanDoneAll.value = false;
+  bulkCleanProgress.value = [];
+  showBulkClean.value = true;
+}
+
+function closeBulkClean() {
+  if (bulkCleanRunning.value) return;
+  showBulkClean.value = false;
+}
+
+async function startBulkClean() {
+  if (!bulkCleanTargets.value.length || bulkCleanRunning.value) return;
+  bulkCleanProgress.value = bulkCleanTargets.value.map((a) => ({
+    id: a.id,
+    name: a.name,
+    status: "pending",
+    message: "",
+  }));
+  bulkCleanRunning.value = true;
+  // Sequential to avoid Telegram flood limits, one account at a time
+  for (const item of bulkCleanProgress.value) {
+    item.status = "cleaning";
+    try {
+      const r = await tgClientApi.cleanAccount(item.id);
+      let msg = t("tgc.clean.toastResult")
+        .replace("{left}", String(r.left))
+        .replace("{deleted}", String(r.deleted))
+        .replace("{contacts}", String(r.contacts))
+        .replace("{folders}", String(r.folders));
+      if (r.failed.length) {
+        msg += `, ${t("tgc.clean.toastFailedPart").replace("{n}", String(r.failed.length))}`;
+      }
+      item.status = "done";
+      item.message = msg;
+    } catch (e: any) {
+      item.status = "failed";
+      item.message =
+        e?.response?.data?.error ?? e?.message ?? t("tgc.clean.failed");
+    }
+  }
+  bulkCleanRunning.value = false;
+  bulkCleanDoneAll.value = true;
+  await load();
+}
+
 // Lazy-load each tab's data the first time it is opened
 watch(editTab, (tab) => {
   if (editTarget.value?.authStatus !== "authenticated") return;
@@ -2139,14 +3035,16 @@ onMounted(async () => {
     }
   }
   // Resume tracking a bulk-add batch still running from a previous page load.
-  try {
-    const batch = await accountsApi.bulkAddStatus();
-    if (batch?.running) {
-      bulkBatch.value = batch;
-      pollBulk();
+  if (bulkMgmtEnabled.value) {
+    try {
+      const batch = await accountsApi.bulkAddStatus();
+      if (batch?.running) {
+        bulkBatch.value = batch;
+        pollBulk();
+      }
+    } catch {
+      // Non-critical
     }
-  } catch {
-    // Non-critical
   }
 });
 
@@ -3150,6 +4048,62 @@ tr.drag-over td {
   border-radius: 8px;
 }
 
+.bulk-email-test {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -4px 0 14px;
+  flex-wrap: wrap;
+}
+
+.bulk-email-test .btn {
+  margin-left: auto;
+}
+
+.bulk-email-test-ok {
+  color: #52c41a;
+  font-size: 13px;
+}
+
+.bulk-email-test-fail {
+  color: #ff4d4f;
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.bulk-email-preview {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #666;
+}
+
+.bulk-email-preview span {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #1296db;
+  word-break: break-all;
+}
+
+.bulk-clean-accounts {
+  margin-top: 12px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid #eee;
+  border-radius: 8px;
+}
+
+.bulk-clean-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-bottom: 1px solid #f2f2f2;
+}
+
+.bulk-clean-account:last-child {
+  border-bottom: none;
+}
+
 .bulk-add-options {
   margin-top: 16px;
   padding: 16px 18px;
@@ -3226,7 +4180,9 @@ tr.drag-over td {
 .bulk-add-status-dot.status-requesting_code,
 .bulk-add-status-dot.status-fetching_code,
 .bulk-add-status-dot.status-submitting_code,
-.bulk-add-status-dot.status-submitting_2fa {
+.bulk-add-status-dot.status-submitting_2fa,
+.bulk-add-status-dot.status-cleaning,
+.bulk-add-status-dot.status-working {
   background: #1296db;
   animation: bulk-pulse 1s ease-in-out infinite;
 }

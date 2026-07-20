@@ -188,6 +188,13 @@ function resolveConfig(opts?: BulkAddOptions): BulkAddConfig {
 
 let current: BulkAddBatch | null = null;
 
+// Bulk account management (bulk add + bulk clean) is opt-in via the
+// BULK_ACCOUNT_MANAGEMENT env var ("1"/"true").
+export function isBulkAccountManagementEnabled(): boolean {
+  const v = (process.env.BULK_ACCOUNT_MANAGEMENT ?? "").trim().toLowerCase();
+  return v === "1" || v === "true";
+}
+
 export function getBulkAddStatus(): BulkAddBatch | null {
   return current;
 }

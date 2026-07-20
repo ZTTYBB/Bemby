@@ -26,8 +26,13 @@ import {
   startBulkAdd,
   getBulkAddStatus,
   cancelBulkAdd,
+  isBulkAccountManagementEnabled,
   type BulkAddOptions,
 } from "../jobs/bulkAdd";
+import {
+  changeLoginEmailViaGmail,
+  testGmailImap,
+} from "../jobs/bulkLoginEmail";
 import type { AuthStatus } from "../types";
 import { parseTgProxy } from "../jobs/runner";
 import { resolveAppClientParams, previewDeviceModel } from "../tg/appClient";
@@ -301,7 +306,16 @@ router.post("/", (req, res) => {
 
 // POST /bulk-add -- create accounts from "phone----apiUrl" lines, then
 // authenticate them one by one using codes/2FA served by each API page
-router.post("/bulk-add", (req, res) => {
+// Reject bulk-management requests unless enabled via BULK_ACCOUNT_MANAGEMENT
+const bulkMgmtGuard: import("express").RequestHandler = (_req, res, next) => {
+  if (!isBulkAccountManagementEnabled()) {
+    res.status(403).json({ error: "Bulk account management is not enabled" });
+    return;
+  }
+  next();
+};
+
+router.post("/bulk-add", bulkMgmtGuard, (req, res) => {
   const { text, options } = req.body as {
     text?: string;
     options?: BulkAddOptions;
@@ -319,13 +333,27 @@ router.post("/bulk-add", (req, res) => {
 });
 
 // GET /bulk-add/status -- current batch progress (null if none has run)
-router.get("/bulk-add/status", (_req, res) => {
+router.get("/bulk-add/status", bulkMgmtGuard, (_req, res) => {
   res.json(getBulkAddStatus());
 });
 
 // POST /bulk-add/cancel -- stop the running batch after the current step
-router.post("/bulk-add/cancel", (_req, res) => {
+router.post("/bulk-add/cancel", bulkMgmtGuard, (_req, res) => {
   res.json({ cancelled: cancelBulkAdd() });
+});
+
+// POST /gmail/test -- check Gmail IMAP login works (for bulk login-email change)
+router.post("/gmail/test", bulkMgmtGuard, async (req, res) => {
+  const { gmail, appPassword } = req.body as {
+    gmail?: string;
+    appPassword?: string;
+  };
+  if (!gmail || !gmail.includes("@") || !appPassword) {
+    res.status(400).json({ error: "gmail and appPassword are required" });
+    return;
+  }
+  const result = await testGmailImap(gmail.trim(), appPassword);
+  res.json(result);
 });
 
 // PUT /reorder -- update sort_order for multiple accounts at once
@@ -1013,6 +1041,46 @@ router.post("/:id/login-email/send-code", async (req, res) => {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
     if (rpcBadRequest(res, err, "login-email/send-code")) return;
     internalError(res, err, "login-email/send-code");
+  }
+});
+
+// POST /:id/login-email/auto -- set a Gmail plus-address login email and read
+// the confirmation code back over IMAP. Gated by BULK_ACCOUNT_MANAGEMENT.
+router.post("/:id/login-email/auto", bulkMgmtGuard, async (req, res) => {
+  const account = db
+    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
+    .get(req.params.id) as AccountRow | undefined;
+  if (!requireAuth(account, res)) return;
+  const { gmail, appPassword, tag } = req.body as {
+    gmail?: string;
+    appPassword?: string;
+    tag?: string;
+  };
+  if (!gmail || !gmail.includes("@") || !appPassword) {
+    res.status(400).json({ error: "gmail and appPassword are required" });
+    return;
+  }
+  try {
+    const { apiId, apiHash } = resolveApiCredentials(account);
+    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
+    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+    const result = await changeLoginEmailViaGmail({
+      apiId,
+      apiHash,
+      sessionString: account.session_string,
+      phoneNumber: account.phone_number,
+      accountId: account.id,
+      proxy,
+      deviceParams,
+      gmail: gmail.trim(),
+      appPassword,
+      tag: (tag ?? "").trim(),
+    });
+    res.json(result);
+  } catch (err: any) {
+    if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
+    if (rpcBadRequest(res, err, "login-email/auto")) return;
+    internalError(res, err, "login-email/auto");
   }
 });
 

@@ -492,6 +492,27 @@ function makeTgClient(
   });
 }
 
+/** Returns the account's own Telegram numeric user id as a string. */
+export async function getSelfId(
+  apiId: number,
+  apiHash: string,
+  sessionString: string,
+  proxy?: TgProxy,
+  deviceParams?: TgDeviceParams,
+): Promise<string> {
+  const client = makeTgClient(sessionString, apiId, apiHash, proxy, deviceParams);
+  try {
+    await client.connect();
+    const me = await client.getMe();
+    const id = (me as { id?: unknown } | null)?.id;
+    if (id === undefined || id === null)
+      throw new Error("Could not resolve Telegram user id");
+    return String(id);
+  } finally {
+    await client.destroy().catch(() => undefined);
+  }
+}
+
 export async function getPasswordInfo(
   apiId: number,
   apiHash: string,

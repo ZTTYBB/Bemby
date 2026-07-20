@@ -609,6 +609,21 @@ export const accountsApi = {
     api
       .post<{ email: string | null }>(`/accounts/${id}/login-email/verify`, { code })
       .then((r) => r.data),
+  autoLoginEmail: (id: number, gmail: string, appPassword: string, tag: string) =>
+    api
+      .post<{ email: string }>(`/accounts/${id}/login-email/auto`, {
+        gmail,
+        appPassword,
+        tag,
+      })
+      .then((r) => r.data),
+  testGmail: (gmail: string, appPassword: string) =>
+    api
+      .post<{ ok: boolean; error?: string }>("/accounts/gmail/test", {
+        gmail,
+        appPassword,
+      })
+      .then((r) => r.data),
   getPasskeys: (id: number) =>
     api
       .get<{ passkeys: Passkey[] }>(`/accounts/${id}/passkeys`)
@@ -779,6 +794,8 @@ export type Settings = {
   default_device_name: string;
   /** Server-computed: "true" when any AI supplier, legacy setting or env provides a key. */
   ai_key_configured?: string;
+  /** Server-computed: "true" when bulk account management is enabled via the BULK_ACCOUNT_MANAGEMENT env var. */
+  bulk_account_management?: string;
   ai_model: string;
   /** ai_models row id pinning the default model to an exact supplier. */
   ai_default_model_id?: string;
