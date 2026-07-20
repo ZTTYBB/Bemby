@@ -21,6 +21,8 @@ import {
   deletePasskey,
   registerPasskey,
   verifyPasskeyLogin,
+  startPasskeyLogin,
+  getSessionDc,
   type PasswordInfo,
 } from "../auth/tgAuth";
 import { checkSpamStatus } from "../jobs/checkin";
@@ -44,6 +46,9 @@ import {
   getPasskeySecret,
   deletePasskeySecret,
   storedPasskeyIdsForAccount,
+  accountPasskeySecrets,
+  setAccountPasskeyDc,
+  accountHasUsablePasskey,
 } from "../tg/passkeyStore";
 import { refreshScheduler } from "../scheduler";
 
@@ -193,6 +198,7 @@ function toJson(row: AccountRow) {
     tgUsername: row.tg_username ?? null,
     notes: row.notes ?? null,
     resolvedDeviceModel: previewDeviceModel(row.id, row.app_client_id),
+    hasPasskey: accountHasUsablePasskey(row.id),
   };
 }
 
@@ -992,6 +998,12 @@ router.post("/:id/force-reauth", (req, res) => {
     res.status(404).json({ error: "Not found" });
     return;
   }
+  // Capture the account's DC onto its stored passkeys before we drop the session,
+  // so a later passkey login can still reach the right data centre.
+  if (account.session_string) {
+    const dc = getSessionDc(account.session_string);
+    if (dc) setAccountPasskeyDc(account.id, dc);
+  }
   db.prepare(
     "UPDATE tg_accounts SET session_string = NULL, auth_status = 'unauthenticated' WHERE id = ?",
   ).run(account.id);
@@ -1154,6 +1166,7 @@ router.post("/:id/passkeys", async (req, res) => {
       deviceParams,
     );
     // Persist the private key so the passkey can later be used/verified for login.
+    const dc = getSessionDc(account.session_string) ?? {};
     savePasskeySecret({
       accountId: account.id,
       telegramPasskeyId: result.passkey.id,
@@ -1162,6 +1175,7 @@ router.post("/:id/passkeys", async (req, res) => {
       rpId: result.rpId,
       userHandle: result.userHandle,
       createdDate: result.passkey.date,
+      ...dc,
     });
     res.json({ passkey: result.passkey });
   } catch (err: any) {
@@ -1243,6 +1257,41 @@ router.post("/:id/auth/request", async (req, res) => {
     const proxyUrl = resolveProxyUrl(account.proxy_id);
     const proxy = parseTgProxy(proxyUrl);
     const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+
+    // Prefer passkey login when we hold a usable (DC-known) stored passkey; fall
+    // back to the code flow if none exist or the passkey is rejected.
+    const secret = accountPasskeySecrets(account.id).find((s) => s.dcId != null);
+    if (secret) {
+      try {
+        const result = await startPasskeyLogin(
+          account.id,
+          apiId,
+          apiHash,
+          secret,
+          undefined,
+          proxy,
+        );
+        if (result.needsPassword) {
+          db.prepare(
+            "UPDATE tg_accounts SET auth_status = 'pending_2fa' WHERE id = ?",
+          ).run(account.id);
+          res.json({ method: "passkey", step: "2fa" });
+        } else {
+          db.prepare(
+            "UPDATE tg_accounts SET auth_status = 'authenticated', session_string = ? WHERE id = ?",
+          ).run(result.session, account.id);
+          res.json({ method: "passkey", step: "done" });
+        }
+        return;
+      } catch (err: any) {
+        // Passkey unusable -- fall through to the code flow below.
+        console.warn(
+          `[accounts] passkey login failed for ${account.id}, falling back to code:`,
+          err?.errorMessage ?? err?.message ?? err,
+        );
+      }
+    }
+
     const { isCodeViaApp } = await requestCode(
       account.id,
       apiId,
@@ -1254,7 +1303,7 @@ router.post("/:id/auth/request", async (req, res) => {
     db.prepare(
       "UPDATE tg_accounts SET auth_status = 'pending_code' WHERE id = ?",
     ).run(account.id);
-    res.json({ message: "Verification code sent", isCodeViaApp });
+    res.json({ method: "code", message: "Verification code sent", isCodeViaApp });
   } catch (err: any) {
     internalError(res, err, 'auth/request');
   }

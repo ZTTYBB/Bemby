@@ -7,6 +7,7 @@ import {
   invokeDeletePasskey,
   invokeRegisterPasskey,
   invokeVerifyPasskeyLogin,
+  invokePasskeyLogin,
   type Passkey,
   type RegisterPasskeyResult,
   type PasskeyLoginVerification,
@@ -689,5 +690,75 @@ export async function verifyPasskeyLogin(
     );
   } finally {
     await client.destroy().catch(() => undefined);
+  }
+}
+
+// Reads the account's home DC out of an authorised session string.
+export function getSessionDc(
+  sessionString: string,
+): { dcId: number; serverAddress: string; port: number } | null {
+  if (!sessionString) return null;
+  try {
+    const s = new StringSession(sessionString);
+    if (s.dcId == null || !s.serverAddress || s.port == null) return null;
+    return { dcId: s.dcId, serverAddress: s.serverAddress, port: s.port };
+  } catch {
+    return null;
+  }
+}
+
+// Logs in using a stored passkey as the first factor. On success without 2FA the
+// session is returned; when the account has a cloud password, the connected client
+// is parked in `pending` (step "2fa") so submitPassword() finishes it exactly like
+// the code flow. Throws (caller falls back to code login) if the passkey is rejected.
+export async function startPasskeyLogin(
+  accountId: number,
+  apiId: number,
+  apiHash: string,
+  secret: PasskeySecret,
+  originOverride?: string,
+  proxy?: TgProxy,
+): Promise<{ needsPassword: boolean; session?: string }> {
+  const existing = pending.get(accountId);
+  if (existing) {
+    await existing.client.destroy().catch(() => undefined);
+    pending.delete(accountId);
+  }
+
+  const fresh = new StringSession("");
+  if (secret.dcId != null && secret.serverAddress && secret.port != null) {
+    fresh.setDC(secret.dcId, secret.serverAddress, secret.port);
+  }
+  // No deviceParams during auth (same rationale as requestCode).
+  const client = new TelegramClient(fresh, apiId, apiHash, {
+    connectionRetries: 3,
+    baseLogger: new Logger(LogLevel.NONE),
+    ...(proxy ? { proxy } : {}),
+  });
+
+  try {
+    await client.connect();
+    try {
+      await invokePasskeyLogin(client, apiId, apiHash, secret, originOverride);
+    } catch (err: any) {
+      const msg = err?.errorMessage ?? err?.message ?? "";
+      if (msg.includes("SESSION_PASSWORD_NEEDED")) {
+        // Keep the client alive for the 2FA step.
+        pending.set(accountId, {
+          client,
+          phoneNumber: "",
+          phoneCodeHash: "",
+          step: "2fa",
+        });
+        return { needsPassword: true };
+      }
+      throw err;
+    }
+    const session = client.session.save() as unknown as string;
+    await client.destroy().catch(() => undefined);
+    return { needsPassword: false, session };
+  } catch (err) {
+    await client.destroy().catch(() => undefined);
+    throw err;
   }
 }

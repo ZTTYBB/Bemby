@@ -1851,21 +1851,41 @@
         </h3>
         <div v-if="authError" class="error-msg">{{ authError }}</div>
 
-        <!-- Step: request code -->
+        <!-- Step: request code / start login -->
         <div v-if="authStep === 'idle'">
-          <p style="color: #666; margin-bottom: 16px; font-size: 13px">
-            {{ t("accounts.authHint") }}
-            <strong>{{ authTarget?.phoneNumber }}</strong
-            >.
-          </p>
-          <button
-            class="btn btn-primary"
-            :disabled="authBusy"
-            @click="sendCode"
-          >
-            <i class="fa-solid fa-paper-plane"></i>
-            {{ authBusy ? t("accounts.sending") : t("accounts.sendCode") }}
-          </button>
+          <!-- Usable passkey: log in with it automatically, then ask for 2FA. -->
+          <template v-if="authTarget?.hasPasskey">
+            <p
+              v-if="authBusy"
+              style="color: #666; margin-bottom: 16px; font-size: 13px"
+            >
+              <i class="fa-solid fa-spinner fa-spin" style="margin-right: 6px"></i>
+              {{ t("accounts.authPasskeyProgress") }}
+            </p>
+            <button
+              v-else
+              class="btn btn-primary"
+              @click="sendCode"
+            >
+              <i class="fa-solid fa-key"></i>
+              {{ t("accounts.loginPasskey") }}
+            </button>
+          </template>
+          <template v-else>
+            <p style="color: #666; margin-bottom: 16px; font-size: 13px">
+              {{ t("accounts.authHint") }}
+              <strong>{{ authTarget?.phoneNumber }}</strong
+              >.
+            </p>
+            <button
+              class="btn btn-primary"
+              :disabled="authBusy"
+              @click="sendCode"
+            >
+              <i class="fa-solid fa-paper-plane"></i>
+              {{ authBusy ? t("accounts.sending") : t("accounts.sendCode") }}
+            </button>
+          </template>
         </div>
 
         <!-- Step: enter OTP -->
@@ -1909,6 +1929,10 @@
 
         <!-- Step: 2FA password -->
         <div v-else-if="authStep === '2fa'">
+          <div v-if="authViaPasskey" class="info-box" style="margin-bottom: 14px">
+            <i class="fa-solid fa-key" style="margin-right: 6px"></i>
+            {{ t("accounts.authPasskeyOk") }}
+          </div>
           <div class="form-group">
             <label class="form-label">{{ t("accounts.labelTwoFa") }}</label>
             <input
@@ -2514,6 +2538,7 @@ const authPassword = ref("");
 const authError = ref("");
 const authBusy = ref(false);
 const isCodeViaApp = ref(false);
+const authViaPasskey = ref(false);
 const resendBusy = ref(false);
 
 // ── Bulk add state ────────────────────────────────────────────────────────────
@@ -3599,7 +3624,10 @@ function openAuth(a: Account) {
   authCode.value = "";
   authPassword.value = "";
   authError.value = "";
+  authViaPasskey.value = false;
   showAuth.value = true;
+  // With a usable passkey, skip the idle step: log in and go straight to 2FA.
+  if (a.hasPasskey) sendCode();
 }
 
 function closeAuth() {
@@ -3612,8 +3640,19 @@ async function sendCode() {
   authBusy.value = true;
   try {
     const res = await accountsApi.requestCode(authTarget.value.id);
-    isCodeViaApp.value = res.isCodeViaApp;
-    authStep.value = "code";
+    if (res.method === "passkey") {
+      authViaPasskey.value = true;
+      if (res.step === "done") {
+        showAuth.value = false;
+        await load();
+      } else {
+        authStep.value = "2fa";
+      }
+    } else {
+      authViaPasskey.value = false;
+      isCodeViaApp.value = res.isCodeViaApp ?? false;
+      authStep.value = "code";
+    }
   } catch (err: any) {
     authError.value =
       err.response?.data?.error ?? t("accounts.errors.sendFailed");

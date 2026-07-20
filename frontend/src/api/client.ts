@@ -105,6 +105,8 @@ export type Account = {
   notes: string | null;
   /** Device model Telegram sees, with template variables expanded (server-computed, read-only). */
   resolvedDeviceModel?: string | null;
+  /** True when a stored passkey (key + known DC) will be used for login instead of a code. */
+  hasPasskey?: boolean;
 };
 
 export type BulkAddItemStatus =
@@ -505,8 +507,10 @@ export const accountsApi = {
   requestCode: (id: number) =>
     api
       .post<{
-        message: string;
-        isCodeViaApp: boolean;
+        method: "passkey" | "code";
+        step?: "2fa" | "done";
+        message?: string;
+        isCodeViaApp?: boolean;
       }>(`/accounts/${id}/auth/request`)
       .then((r) => r.data),
   resendCode: (id: number) =>

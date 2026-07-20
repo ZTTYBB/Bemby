@@ -469,6 +469,30 @@ export async function invokeRegisterPasskey(
   };
 }
 
+export type PasskeySecretLike = {
+  credentialId: string;
+  privateKeyPem: string;
+  rpId: string;
+  userHandle: string;
+};
+
+// Performs the passkey login factor: init options -> sign assertion -> finish.
+// Returns the raw auth.Authorization; throws SESSION_PASSWORD_NEEDED when the
+// account also has a 2FA cloud password (the credential itself was accepted).
+export async function invokePasskeyLogin(
+  client: TelegramClient,
+  apiId: number,
+  apiHash: string,
+  secret: PasskeySecretLike,
+  originOverride?: string,
+): Promise<any> {
+  const { options } = (await client.invoke(
+    new InitPasskeyLoginRequest(apiId, apiHash) as any,
+  )) as { options: string };
+  const assertion = buildPasskeyAssertion(options, secret, originOverride);
+  return client.invoke(new FinishPasskeyLoginRequest(assertion) as any);
+}
+
 export type PasskeyLoginVerification = {
   ok: boolean;
   passwordRequired: boolean; // passkey accepted, but 2FA cloud password still needed
@@ -483,22 +507,12 @@ export async function invokeVerifyPasskeyLogin(
   client: TelegramClient,
   apiId: number,
   apiHash: string,
-  secret: {
-    credentialId: string;
-    privateKeyPem: string;
-    rpId: string;
-    userHandle: string;
-  },
+  secret: PasskeySecretLike,
   originOverride?: string,
 ): Promise<PasskeyLoginVerification> {
-  const { options } = (await client.invoke(
-    new InitPasskeyLoginRequest(apiId, apiHash) as any,
-  )) as { options: string };
-  const assertion = buildPasskeyAssertion(options, secret, originOverride);
-
   let auth: any;
   try {
-    auth = await client.invoke(new FinishPasskeyLoginRequest(assertion) as any);
+    auth = await invokePasskeyLogin(client, apiId, apiHash, secret, originOverride);
   } catch (err: any) {
     const msg = err?.errorMessage ?? err?.message ?? "";
     // The credential was accepted; only the second factor (cloud password) remains.
