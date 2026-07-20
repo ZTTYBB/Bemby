@@ -351,7 +351,8 @@ tr:hover td {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	z-index: 100;
+	/* Above the mobile header (200) and sidebar (300) so the title is never covered */
+	z-index: 400;
 }
 
 .modal {
@@ -363,6 +364,8 @@ tr:hover td {
 	max-height: calc(100vh - 48px);
 	display: flex;
 	flex-direction: column;
+	/* Scroll tall content so the footer buttons stay reachable */
+	overflow-y: auto;
 	box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
 }
 
@@ -382,7 +385,12 @@ tr:hover td {
 	display: flex;
 	justify-content: flex-end;
 	gap: 8px;
-	margin-top: 24px;
+	/* Stay visible at the bottom while the modal body scrolls; padding (not
+	   margin) so the background covers content scrolling underneath */
+	position: sticky;
+	bottom: 0;
+	background: #fff;
+	padding-top: 20px;
 }
 
 /* ── Form ────────────────────────────────────────────────────────────────────── */
