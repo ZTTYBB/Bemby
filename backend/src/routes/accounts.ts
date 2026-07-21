@@ -50,6 +50,7 @@ import {
   setAccountPasskeyDc,
   accountHasUsablePasskey,
   pruneAccountPasskeySecrets,
+  type PasskeySecret,
 } from "../tg/passkeyStore";
 import { refreshScheduler } from "../scheduler";
 
@@ -416,6 +417,7 @@ type AccountImportItem = {
   proxyId?: string | null;
   appClientId?: string | null;
   disabled?: boolean;
+  passkeys?: PasskeySecret[];
 };
 
 // POST /export -- export selected (or all) accounts with sensitive fields
@@ -447,9 +449,17 @@ router.post("/export", (req, res) => {
       proxyId: a.proxy_id ?? null,
       appClientId: a.app_client_id ?? null,
       disabled: Boolean(a.disabled),
+      // Passkey secrets (incl. private key + home DC) so the account can still log in
+      // after import, even when force-reauth clears the session string.
+      passkeys: accountPasskeySecrets(a.id),
     })),
   };
-  const hasSecrets = payload.accounts.some(a => a.sessionString != null || a.apiHash);
+  const hasSecrets = payload.accounts.some(
+    (a) =>
+      a.sessionString != null ||
+      a.apiHash ||
+      a.passkeys.some((p) => p.privateKeyPem),
+  );
   if (hasSecrets && !secret) {
     res.status(400).json({
       error: 'This export contains session strings or API credentials. Provide an encryption secret.',
@@ -523,19 +533,29 @@ router.post("/import", (req, res) => {
         skipped++;
         continue;
       }
-      db.prepare(
-        "INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id, app_client_id, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      ).run(
-        a.name || a.phoneNumber,
-        a.phoneNumber,
-        a.apiId ? Number(a.apiId) : null,
-        a.apiHash,
-        forceReauth ? null : (a.sessionString ?? null),
-        forceReauth ? "unauthenticated" : (a.authStatus ?? "unauthenticated"),
-        a.proxyId ?? null,
-        a.appClientId ?? null,
-        a.disabled ? 1 : 0,
-      );
+      const info = db
+        .prepare(
+          "INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id, app_client_id, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          a.name || a.phoneNumber,
+          a.phoneNumber,
+          a.apiId ? Number(a.apiId) : null,
+          a.apiHash,
+          forceReauth ? null : (a.sessionString ?? null),
+          forceReauth ? "unauthenticated" : (a.authStatus ?? "unauthenticated"),
+          a.proxyId ?? null,
+          a.appClientId ?? null,
+          a.disabled ? 1 : 0,
+        );
+      // Restore passkey secrets under the newly assigned account id. The passkey (with
+      // its home DC) is what lets the account log in after a force-reauth import.
+      if (Array.isArray(a.passkeys)) {
+        const newId = Number(info.lastInsertRowid);
+        for (const pk of a.passkeys) {
+          savePasskeySecret({ ...pk, accountId: newId });
+        }
+      }
       imported++;
     }
   })();

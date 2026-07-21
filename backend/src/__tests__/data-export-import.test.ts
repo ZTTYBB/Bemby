@@ -589,6 +589,25 @@ describe('full data import -- replace mode', () => {
 
 // ── Account-only export ───────────────────────────────────────────────────────
 
+// Passkey secrets live in the settings table under this key (see tg/passkeyStore.ts).
+const PASSKEY_STORE_KEY = 'tg_passkey_secrets';
+
+function readPasskeyStore(db: DB): Record<string, any> {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(PASSKEY_STORE_KEY) as { value: string } | undefined;
+  if (!row?.value) return {};
+  try { return JSON.parse(row.value); } catch { return {}; }
+}
+
+function savePasskeySecret(db: DB, secret: any) {
+  const store = readPasskeyStore(db);
+  store[secret.telegramPasskeyId] = secret;
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(PASSKEY_STORE_KEY, JSON.stringify(store));
+}
+
+function accountPasskeySecrets(db: DB, accountId: number): any[] {
+  return Object.values(readPasskeyStore(db)).filter((s: any) => s.accountId === accountId);
+}
+
 // Mirrors the POST /accounts/export route logic
 function exportAccounts(db: DB, ids?: number[]) {
   let rows: any[];
@@ -604,6 +623,7 @@ function exportAccounts(db: DB, ids?: number[]) {
       name: a.name, phoneNumber: a.phone_number, apiId: a.api_id, apiHash: a.api_hash,
       sessionString: a.session_string, authStatus: a.auth_status,
       proxyId: a.proxy_id ?? null, appClientId: a.app_client_id ?? null, disabled: Boolean(a.disabled),
+      passkeys: accountPasskeySecrets(db, a.id),
     })),
   };
 }
@@ -615,8 +635,12 @@ function importAccounts(db: DB, items: any[], forceReauth = true) {
     if (!a.phoneNumber || !a.apiId || !a.apiHash) { skipped++; continue; }
     const existing = db.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get(a.phoneNumber) as { id: number } | undefined;
     if (existing) { skipped++; continue; }
-    db.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id, app_client_id, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    const info = db.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id, app_client_id, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(a.name || a.phoneNumber, a.phoneNumber, Number(a.apiId), a.apiHash, forceReauth ? null : (a.sessionString ?? null), forceReauth ? 'unauthenticated' : (a.authStatus ?? 'unauthenticated'), a.proxyId ?? null, a.appClientId ?? null, a.disabled ? 1 : 0);
+    if (Array.isArray(a.passkeys)) {
+      const newId = Number(info.lastInsertRowid);
+      for (const pk of a.passkeys) savePasskeySecret(db, { ...pk, accountId: newId });
+    }
     imported++;
   }
   return { imported, skipped };
@@ -718,5 +742,73 @@ describe('account-only import', () => {
     importAccounts(db, [{ phoneNumber: '+61400000001', apiId: 1, apiHash: 'h', disabled: true }], false);
     const row = db.prepare('SELECT disabled FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
     expect(row.disabled).toBe(1);
+  });
+});
+
+describe('account-only export/import -- passkeys', () => {
+  let db: DB;
+
+  const makePasskey = (accountId: number, id: string) => ({
+    accountId, telegramPasskeyId: id, credentialId: `cred-${id}`,
+    privateKeyPem: `-----BEGIN PRIVATE KEY-----${id}-----END PRIVATE KEY-----`,
+    rpId: 'telegram.org', userHandle: `handle-${id}`, createdDate: 1_700_000_000,
+    dcId: 2, serverAddress: '149.154.167.51', port: 443,
+  });
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    db.exec(SCHEMA);
+  });
+
+  it('includes an account\'s passkey secrets in the export', () => {
+    const { lastInsertRowid: id } = db.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h');
+    savePasskeySecret(db, makePasskey(Number(id), 'pk1'));
+    const exported = exportAccounts(db);
+    expect(exported.accounts[0].passkeys).toHaveLength(1);
+    expect(exported.accounts[0].passkeys[0].privateKeyPem).toContain('pk1');
+    expect(exported.accounts[0].passkeys[0].dcId).toBe(2);
+  });
+
+  it('round-trips passkeys and rewrites accountId to the new account id', () => {
+    // Source DB with one account + passkey
+    const src = new Database(':memory:');
+    src.exec(SCHEMA);
+    const { lastInsertRowid: srcId } = src.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h');
+    savePasskeySecret(src, makePasskey(Number(srcId), 'pk1'));
+    const exported = exportAccounts(src);
+
+    // Pre-seed the target DB so the imported account gets a different id
+    db.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Filler', '+61999999999', 9, 'x');
+    importAccounts(db, exported.accounts);
+
+    const newAcct = db.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(newAcct.id).not.toBe(Number(srcId));
+    const restored = accountPasskeySecrets(db, newAcct.id);
+    expect(restored).toHaveLength(1);
+    expect(restored[0].accountId).toBe(newAcct.id);        // rewritten to new id
+    expect(restored[0].privateKeyPem).toContain('pk1');     // secret preserved
+  });
+
+  it('keeps the passkey even when forceReauth clears the session', () => {
+    const src = new Database(':memory:');
+    src.exec(SCHEMA);
+    const { lastInsertRowid: srcId } = src.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status) VALUES (?, ?, ?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h', 'sess', 'authenticated');
+    savePasskeySecret(src, makePasskey(Number(srcId), 'pk1'));
+
+    importAccounts(db, exportAccounts(src).accounts, true); // forceReauth
+    const row = db.prepare('SELECT * FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(row.session_string).toBeNull();                  // session dropped
+    expect(accountPasskeySecrets(db, row.id)).toHaveLength(1); // passkey survives
+  });
+
+  // Backward compatibility: an export produced by an older Bemby has no `passkeys`
+  // field on its accounts. Import must still succeed and simply store no passkeys.
+  it('imports an older export that has no passkeys field', () => {
+    const legacyAccount = { phoneNumber: '+61400000001', apiId: 1, apiHash: 'h', sessionString: 'sess', authStatus: 'authenticated' };
+    expect('passkeys' in legacyAccount).toBe(false);
+    const r = importAccounts(db, [legacyAccount]);
+    expect(r.imported).toBe(1);
+    const row = db.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(accountPasskeySecrets(db, row.id)).toHaveLength(0);
   });
 });

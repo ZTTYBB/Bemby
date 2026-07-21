@@ -177,6 +177,19 @@ export type Passkey = {
   lastUsageDate: number | null;
 };
 
+export type PasskeySecret = {
+  accountId: number;
+  telegramPasskeyId: string;
+  credentialId: string;
+  privateKeyPem: string;
+  rpId: string;
+  userHandle: string;
+  createdDate: number;
+  dcId?: number;
+  serverAddress?: string;
+  port?: number;
+};
+
 export type AccountExportItem = {
   name: string;
   phoneNumber: string;
@@ -187,6 +200,7 @@ export type AccountExportItem = {
   proxyId: string | null;
   appClientId: string | null;
   disabled: boolean;
+  passkeys: PasskeySecret[];
 };
 
 export type AccountExportPayload = {
