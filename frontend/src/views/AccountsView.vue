@@ -2064,7 +2064,7 @@
         <!-- Step: request code / start login -->
         <div v-if="authStep === 'idle'">
           <!-- Usable passkey: log in with it automatically, then ask for 2FA. -->
-          <template v-if="authTarget?.hasPasskey">
+          <template v-if="authTarget?.hasBembyPasskey">
             <p
               v-if="authBusy"
               style="color: #666; margin-bottom: 16px; font-size: 13px"
@@ -4028,8 +4028,8 @@ function openAuth(a: Account) {
   authError.value = "";
   authViaPasskey.value = false;
   showAuth.value = true;
-  // With a usable passkey, skip the idle step: log in and go straight to 2FA.
-  if (a.hasPasskey) sendCode();
+  // With a usable stored passkey, skip the idle step: log in and go straight to 2FA.
+  if (a.hasBembyPasskey) sendCode();
 }
 
 function closeAuth() {
