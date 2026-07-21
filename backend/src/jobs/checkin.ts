@@ -804,21 +804,32 @@ export async function runCheckin(
           const editPromise = waitForBotMessageEdit(client, buttonsMsg.id, replyTimeoutMs, signal, botPeerId);
           const newMsgPromise = waitForNewBotMessage(client, botUsername, replyTimeoutMs, signal);
 
+          const preClickEditDate = (buttonsMsg as any).editDate as number | undefined;
           const t_click = Date.now();
-          const answer = await client.invoke(new Api.messages.GetBotCallbackAnswer({
-            peer,
-            msgId: buttonsMsg.id,
-            data: btn.data,
-          })) as Api.messages.BotCallbackAnswer;
+          let answer: Api.messages.BotCallbackAnswer | null = null;
+          let callbackTimedOut = false;
+          try {
+            answer = await client.invoke(new Api.messages.GetBotCallbackAnswer({
+              peer,
+              msgId: buttonsMsg.id,
+              data: btn.data,
+            })) as Api.messages.BotCallbackAnswer;
+          } catch (err: any) {
+            // BOT_RESPONSE_TIMEOUT means the click reached the bot but it never called
+            // answerCallbackQuery -- the check-in may still have registered (the bot edits
+            // the message). Fall through and let the edit/new-message watchers below decide.
+            if (!err?.message?.includes('BOT_RESPONSE_TIMEOUT')) throw err;
+            callbackTimedOut = true;
+          }
           log.buttonClickMs = Date.now() - t_click;
           log.buttonClicked = btnText;
-          if (answer.message) log.callbackAnswer = answer.message;
-          console.log(`[checkin] callback answer: message="${answer.message ?? ''}" url="${(answer as any).url ?? ''}" alert=${(answer as any).alert ?? false}`);
+          if (answer?.message) log.callbackAnswer = answer.message;
+          console.log(`[checkin] callback answer: message="${answer?.message ?? ''}" url="${(answer as any)?.url ?? ''}" alert=${(answer as any)?.alert ?? false}`);
           clicked = true;
 
           // If the bot already confirmed via toast (answer.message), allow a short
           // grace window for any follow-up edit/message; otherwise wait longer.
-          const capMs = answer.message
+          const capMs = answer?.message
             ? Math.min(replyTimeoutMs, 5_000)
             : Math.min(replyTimeoutMs, 30_000);
           const capPromise = new Promise<{ msg: null; src: 'cap' }>(r =>
@@ -834,6 +845,29 @@ export async function runCheckin(
           if (responseMsg && !signal?.aborted) {
             log.buttonResponseSource = respSrc;
             const bp = await parseMessages([responseMsg], client, signal);
+            if (bp.html || bp.hasMedia) {
+              log.buttonResponseHtml = bp.html || undefined;
+              log.buttonResponseHasMedia = bp.hasMedia || undefined;
+              log.buttonResponseImage = bp.images[0];
+              log.buttonResponseButtons = bp.buttons.length ? bp.buttons : undefined;
+            }
+          }
+
+          // A timed-out callback only counts as a failure if the bot never reacted. If no
+          // edit/new message was seen live, re-fetch the message: a changed editDate proves
+          // the bot processed the click and the check-in registered.
+          if (callbackTimedOut && !responseMsg && !signal?.aborted) {
+            const fresh = await client
+              .getMessages(botUsername, { ids: [buttonsMsg.id] })
+              .then(r => (r as Api.Message[])?.[0] ?? null)
+              .catch(() => null);
+            const freshEditDate = (fresh as any)?.editDate as number | undefined;
+            const wasEdited = !!fresh && !!freshEditDate && freshEditDate !== preClickEditDate;
+            if (!wasEdited) {
+              throw new Error(`Button "${btnText}" click timed out (BOT_RESPONSE_TIMEOUT) with no response`);
+            }
+            log.buttonResponseSource = 'edit';
+            const bp = await parseMessages([fresh!], client, signal);
             if (bp.html || bp.hasMedia) {
               log.buttonResponseHtml = bp.html || undefined;
               log.buttonResponseHasMedia = bp.hasMedia || undefined;

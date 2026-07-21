@@ -128,12 +128,16 @@ async function waitForButtonsInChat(
 
 // Waits for the next new message arriving in a specific chat. Never rejects -- resolves null
 // on timeout or abort.
-function waitForNewMessageInChat(
+async function waitForNewMessageInChat(
   client: TelegramClient,
   chat: Api.TypeEntityLike,
   maxMs: number,
   signal?: AbortSignal,
 ): Promise<Api.Message | null> {
+  // Resolve the chat id up front and match it manually. Passing an entity object into
+  // NewMessage({ chats }) breaks GramJS -- its constructor stringifies each filter entry
+  // to "[object Object]", then throws an unhandled rejection resolving it on the next update.
+  const targetId = await client.getPeerId(chat).catch(() => null);
   return new Promise((resolve) => {
     if (signal?.aborted) {
       resolve(null);
@@ -148,8 +152,15 @@ function waitForNewMessageInChat(
     const timer = setTimeout(() => finish(null), maxMs);
     const onAbort = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });
-    const handler = async (event: NewMessageEvent) => finish(event.message as Api.Message);
-    client.addEventHandler(handler, new NewMessage({ chats: [chat] }));
+    const handler = async (event: NewMessageEvent) => {
+      if (
+        targetId != null &&
+        event.message?.chatId?.toString() !== targetId.toString()
+      )
+        return;
+      finish(event.message as Api.Message);
+    };
+    client.addEventHandler(handler, new NewMessage({}));
   });
 }
 
@@ -944,7 +955,11 @@ export async function runCustom(
 
                       const callbackData = (btn as Api.KeyboardButtonCallback)
                         .data;
-                      let answer: Api.messages.BotCallbackAnswer;
+                      const preClickEditDate = (buttonsMsg as any).editDate as
+                        | number
+                        | undefined;
+                      let answer: Api.messages.BotCallbackAnswer | null = null;
+                      let callbackTimedOut = false;
                       try {
                         answer = (await client.invoke(
                           new Api.messages.GetBotCallbackAnswer({
@@ -953,13 +968,20 @@ export async function runCustom(
                             data: callbackData,
                           }),
                         )) as Api.messages.BotCallbackAnswer;
-                      } catch (err) {
-                        clickAbort.abort();
-                        signal?.removeEventListener("abort", forwardAbort);
-                        throw err;
+                      } catch (err: any) {
+                        // BOT_RESPONSE_TIMEOUT means the click reached the bot but it never
+                        // called answerCallbackQuery -- the action may still have taken effect
+                        // (e.g. the bot edited the message). Fall through and let the edit/
+                        // new-message watchers below decide whether it actually succeeded.
+                        if (!err?.message?.includes("BOT_RESPONSE_TIMEOUT")) {
+                          clickAbort.abort();
+                          signal?.removeEventListener("abort", forwardAbort);
+                          throw err;
+                        }
+                        callbackTimedOut = true;
                       }
 
-                      if (answer.message) step.callbackAnswer = answer.message;
+                      if (answer?.message) step.callbackAnswer = answer.message;
                       clicked = true;
                       step.retryCount = retryCount;
 
@@ -1018,9 +1040,44 @@ export async function runCustom(
                           : undefined;
                       }
 
+                      // A timed-out callback only counts as a failure if the bot never
+                      // reacted. If no edit/new message was seen live, re-fetch the clicked
+                      // message: a changed editDate proves the bot processed the click.
+                      if (callbackTimedOut && !responses.length) {
+                        const fresh: Api.Message | null = await client
+                          .getMessages(botUsername, { ids: [buttonsMsg!.id] })
+                          .then((r) => (r as Api.Message[])?.[0] ?? null)
+                          .catch(() => null);
+                        const freshEditDate = (fresh as any)?.editDate as
+                          | number
+                          | undefined;
+                        const wasEdited =
+                          !!fresh &&
+                          !!freshEditDate &&
+                          freshEditDate !== preClickEditDate;
+                        if (!wasEdited)
+                          throw new Error(
+                            `Button "${btnText}" click timed out (BOT_RESPONSE_TIMEOUT) with no response`,
+                          );
+                        step.responseSource = "edit";
+                        lastMessages = [fresh!];
+                        if (hasInlineButtons(fresh)) lastButtonsMsg = fresh;
+                        const parsed = await parseMessages(
+                          lastMessages,
+                          client,
+                          signal,
+                        );
+                        step.responseHtml = parsed.html || undefined;
+                        step.responseImage = parsed.images[0];
+                        step.responseHasMedia = parsed.hasMedia || undefined;
+                        step.responseButtons = parsed.buttons.length
+                          ? parsed.buttons
+                          : undefined;
+                      }
+
                       // Check success/fail text in callback answer or response messages
                       if (action.successContains || action.failContains) {
-                        const texts = [answer.message ?? '', ...responses.map((r) => r.msg.message ?? '')].filter(Boolean).join('\n');
+                        const texts = [answer?.message ?? '', ...responses.map((r) => r.msg.message ?? '')].filter(Boolean).join('\n');
                         if (action.failContains && texts.includes(action.failContains)) {
                           throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
                         }
@@ -1215,7 +1272,11 @@ export async function runCustom(
 
                       const callbackData = (btn as Api.KeyboardButtonCallback)
                         .data;
-                      let answer: Api.messages.BotCallbackAnswer;
+                      const preClickEditDate = (buttonsMsg as any).editDate as
+                        | number
+                        | undefined;
+                      let answer: Api.messages.BotCallbackAnswer | null = null;
+                      let callbackTimedOut = false;
                       try {
                         answer = (await client.invoke(
                           new Api.messages.GetBotCallbackAnswer({
@@ -1224,13 +1285,20 @@ export async function runCustom(
                             data: callbackData,
                           }),
                         )) as Api.messages.BotCallbackAnswer;
-                      } catch (err) {
-                        clickAbort.abort();
-                        signal?.removeEventListener("abort", forwardAbort);
-                        throw err;
+                      } catch (err: any) {
+                        // BOT_RESPONSE_TIMEOUT means the click reached the bot but it never
+                        // called answerCallbackQuery -- the action may still have taken effect
+                        // (e.g. the bot edited the message). Fall through and let the edit/
+                        // new-message watchers below decide whether it actually succeeded.
+                        if (!err?.message?.includes("BOT_RESPONSE_TIMEOUT")) {
+                          clickAbort.abort();
+                          signal?.removeEventListener("abort", forwardAbort);
+                          throw err;
+                        }
+                        callbackTimedOut = true;
                       }
 
-                      if (answer.message) step.callbackAnswer = answer.message;
+                      if (answer?.message) step.callbackAnswer = answer.message;
                       clicked = true;
                       step.retryCount = retryCount;
 
@@ -1285,8 +1353,41 @@ export async function runCustom(
                           : undefined;
                       }
 
+                      // A timed-out callback only counts as a failure if the bot never
+                      // reacted. If no edit/new message was seen live, re-fetch the clicked
+                      // message: a changed editDate proves the bot processed the click.
+                      if (callbackTimedOut && !responses.length) {
+                        const fresh: Api.Message | null = await client
+                          .getMessages(entity, { ids: [buttonsMsg!.id] })
+                          .then((r) => (r as Api.Message[])?.[0] ?? null)
+                          .catch(() => null);
+                        const freshEditDate = (fresh as any)?.editDate as
+                          | number
+                          | undefined;
+                        const wasEdited =
+                          !!fresh &&
+                          !!freshEditDate &&
+                          freshEditDate !== preClickEditDate;
+                        if (!wasEdited)
+                          throw new Error(
+                            `Button "${btnText}" click timed out (BOT_RESPONSE_TIMEOUT) with no response`,
+                          );
+                        step.responseSource = "edit";
+                        const parsed = await parseMessages(
+                          [fresh!],
+                          client,
+                          signal,
+                        );
+                        step.responseHtml = parsed.html || undefined;
+                        step.responseImage = parsed.images[0];
+                        step.responseHasMedia = parsed.hasMedia || undefined;
+                        step.responseButtons = parsed.buttons.length
+                          ? parsed.buttons
+                          : undefined;
+                      }
+
                       if (action.successContains || action.failContains) {
-                        const texts = [answer.message ?? '', ...responses.map((r) => r.msg.message ?? '')].filter(Boolean).join('\n');
+                        const texts = [answer?.message ?? '', ...responses.map((r) => r.msg.message ?? '')].filter(Boolean).join('\n');
                         if (action.failContains && texts.includes(action.failContains)) {
                           throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
                         }
