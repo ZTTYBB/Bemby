@@ -1,9 +1,10 @@
 import { db } from "../db/database";
 
-// Private keys for passkeys we registered are kept in the existing settings
-// key-value table (no new schema) as a JSON map keyed by the Telegram passkey id.
-// These are the secret halves of WebAuthn credentials -- treat as sensitive.
-const STORE_KEY = "tg_passkey_secrets";
+// Bemby stores a single passkey per account in the dedicated tg_accounts.passkey column
+// (JSON). One passkey per account keeps export/import trivial: the passkey travels with
+// the account and needs no id remapping. It is kept in its own column, out of the UI-safe
+// additional_attributes bag, because it holds a private key -- treat as sensitive and
+// never serialise it to the client.
 
 export type PasskeySecret = {
   accountId: number;
@@ -20,93 +21,106 @@ export type PasskeySecret = {
   port?: number;
 };
 
-type Store = Record<string, PasskeySecret>;
+// The persisted form omits accountId -- it is the row's own id, injected on read.
+export type StoredPasskey = Omit<PasskeySecret, "accountId">;
 
-function readStore(): Store {
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(STORE_KEY) as
-    | { value: string }
-    | undefined;
-  if (!row?.value) return {};
+export function parseStoredPasskey(
+  raw: string | null | undefined,
+): StoredPasskey | null {
+  if (!raw) return null;
   try {
-    return JSON.parse(row.value) as Store;
+    const value = JSON.parse(raw);
+    return value && typeof value === "object" ? (value as StoredPasskey) : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
-function writeStore(store: Store): void {
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
-    STORE_KEY,
-    JSON.stringify(store),
-  );
+export function getAccountPasskey(accountId: number): PasskeySecret | null {
+  const row = db
+    .prepare("SELECT passkey FROM tg_accounts WHERE id = ?")
+    .get(accountId) as { passkey: string | null } | undefined;
+  const stored = parseStoredPasskey(row?.passkey);
+  return stored ? { accountId, ...stored } : null;
 }
 
 export function savePasskeySecret(secret: PasskeySecret): void {
-  const store = readStore();
-  store[secret.telegramPasskeyId] = secret;
-  writeStore(store);
+  const { accountId, ...stored } = secret;
+  db.prepare("UPDATE tg_accounts SET passkey = ? WHERE id = ?").run(
+    JSON.stringify(stored),
+    accountId,
+  );
 }
 
-export function getPasskeySecret(telegramPasskeyId: string): PasskeySecret | undefined {
-  return readStore()[telegramPasskeyId];
+export function getPasskeySecret(
+  telegramPasskeyId: string,
+): PasskeySecret | undefined {
+  const rows = db
+    .prepare("SELECT id, passkey FROM tg_accounts WHERE passkey IS NOT NULL")
+    .all() as Array<{ id: number; passkey: string }>;
+  for (const r of rows) {
+    const stored = parseStoredPasskey(r.passkey);
+    if (stored?.telegramPasskeyId === telegramPasskeyId)
+      return { accountId: r.id, ...stored };
+  }
+  return undefined;
+}
+
+function clearPasskey(accountId: number): void {
+  db.prepare("UPDATE tg_accounts SET passkey = NULL WHERE id = ?").run(accountId);
 }
 
 export function deletePasskeySecret(telegramPasskeyId: string): void {
-  const store = readStore();
-  if (store[telegramPasskeyId]) {
-    delete store[telegramPasskeyId];
-    writeStore(store);
-  }
+  const secret = getPasskeySecret(telegramPasskeyId);
+  if (secret) clearPasskey(secret.accountId);
 }
 
-// Drop stored secrets for an account whose passkey no longer exists on Telegram.
+// Drop the stored secret when its passkey no longer exists on Telegram.
 export function pruneAccountPasskeySecrets(
   accountId: number,
   liveIds: string[],
 ): void {
-  const live = new Set(liveIds);
-  const store = readStore();
-  let changed = false;
-  for (const [id, s] of Object.entries(store)) {
-    if (s.accountId === accountId && !live.has(id)) {
-      delete store[id];
-      changed = true;
-    }
-  }
-  if (changed) writeStore(store);
+  const secret = getAccountPasskey(accountId);
+  if (secret && !liveIds.includes(secret.telegramPasskeyId)) clearPasskey(accountId);
 }
 
-// Telegram passkey ids that we hold the private key for (for a given account).
+// Telegram passkey ids we hold the private key for (0 or 1 for a given account).
 export function storedPasskeyIdsForAccount(accountId: number): string[] {
-  return accountPasskeySecrets(accountId).map((s) => s.telegramPasskeyId);
+  const secret = getAccountPasskey(accountId);
+  return secret ? [secret.telegramPasskeyId] : [];
 }
 
+// Kept returning an array so existing callers (export, .find(dcId)) are unchanged.
 export function accountPasskeySecrets(accountId: number): PasskeySecret[] {
-  return Object.values(readStore()).filter((s) => s.accountId === accountId);
+  const secret = getAccountPasskey(accountId);
+  return secret ? [secret] : [];
 }
 
-// True when the account has a stored passkey usable for login (key + known DC),
-// i.e. auth/request would attempt passkey login rather than the code flow.
+// True when the account has a stored passkey usable for login (key + known DC).
 export function accountHasUsablePasskey(accountId: number): boolean {
-  return Object.values(readStore()).some(
-    (s) => s.accountId === accountId && s.dcId != null,
-  );
+  return getAccountPasskey(accountId)?.dcId != null;
 }
 
-// Backfill/refresh the account's home DC on every stored secret for that account.
+// Backfill/refresh the account's home DC on the stored secret.
 export function setAccountPasskeyDc(
   accountId: number,
   dc: { dcId: number; serverAddress: string; port: number },
 ): void {
-  const store = readStore();
-  let changed = false;
-  for (const s of Object.values(store)) {
-    if (s.accountId === accountId) {
-      s.dcId = dc.dcId;
-      s.serverAddress = dc.serverAddress;
-      s.port = dc.port;
-      changed = true;
-    }
-  }
-  if (changed) writeStore(store);
+  const secret = getAccountPasskey(accountId);
+  if (!secret) return;
+  savePasskeySecret({ ...secret, ...dc });
+}
+
+// Resolves the passkey to store for an imported account, tolerating older export shapes:
+// a single `passkey` object (current), or a `passkeys` array (interim builds).
+export function importedPasskeyFor(item: any): StoredPasskey | null {
+  const raw =
+    item?.passkey && typeof item.passkey === "object"
+      ? item.passkey
+      : Array.isArray(item?.passkeys)
+        ? item.passkeys.find((p: any) => p?.dcId != null) ?? item.passkeys[0]
+        : null;
+  if (!raw || typeof raw !== "object") return null;
+  const { accountId: _omit, ...stored } = raw as Record<string, unknown>;
+  return stored as unknown as StoredPasskey;
 }

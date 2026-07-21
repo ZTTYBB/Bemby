@@ -499,6 +499,83 @@ try {
   console.error("[db] tg_accounts nullable migration failed:", e);
 }
 
+// Bemby-owned per-account columns, added after the nullable rebuild above so that
+// rebuild's explicit column list stays untouched:
+//   passkey               -- the single passkey secret (JSON); kept in its own column,
+//                            never serialised to the UI (holds a private key)
+//   additional_attributes -- generic UI-safe flags bag (JSON), e.g. email/restriction status
+try {
+  db.exec("ALTER TABLE tg_accounts ADD COLUMN passkey TEXT");
+} catch {}
+try {
+  db.exec("ALTER TABLE tg_accounts ADD COLUMN additional_attributes TEXT");
+} catch {}
+
+// One-time move of passkeys from the old settings key-value store (tg_passkey_secrets)
+// onto their account's passkey column. When an account held more than one, keep the
+// entry with a known DC (the one usable for login). The old setting is then dropped.
+runOnce("passkey-settings-to-column", () => {
+  const row = db
+    .prepare("SELECT value FROM settings WHERE key = 'tg_passkey_secrets'")
+    .get() as { value: string } | undefined;
+  if (!row?.value) return;
+  let store: Record<string, any>;
+  try {
+    store = JSON.parse(row.value);
+  } catch {
+    return;
+  }
+  const chosen = new Map<number, any>();
+  for (const secret of Object.values(store)) {
+    const accountId = (secret as any)?.accountId;
+    if (typeof accountId !== "number") continue;
+    const current = chosen.get(accountId);
+    if (!current || ((secret as any).dcId != null && current.dcId == null)) {
+      chosen.set(accountId, secret);
+    }
+  }
+  const upd = db.prepare("UPDATE tg_accounts SET passkey = ? WHERE id = ?");
+  for (const [accountId, secret] of chosen) {
+    const { accountId: _omit, ...passkey } = secret;
+    upd.run(JSON.stringify(passkey), accountId);
+  }
+  db.prepare("DELETE FROM settings WHERE key = 'tg_passkey_secrets'").run();
+});
+
+// Corrective one-off: an earlier build briefly stored the passkey inside the
+// additional_attributes bag. Move any stray passkey into the dedicated column (which
+// keeps the secret out of the UI-facing bag) and strip it from the bag.
+runOnce("passkey-move-out-of-attributes", () => {
+  const rows = db
+    .prepare(
+      "SELECT id, passkey, additional_attributes FROM tg_accounts WHERE additional_attributes IS NOT NULL",
+    )
+    .all() as Array<{ id: number; passkey: string | null; additional_attributes: string }>;
+  const updBoth = db.prepare(
+    "UPDATE tg_accounts SET passkey = ?, additional_attributes = ? WHERE id = ?",
+  );
+  const updAttrs = db.prepare(
+    "UPDATE tg_accounts SET additional_attributes = ? WHERE id = ?",
+  );
+  for (const r of rows) {
+    let bag: any;
+    try {
+      bag = JSON.parse(r.additional_attributes);
+    } catch {
+      continue;
+    }
+    if (!bag || typeof bag !== "object" || !("passkey" in bag)) continue;
+    const { passkey, ...rest } = bag;
+    const restJson = Object.keys(rest).length ? JSON.stringify(rest) : null;
+    if (!r.passkey && passkey && typeof passkey === "object") {
+      const { accountId: _omit, ...stored } = passkey;
+      updBoth.run(JSON.stringify(stored), restJson, r.id);
+    } else {
+      updAttrs.run(restJson, r.id);
+    }
+  }
+});
+
 export const FALLBACK_TIMEZONE = "Australia/Sydney";
 
 /** Returns the default_timezone setting, or the built-in fallback when unset. */

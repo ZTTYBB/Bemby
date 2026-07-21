@@ -105,8 +105,12 @@ export type Account = {
   notes: string | null;
   /** Device model Telegram sees, with template variables expanded (server-computed, read-only). */
   resolvedDeviceModel?: string | null;
-  /** True when a stored passkey (key + known DC) will be used for login instead of a code. */
+  /** Generic per-account flags bag (UI-safe; never contains the passkey secret). */
+  attributes?: Record<string, unknown>;
+  /** True when the Telegram account has any passkey (any device/origin). */
   hasPasskey?: boolean;
+  /** True when Bemby holds a stored passkey (key + known DC) usable for login. */
+  hasBembyPasskey?: boolean;
 };
 
 export type BulkAddItemStatus =
@@ -178,7 +182,6 @@ export type Passkey = {
 };
 
 export type PasskeySecret = {
-  accountId: number;
   telegramPasskeyId: string;
   credentialId: string;
   privateKeyPem: string;
@@ -200,7 +203,8 @@ export type AccountExportItem = {
   proxyId: string | null;
   appClientId: string | null;
   disabled: boolean;
-  passkeys: PasskeySecret[];
+  passkey: PasskeySecret | null;
+  additionalAttributes: Record<string, unknown> | null;
 };
 
 export type AccountExportPayload = {

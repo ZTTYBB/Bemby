@@ -47,11 +47,18 @@ import {
   deletePasskeySecret,
   storedPasskeyIdsForAccount,
   accountPasskeySecrets,
+  parseStoredPasskey,
+  importedPasskeyFor,
   setAccountPasskeyDc,
-  accountHasUsablePasskey,
   pruneAccountPasskeySecrets,
-  type PasskeySecret,
 } from "../tg/passkeyStore";
+import {
+  parseAttributes,
+  publicAttributes,
+  writeAttributes,
+  patchAttributes,
+  foldImportedAttributes,
+} from "../db/accountAttributes";
 import { refreshScheduler } from "../scheduler";
 
 type EncryptedEnvelope = {
@@ -143,6 +150,8 @@ type AccountRow = {
   tg_display_name: string | null;
   tg_username: string | null;
   notes: string | null;
+  passkey: string | null;
+  additional_attributes: string | null;
 };
 
 /** Resolves effective API credentials, falling back to global defaults. Throws if neither is set. */
@@ -200,7 +209,15 @@ function toJson(row: AccountRow) {
     tgUsername: row.tg_username ?? null,
     notes: row.notes ?? null,
     resolvedDeviceModel: previewDeviceModel(row.id, row.app_client_id),
-    hasPasskey: accountHasUsablePasskey(row.id),
+    // Generic UI-safe flags; the passkey secret is deliberately never included here.
+    attributes: publicAttributes(parseAttributes(row.additional_attributes)),
+    // Whether the Telegram account has ANY passkey (any device/origin). Sourced from the
+    // stored flag, refreshed whenever Bemby lists the account's passkeys.
+    hasPasskey:
+      (parseAttributes(row.additional_attributes).hasPasskey as boolean | undefined) ??
+      false,
+    // Whether Bemby holds a stored passkey usable for login (its home DC is known).
+    hasBembyPasskey: parseStoredPasskey(row.passkey)?.dcId != null,
   };
 }
 
@@ -417,7 +434,11 @@ type AccountImportItem = {
   proxyId?: string | null;
   appClientId?: string | null;
   disabled?: boolean;
-  passkeys?: PasskeySecret[];
+  // Passkey secret and generic flags travel inline with the account. `passkey` is the
+  // current shape; `passkeys` (array) from interim builds is still tolerated on import.
+  passkey?: unknown;
+  passkeys?: unknown;
+  additionalAttributes?: Record<string, unknown> | null;
 };
 
 // POST /export -- export selected (or all) accounts with sensitive fields
@@ -449,16 +470,16 @@ router.post("/export", (req, res) => {
       proxyId: a.proxy_id ?? null,
       appClientId: a.app_client_id ?? null,
       disabled: Boolean(a.disabled),
-      // Passkey secrets (incl. private key + home DC) so the account can still log in
+      // Passkey secret (incl. private key + home DC) so the account can still log in
       // after import, even when force-reauth clears the session string.
-      passkeys: accountPasskeySecrets(a.id),
+      passkey: parseStoredPasskey(a.passkey),
+      // Generic per-account flags bag.
+      additionalAttributes: parseAttributes(a.additional_attributes),
     })),
   };
   const hasSecrets = payload.accounts.some(
     (a) =>
-      a.sessionString != null ||
-      a.apiHash ||
-      a.passkeys.some((p) => p.privateKeyPem),
+      a.sessionString != null || a.apiHash || a.passkey?.privateKeyPem,
   );
   if (hasSecrets && !secret) {
     res.status(400).json({
@@ -548,14 +569,14 @@ router.post("/import", (req, res) => {
           a.appClientId ?? null,
           a.disabled ? 1 : 0,
         );
-      // Restore passkey secrets under the newly assigned account id. The passkey (with
+      const newId = Number(info.lastInsertRowid);
+      // Restore the passkey secret under the newly assigned account id. The passkey (with
       // its home DC) is what lets the account log in after a force-reauth import.
-      if (Array.isArray(a.passkeys)) {
-        const newId = Number(info.lastInsertRowid);
-        for (const pk of a.passkeys) {
-          savePasskeySecret({ ...pk, accountId: newId });
-        }
-      }
+      const pk = importedPasskeyFor(a);
+      if (pk) savePasskeySecret({ ...pk, accountId: newId });
+      // Restore the generic attributes bag.
+      const attrs = foldImportedAttributes(a);
+      if (attrs) writeAttributes(newId, attrs);
       imported++;
     }
   })();
@@ -780,6 +801,13 @@ router.post("/:id/check-spam", async (req, res) => {
       proxy,
       deviceParams,
     );
+    // Persist the restriction for the account-list badge: store the status when the
+    // account is restricted, clear it when confirmed free, leave it on an unknown result.
+    if (result.spamStatus === "free") {
+      patchAttributes(account.id, { restriction: undefined });
+    } else if (result.spamStatus !== "unknown") {
+      patchAttributes(account.id, { restriction: result.spamStatus });
+    }
     res.json(result);
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account.id);
@@ -1055,6 +1083,8 @@ router.get("/:id/password-info", async (req, res) => {
     const proxy = parseTgProxy(proxyUrl);
     const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
     const info = await getPasswordInfo(apiId, apiHash, account.session_string, proxy, deviceParams);
+    // Store hasEmail only when a login email is found; drop the flag otherwise.
+    patchAttributes(account.id, { hasEmail: info.loginEmailPattern ? true : undefined });
     res.json(info);
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
@@ -1162,8 +1192,10 @@ router.get("/:id/passkeys", async (req, res) => {
     const passkeys = await getPasskeys(apiId, apiHash, account.session_string, proxy, deviceParams);
     // Telegram is authoritative: drop stored keys for passkeys that no longer
     // exist there (e.g. removed when the 2FA password was changed), so storedIds
-    // / hasPasskey stay accurate.
+    // stay accurate.
     pruneAccountPasskeySecrets(account.id, passkeys.map((p) => p.id));
+    // Record whether the account has ANY passkey (any device/origin) for the list flag.
+    patchAttributes(account.id, { hasPasskey: passkeys.length > 0 });
     res.json({ passkeys, storedIds: storedPasskeyIdsForAccount(account.id) });
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
@@ -1203,6 +1235,8 @@ router.post("/:id/passkeys", async (req, res) => {
       createdDate: result.passkey.date,
       ...dc,
     });
+    // The account now has a passkey (this one, created by Bemby).
+    patchAttributes(account.id, { hasPasskey: true });
     res.json({ passkey: result.passkey });
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);

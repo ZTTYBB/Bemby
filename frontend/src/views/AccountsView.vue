@@ -72,15 +72,15 @@
         <button v-else class="btn btn-secondary" @click="openExportWarn">
           <i class="fa-solid fa-file-export"></i> {{ t("accounts.exportBtn") }}
         </button>
-        <button class="btn btn-secondary" @click="showNotes = !showNotes">
+        <button class="btn btn-secondary" @click="showExtra = !showExtra">
           <i
             class="fa-solid"
-            :class="showNotes ? 'fa-eye-slash' : 'fa-eye'"
+            :class="showExtra ? 'fa-eye-slash' : 'fa-eye'"
           ></i>
           {{
-            showNotes
-              ? t("accounts.hideNotesToggle")
-              : t("accounts.showNotesToggle")
+            showExtra
+              ? t("accounts.hideExtraInfoToggle")
+              : t("accounts.showExtraInfoToggle")
           }}
         </button>
         <button class="btn btn-secondary" @click="openImport">
@@ -115,14 +115,14 @@
               <th>{{ t("accounts.colPhone") }}</th>
               <th class="col-hide-mobile">{{ t("accounts.colTgName") }}</th>
               <th>{{ t("accounts.colStatus") }}</th>
-              <th :class="notesColClass">{{ t("accounts.colNotes") }}</th>
+              <th :class="extraColClass">{{ t("accounts.colExtraInfo") }}</th>
               <th class="col-hide-mobile">{{ t("accounts.colAdded") }}</th>
               <th>{{ t("common.actions") }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="!accounts.length">
-              <td :colspan="showNotes ? 8 : 7" class="empty">{{ t("accounts.noAccounts") }}</td>
+              <td :colspan="showExtra ? 8 : 7" class="empty">{{ t("accounts.noAccounts") }}</td>
             </tr>
             <tr
               v-for="(a, idx) in accounts"
@@ -247,7 +247,22 @@
                   }}
                 </span>
               </td>
-              <td :class="notesColClass" style="max-width: 200px; white-space: pre-wrap; word-break: break-word">{{ a.notes }}</td>
+              <td :class="extraColClass" style="max-width: 220px; white-space: pre-wrap; word-break: break-word">
+                <div
+                  v-if="accountExtraInfo(a).length"
+                  style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px"
+                >
+                  <span
+                    v-for="b in accountExtraInfo(a)"
+                    :key="b.label"
+                    class="badge"
+                    :class="b.cls"
+                    style="font-size: 10px"
+                    >{{ b.label }}</span
+                  >
+                </div>
+                <span v-if="a.notes">{{ a.notes }}</span>
+              </td>
               <td class="col-hide-mobile">{{ fmtDate(a.createdAt) }}</td>
               <td @click.stop>
                 <!-- desktop: icon buttons -->
@@ -2514,6 +2529,11 @@ async function checkSpam(a: Account) {
   try {
     const result = await accountsApi.checkSpam(a.id);
     spamStatuses.set(a.id, result);
+    // Mirror the persisted restriction flag onto the row so the Extra Info badge updates.
+    const attrs = { ...(a.attributes ?? {}) };
+    if (result.spamStatus === "free") delete attrs.restriction;
+    else if (result.spamStatus !== "unknown") attrs.restriction = result.spamStatus;
+    a.attributes = attrs;
   } catch (err: any) {
     spamStatuses.set(a.id, {
       spamStatus: "unknown",
@@ -2573,11 +2593,47 @@ const statusResult = ref<TgAccountStatus | null>(null);
 const statusError = ref("");
 const statusChecking = ref(false);
 
-// ── Notes column toggle ───────────────────────────────────────────────────────
-const showNotes = usePersistedRef<boolean>("bemby:accounts:showNotes", true);
-const notesColClass = computed(() =>
-  showNotes.value ? "col-hide-mobile" : "col-hidden",
+// ── Extra info column toggle (notes + additional attributes) ──────────────────
+// Storage key kept as "showNotes" to preserve the user's existing preference.
+const showExtra = usePersistedRef<boolean>("bemby:accounts:showNotes", true);
+const extraColClass = computed(() =>
+  showExtra.value ? "col-hide-mobile" : "col-hidden",
 );
+
+// Badges shown in the Extra Info column: the passkey state plus any flags Bemby has
+// recorded in the account's additional_attributes bag (e.g. hasEmail).
+const EXTRA_ATTR_LABELS: Record<string, string> = { hasEmail: "attrEmail" };
+function accountExtraInfo(a: Account): { label: string; cls: string }[] {
+  const badges: { label: string; cls: string }[] = [];
+  if (a.hasBembyPasskey)
+    badges.push({ label: t("accounts.attrBembyPasskey"), cls: "badge-green" });
+  else if (a.hasPasskey)
+    badges.push({ label: t("accounts.attrPasskey"), cls: "badge-grey" });
+  const attrs = a.attributes ?? {};
+  // Restriction: coloured status badge reusing the spam status labels/colours.
+  if (typeof attrs.restriction === "string") {
+    const colour: Record<string, string> = {
+      limited: "badge-orange",
+      blocked: "badge-red",
+      frozen: "badge-blue",
+    };
+    badges.push({
+      label: `${t("accounts.attrRestriction")}: ${t(`accounts.spam.${attrs.restriction}`)}`,
+      cls: colour[attrs.restriction] ?? "badge-grey",
+    });
+  }
+  for (const [key, value] of Object.entries(attrs)) {
+    // Skip keys shown above and any non-primitive values (no "[object Object]").
+    if (key === "hasPasskey" || key === "passkey" || key === "restriction") continue;
+    if (value === false || value == null || typeof value === "object") continue;
+    const base = EXTRA_ATTR_LABELS[key] ? t(`accounts.${EXTRA_ATTR_LABELS[key]}`) : key;
+    badges.push({
+      label: value === true ? base : `${base}: ${String(value)}`,
+      cls: "badge-blue",
+    });
+  }
+  return badges;
+}
 
 // ── Bulk notes state ──────────────────────────────────────────────────────────
 const showBulkNotes = ref(false);
@@ -3745,6 +3801,11 @@ async function loadPasswordInfo() {
   pwdInfoLoading.value = true;
   try {
     pwdInfo.value = await accountsApi.getPasswordInfo(editTarget.value.id);
+    // Reflect the freshly-fetched login-email state on the list row immediately.
+    const attrs = { ...(editTarget.value.attributes ?? {}) };
+    if (pwdInfo.value.loginEmailPattern) attrs.hasEmail = true;
+    else delete attrs.hasEmail;
+    editTarget.value.attributes = attrs;
   } catch {
     // non-fatal: section just won't show
   } finally {
@@ -3761,6 +3822,12 @@ async function loadPasskeys() {
     passkeys.value = data.passkeys;
     passkeyStoredIds.value = data.storedIds;
     passkeysLoaded.value = true;
+    // Reflect the "any passkey" state on the list row immediately.
+    const attrs = { ...(editTarget.value.attributes ?? {}) };
+    editTarget.value.hasPasskey = data.passkeys.length > 0;
+    if (data.passkeys.length) attrs.hasPasskey = true;
+    else delete attrs.hasPasskey;
+    editTarget.value.attributes = attrs;
   } catch (err: any) {
     passkeysError.value = err.response?.data?.error ?? err.message;
   } finally {
