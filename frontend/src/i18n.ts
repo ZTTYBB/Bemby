@@ -366,6 +366,24 @@ const zh = {
         failed: "失败",
       },
     },
+    bulkFetch: {
+      btn: "获取属性",
+      title: "获取账户属性",
+      intro:
+        "将为所选 {n} 个已认证账户刷新 TG 信息及额外属性（名称、用户名、邮箱、通行密钥），不包括发消息许可检测。",
+      noTargets: "所选账户中没有已认证的账户可获取。",
+      start: "开始获取",
+      running: "获取中",
+      progressLabel: "进度",
+      doneMsg: "已更新",
+      failed: "获取失败",
+      status: {
+        pending: "等待中",
+        fetching: "获取中",
+        done: "完成",
+        failed: "失败",
+      },
+    },
     loginEmailSection: "登录邮箱",
     loginEmailSet: "已设置",
     loginEmailNone: "未设置",
@@ -1299,6 +1317,25 @@ const en: typeof zh = {
       status: {
         pending: "Pending",
         cleaning: "Cleaning",
+        done: "Done",
+        failed: "Failed",
+      },
+    },
+    bulkFetch: {
+      btn: "Fetch Attributes",
+      title: "Fetch Account Attributes",
+      intro:
+        "TG info and extra attributes (name, username, email, passkey) will be refreshed for {n} selected authenticated account(s). The spam check is not included.",
+      noTargets:
+        "None of the selected accounts are authenticated, so there is nothing to fetch.",
+      start: "Start Fetching",
+      running: "Fetching",
+      progressLabel: "Progress",
+      doneMsg: "Updated",
+      failed: "Fetch failed",
+      status: {
+        pending: "Pending",
+        fetching: "Fetching",
         done: "Done",
         failed: "Failed",
       },

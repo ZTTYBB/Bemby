@@ -37,6 +37,14 @@
               <i class="fa-solid fa-user-shield"></i>
               {{ t("accounts.checkSpamSelected") }}
             </button>
+            <button
+              class="bulk-menu-item"
+              :disabled="bulkFetchRunning"
+              @click="runBulk(openBulkFetch)"
+            >
+              <i class="fa-solid fa-arrows-rotate"></i>
+              {{ t("accounts.bulkFetch.btn") }}
+            </button>
             <button class="bulk-menu-item" @click="runBulk(openBulkNotes)">
               <i class="fa-solid fa-note-sticky"></i>
               {{ t("accounts.setNotesSelected") }}
@@ -2053,6 +2061,120 @@
       </div>
     </div>
 
+    <!-- Bulk fetch attributes modal -->
+    <div v-if="showBulkFetch" class="modal-backdrop">
+      <div class="modal modal-lg">
+        <h3 class="modal-title">
+          <i class="fa-solid fa-arrows-rotate" style="margin-right: 8px"></i>
+          {{ t("accounts.bulkFetch.title") }}
+        </h3>
+
+        <!-- Confirm step -->
+        <template v-if="!bulkFetchRunning && !bulkFetchDoneAll">
+          <div v-if="!bulkFetchTargets.length" class="warn-box">
+            {{ t("accounts.bulkFetch.noTargets") }}
+          </div>
+          <template v-else>
+            <div class="warn-box">
+              {{
+                t("accounts.bulkFetch.intro").replace(
+                  "{n}",
+                  String(bulkFetchTargets.length),
+                )
+              }}
+            </div>
+            <div class="bulk-clean-accounts">
+              <div
+                v-for="a in bulkFetchTargets"
+                :key="a.id"
+                class="bulk-clean-account"
+              >
+                <strong>{{ a.name }}</strong>
+                <span class="bulk-add-phone">{{ a.phoneNumber }}</span>
+              </div>
+            </div>
+            <div class="form-group" style="margin-top: 12px">
+              <label class="form-label">{{ t("accounts.bulkGap.label") }}</label>
+              <input
+                v-model.number="bulkFetchGapSeconds"
+                type="number"
+                min="0"
+                class="form-input"
+              />
+              <div class="form-hint">{{ t("accounts.bulkGap.hint") }}</div>
+            </div>
+          </template>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="closeBulkFetch">
+              <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+            </button>
+            <button
+              v-if="bulkFetchTargets.length"
+              class="btn btn-primary"
+              @click="startBulkFetch"
+            >
+              <i class="fa-solid fa-arrows-rotate"></i>
+              {{ t("accounts.bulkFetch.start") }}
+            </button>
+          </div>
+        </template>
+
+        <!-- Progress step -->
+        <template v-else>
+          <div class="bulk-add-progress-head">
+            <span>
+              {{ t("accounts.bulkFetch.progressLabel") }}:
+              {{ bulkFetchDoneCount }} / {{ bulkFetchTargets.length }}
+            </span>
+            <span v-if="bulkFetchRunning" class="bulk-add-running">
+              <i class="fa-solid fa-spinner fa-spin"></i>
+              {{ t("accounts.bulkFetch.running") }}
+            </span>
+            <span v-else class="bulk-add-finished">
+              <i class="fa-solid fa-circle-check"></i>
+              {{ t("accounts.bulkAdd.finished") }}
+            </span>
+          </div>
+          <div class="bulk-add-list">
+            <div
+              v-for="item in bulkFetchProgress"
+              :key="item.id"
+              class="bulk-add-item"
+            >
+              <span
+                class="bulk-add-status-dot"
+                :class="`status-${item.status}`"
+              ></span>
+              <div class="bulk-add-item-body">
+                <div class="bulk-add-item-top">
+                  <strong>{{ item.name }}</strong>
+                  <span class="bulk-add-item-status">
+                    {{ t(`accounts.bulkFetch.status.${item.status}`) }}
+                  </span>
+                </div>
+                <div
+                  v-if="item.message"
+                  class="bulk-add-item-msg"
+                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
+                >
+                  {{ item.message }}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button
+              class="btn btn-primary"
+              :disabled="bulkFetchRunning"
+              @click="closeBulkFetch"
+            >
+              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <!-- Auth modal -->
     <div v-if="showAuth" class="modal-backdrop">
       <div class="modal">
@@ -2584,6 +2706,81 @@ async function checkSpamBulk() {
     if (i < targets.length - 1 && gapMs > 0) await sleep(gapMs);
   }
   spamBulkRunning.value = false;
+}
+
+// ── Bulk fetch attributes state ───────────────────────────────────────────────
+// Refreshes TG meta + extra attributes (name, username, hasEmail, hasPasskey) for
+// each selected authenticated account. Read-only; excludes the spam check.
+type BulkFetchStatus = "pending" | "fetching" | "done" | "failed";
+type BulkFetchItem = {
+  id: number;
+  name: string;
+  status: BulkFetchStatus;
+  message: string;
+};
+
+const showBulkFetch = ref(false);
+const bulkFetchRunning = ref(false);
+const bulkFetchDoneAll = ref(false);
+const bulkFetchTargets = ref<Account[]>([]);
+const bulkFetchProgress = ref<BulkFetchItem[]>([]);
+const bulkFetchGapSeconds = ref(5);
+
+const bulkFetchDoneCount = computed(
+  () =>
+    bulkFetchProgress.value.filter(
+      (i) => i.status === "done" || i.status === "failed",
+    ).length,
+);
+
+function openBulkFetch() {
+  bulkFetchTargets.value = accounts.value.filter(
+    (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
+  );
+  bulkFetchRunning.value = false;
+  bulkFetchDoneAll.value = false;
+  bulkFetchProgress.value = [];
+  showBulkFetch.value = true;
+}
+
+function closeBulkFetch() {
+  if (bulkFetchRunning.value) return;
+  showBulkFetch.value = false;
+}
+
+async function startBulkFetch() {
+  if (!bulkFetchTargets.value.length || bulkFetchRunning.value) return;
+  bulkFetchProgress.value = bulkFetchTargets.value.map((a) => ({
+    id: a.id,
+    name: a.name,
+    status: "pending",
+    message: "",
+  }));
+  bulkFetchRunning.value = true;
+  const gapMs = Math.max(0, bulkFetchGapSeconds.value) * 1000;
+  const items = bulkFetchProgress.value;
+  // Sequential to avoid Telegram flood limits, one account at a time
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    item.status = "fetching";
+    try {
+      const r = await accountsApi.fetchAttributes(item.id);
+      // Replace the row so the Extra Info badges refresh immediately.
+      const idx = accounts.value.findIndex((x) => x.id === item.id);
+      if (idx !== -1) accounts.value[idx] = r.account;
+      item.status = "done";
+      item.message = r.warnings.length
+        ? r.warnings.join("; ")
+        : t("accounts.bulkFetch.doneMsg");
+    } catch (e: any) {
+      item.status = "failed";
+      item.message =
+        e?.response?.data?.error ?? e?.message ?? t("accounts.bulkFetch.failed");
+    }
+    if (i < items.length - 1 && gapMs > 0) await sleep(gapMs);
+  }
+  bulkFetchRunning.value = false;
+  bulkFetchDoneAll.value = true;
 }
 
 // ── Status check state ────────────────────────────────────────────────────────
@@ -4713,6 +4910,7 @@ tr.drag-over td {
 .bulk-add-status-dot.status-submitting_code,
 .bulk-add-status-dot.status-submitting_2fa,
 .bulk-add-status-dot.status-cleaning,
+.bulk-add-status-dot.status-fetching,
 .bulk-add-status-dot.status-working {
   background: #1296db;
   animation: bulk-pulse 1s ease-in-out infinite;

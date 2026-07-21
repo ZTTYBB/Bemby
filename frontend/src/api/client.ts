@@ -547,6 +547,12 @@ export const accountsApi = {
         `/accounts/${id}/refresh-tg-meta`,
       )
       .then((r) => r.data),
+  fetchAttributes: (id: number) =>
+    api
+      .post<{ account: Account; warnings: string[]; authExpired: boolean }>(
+        `/accounts/${id}/fetch-attributes`,
+      )
+      .then((r) => r.data),
   getProfile: (id: number) =>
     api.get<TgOwnProfile>(`/accounts/${id}/profile`).then((r) => r.data),
   updateProfile: (

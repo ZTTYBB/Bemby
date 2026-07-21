@@ -815,6 +815,94 @@ router.post("/:id/check-spam", async (req, res) => {
   }
 });
 
+// POST /:id/fetch-attributes -- refresh all TG meta and extra attributes for one
+// account (display name/username, hasEmail, hasPasskey). Deliberately excludes the
+// spam check. Each step runs independently so one failure does not block the rest;
+// per-step failures are returned as warnings.
+router.post("/:id/fetch-attributes", async (req, res) => {
+  const account = db
+    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
+    .get(req.params.id) as AccountRow | undefined;
+  if (!requireAuth(account, res)) return;
+
+  let apiId!: number;
+  let apiHash!: string;
+  let proxy!: ReturnType<typeof parseTgProxy>;
+  let deviceParams!: ReturnType<typeof resolveAppClientParams>;
+  try {
+    ({ apiId, apiHash } = resolveApiCredentials(account));
+    proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
+    deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+  } catch (err: any) {
+    internalError(res, err, "fetch-attributes");
+    return;
+  }
+
+  const warnings: string[] = [];
+  let authExpired = false;
+  // Skip remaining steps once the session is known dead; they would only fail too.
+  const runStep = async (label: string, fn: () => Promise<void>) => {
+    if (authExpired) return;
+    try {
+      await fn();
+    } catch (err: any) {
+      if (isAuthError(err?.message ?? "")) {
+        markSessionExpired(account.id);
+        authExpired = true;
+      }
+      warnings.push(
+        `${label}: ${err?.errorMessage ?? err?.message ?? "failed"}`,
+      );
+    }
+  };
+
+  await runStep("status", async () => {
+    const status = await checkAccountStatus(
+      apiId,
+      apiHash,
+      account.session_string,
+      proxy,
+      deviceParams,
+    );
+    if (statusNeedsReauth(status)) {
+      markSessionExpired(account.id);
+      authExpired = true;
+    }
+    saveTgMeta(account.id, status.firstName, status.lastName, status.username);
+  });
+  await runStep("password-info", async () => {
+    const info = await getPasswordInfo(
+      apiId,
+      apiHash,
+      account.session_string,
+      proxy,
+      deviceParams,
+    );
+    patchAttributes(account.id, {
+      hasEmail: info.loginEmailPattern ? true : undefined,
+    });
+  });
+  await runStep("passkeys", async () => {
+    const passkeys = await getPasskeys(
+      apiId,
+      apiHash,
+      account.session_string,
+      proxy,
+      deviceParams,
+    );
+    pruneAccountPasskeySecrets(
+      account.id,
+      passkeys.map((p) => p.id),
+    );
+    patchAttributes(account.id, { hasPasskey: passkeys.length > 0 });
+  });
+
+  const row = db
+    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
+    .get(account.id) as AccountRow;
+  res.json({ account: toJson(row), warnings, authExpired });
+});
+
 // POST /:id/update-2fa -- set, change, or remove the account's 2FA password
 router.post("/:id/update-2fa", async (req, res) => {
   const account = db
