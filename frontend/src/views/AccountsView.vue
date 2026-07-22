@@ -1925,7 +1925,7 @@
             @click="startBulkSpamCheck"
           >
             <i class="fa-solid fa-user-shield"></i>
-            {{ t("accounts.bulkClean.start") }}
+            {{ t("accounts.bulkSpam.start") }}
           </button>
         </div>
       </div>

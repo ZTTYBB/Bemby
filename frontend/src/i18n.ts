@@ -195,7 +195,7 @@ const zh = {
     twoFaPasswordMismatch: "两次输入的密码不一致",
     twoFaWrongPassword: "当前密码错误",
     checkSpam: "检测发消息许可",
-    checkSpamSelected: "批量检发测消息许可",
+    checkSpamSelected: "批量检测发消息许可",
     spamChecking: "检测中...",
     colNotes: "备注",
     colExtraInfo: "额外信息",
@@ -345,6 +345,7 @@ const zh = {
     },
     bulkSpam: {
       intro: "将检测所选 {n} 个已认证账户的账号状态（是否受限/封禁）。",
+      start: "开始检测",
     },
     bulkGap: {
       label: "每个账户之间的间隔（秒）",
@@ -1297,6 +1298,7 @@ const en: typeof zh = {
     bulkSpam: {
       intro:
         "Check the account status (limited / banned) of the {n} selected authenticated account(s).",
+      start: "Start Check",
     },
     bulkGap: {
       label: "Gap between accounts (seconds)",
