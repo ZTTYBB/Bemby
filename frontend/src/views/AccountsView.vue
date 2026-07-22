@@ -146,7 +146,7 @@
               ]"
               style="cursor: pointer"
               :draggable="!searchText.trim()"
-              @click="toggleSelect(a.id)"
+              @click="toggleSelect(a.id, idx, $event)"
               @dragstart="onDragStart(idx, $event)"
               @dragover.prevent="dragOverIdx = idx"
               @dragleave="dragOverIdx = null"
@@ -3106,11 +3106,29 @@ function toggleSelectAll() {
   }
 }
 
-function toggleSelect(id: number) {
+// Index of the last row toggled without Shift; anchors Shift-click ranges.
+let lastSelectedIdx: number | null = null;
+
+function toggleSelect(id: number, idx: number, event?: MouseEvent) {
+  // Shift-click selects the contiguous range between the anchor row and this
+  // one; other modifiers/clicks toggle a single row and reset the anchor.
+  if (event?.shiftKey && lastSelectedIdx !== null) {
+    // Shift-click would otherwise highlight the intervening table text.
+    window.getSelection?.()?.removeAllRanges();
+    const next = new Set(selectedIds.value);
+    const [lo, hi] = [lastSelectedIdx, idx].sort((a, b) => a - b);
+    for (let i = lo; i <= hi; i++) {
+      const row = accounts.value[i];
+      if (row) next.add(row.id);
+    }
+    selectedIds.value = next;
+    return;
+  }
   const next = new Set(selectedIds.value);
   if (next.has(id)) next.delete(id);
   else next.add(id);
   selectedIds.value = next;
+  lastSelectedIdx = idx;
 }
 
 // ── Export state ──────────────────────────────────────────────────────────────
