@@ -1413,14 +1413,46 @@
                   <i class="fa-solid fa-xmark"></i>
                 </button>
               </div>
-              <button
-                type="button"
-                class="btn btn-ghost btn-sm"
-                @click="addBulkApiCred"
-              >
-                <i class="fa-solid fa-plus"></i>
-                {{ t("accounts.bulkAdd.apiCredAdd") }}
-              </button>
+              <div class="bulk-add-cred-actions">
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm"
+                  @click="addBulkApiCred"
+                >
+                  <i class="fa-solid fa-plus"></i>
+                  {{ t("accounts.bulkAdd.apiCredAdd") }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm"
+                  @click="bulkApiCredsPasteOpen = !bulkApiCredsPasteOpen"
+                >
+                  <i class="fa-solid fa-paste"></i>
+                  {{ t("accounts.bulkAdd.apiCredPaste") }}
+                </button>
+              </div>
+              <template v-if="bulkApiCredsPasteOpen">
+                <textarea
+                  v-model="bulkApiCredsPasteText"
+                  class="form-input bulk-add-mono"
+                  rows="5"
+                  spellcheck="false"
+                  :placeholder="t('accounts.bulkAdd.apiCredPastePlaceholder')"
+                ></textarea>
+                <div class="bulk-add-cred-actions">
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    :disabled="!bulkApiCredsPasteText.trim()"
+                    @click="applyBulkApiCredsPaste"
+                  >
+                    {{ t("accounts.bulkAdd.apiCredPasteApply") }}
+                  </button>
+                </div>
+                <div class="form-hint">
+                  {{ t("accounts.bulkAdd.apiCredPasteHint") }}
+                </div>
+              </template>
               <div class="form-hint">{{ t("accounts.bulkAdd.apiCredsHint") }}</div>
             </div>
             <div class="form-group">
@@ -3301,6 +3333,27 @@ function removeBulkApiCred(index: number) {
   if (!bulkApiCreds.value.length) bulkApiCreds.value.push({ apiId: "", apiHash: "" });
 }
 
+// Paste-many box: one pair per line as "<id> <hash>" (any whitespace, comma or
+// tab separates the two). Parsed rows replace the current list.
+const bulkApiCredsPasteOpen = ref(false);
+const bulkApiCredsPasteText = ref("");
+
+function applyBulkApiCredsPaste() {
+  const parsed = bulkApiCredsPasteText.value
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [apiId, apiHash] = line.split(/[\s,\t]+/);
+      return { apiId: (apiId ?? "").trim(), apiHash: (apiHash ?? "").trim() };
+    })
+    .filter((c) => c.apiId && c.apiHash);
+  if (!parsed.length) return;
+  bulkApiCreds.value = parsed;
+  bulkApiCredsPasteText.value = "";
+  bulkApiCredsPasteOpen.value = false;
+}
+
 const bulkAddPlaceholder =
   "+12025550143----https://example.com/getcode?id=80323dfc-9002-4083-a997-7ea29346d620\n+12025550178----https://example.com/getcode?id=0eaa294a-8d56-4aa4-bec9-6192356fadfc\n+12025550199";
 
@@ -5167,6 +5220,12 @@ tr.drag-over td {
 .bulk-add-cred-row .form-input:nth-child(2) {
   flex: 1;
   min-width: 0;
+}
+
+.bulk-add-cred-actions {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 8px;
 }
 
 .bulk-rename-preview {
