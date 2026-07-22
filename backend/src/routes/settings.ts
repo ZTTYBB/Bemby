@@ -3,6 +3,7 @@ import { db } from "../db/database";
 import { refreshScheduler, purgeOldLogs } from "../scheduler";
 import { SocksClient } from "socks";
 import { parseTgProxy } from "../jobs/runner";
+import { isBulkAccountManagementEnabled } from "../jobs/bulkAdd";
 
 const router = Router();
 
@@ -74,6 +75,10 @@ function getClientSettings(): Record<string, string> {
   }
   // Synthetic flag so the client can gate AI features without seeing the key
   result.ai_key_configured = aiKeyConfigured() ? "true" : "false";
+  // Env-gated feature flag for bulk account management (add + clean)
+  result.bulk_account_management = isBulkAccountManagementEnabled()
+    ? "true"
+    : "false";
   return result;
 }
 

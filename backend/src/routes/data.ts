@@ -8,6 +8,18 @@ import {
   timingSafeCompare,
   getStoredCredentials,
 } from '../auth/credentials';
+import {
+  savePasskeySecret,
+  parseStoredPasskey,
+  importedPasskeyFor,
+  type StoredPasskey,
+} from '../tg/passkeyStore';
+import {
+  parseAttributes,
+  writeAttributes,
+  foldImportedAttributes,
+  LEGACY_PASSKEY_STORE_KEY,
+} from '../db/accountAttributes';
 
 // Admin/JWT secrets are instance-local and must never travel in a backup.
 export const EXPORT_EXCLUDED_SETTINGS = new Set([
@@ -43,7 +55,9 @@ export function exportRequiresEncryption(
     Partial<Pick<ExportPayload, 'jobs' | 'templates'>>,
 ): boolean {
   return (
-    payload.accounts.some((a) => a.sessionString || a.apiHash) ||
+    payload.accounts.some(
+      (a) => a.sessionString || a.apiHash || a.passkey?.privateKeyPem,
+    ) ||
     (payload.aiSuppliers ?? []).some((s) => s.apiKey) ||
     SENSITIVE_SETTING_KEYS.some((k) => Boolean(payload.settings?.[k])) ||
     (payload.jobs ?? []).some((j) => configHasSecret(j.config)) ||
@@ -97,6 +111,8 @@ type AccountRow = {
   session_string: string | null;
   auth_status: string;
   proxy_id: string | null;
+  passkey: string | null;
+  additional_attributes: string | null;
 };
 
 type JobRow = {
@@ -158,6 +174,10 @@ export type ExportPayload = {
     sessionString: string | null;
     authStatus: string;
     proxyId?: string | null;
+    // Passkey secret and generic flags travel inline with the account so nothing needs
+    // remapping on import (a raw settings blob would keep stale, detached account ids).
+    passkey?: StoredPasskey | null;
+    additionalAttributes?: Record<string, unknown> | null;
   }>;
   templates?: Array<{
     name: string;
@@ -228,6 +248,8 @@ router.post('/export', (req, res) => {
       sessionString: a.session_string,
       authStatus: a.auth_status,
       proxyId: a.proxy_id ?? null,
+      passkey: parseStoredPasskey(a.passkey),
+      additionalAttributes: parseAttributes(a.additional_attributes),
     })),
     templates: templates.map(t => ({
       name: t.name,
@@ -271,7 +293,9 @@ router.post('/export', (req, res) => {
       })),
     settings: Object.fromEntries(
       settings
-        .filter(s => !EXPORT_EXCLUDED_SETTINGS.has(s.key))
+        // Passkeys now live on the account row (exported per-account above), never as a
+        // setting. Exclude the legacy blob in case an un-migrated DB still holds it.
+        .filter(s => !EXPORT_EXCLUDED_SETTINGS.has(s.key) && s.key !== LEGACY_PASSKEY_STORE_KEY)
         .map(s => [s.key, s.value]),
     ),
   };
@@ -376,7 +400,15 @@ router.post('/import', async (req, res) => {
         a.proxyId ?? null,
       );
 
-      accountIndexToId.set(i, result.lastInsertRowid as number);
+      const newAccountId = result.lastInsertRowid as number;
+      accountIndexToId.set(i, newAccountId);
+      // Restore the passkey secret under the new account id so passkey login still works
+      // after import (even when force-reauth clears the session string).
+      const pk = importedPasskeyFor(a);
+      if (pk) savePasskeySecret({ ...pk, accountId: newAccountId });
+      // Restore the generic attributes bag.
+      const attrs = foldImportedAttributes(a);
+      if (attrs) writeAttributes(newAccountId, attrs);
       results.accountsImported++;
     }
 
@@ -487,6 +519,9 @@ router.post('/import', async (req, res) => {
       const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
       for (const [key, value] of Object.entries(payload.settings)) {
         if (EXPORT_EXCLUDED_SETTINGS.has(key)) continue;
+        // Never merge a legacy raw passkey blob: passkeys live on the account row now,
+        // and an older backup's blob carries stale account ids.
+        if (key === LEGACY_PASSKEY_STORE_KEY) continue;
         if (typeof value === 'string') { stmt.run(key, value); results.settingsUpdated++; }
       }
     }

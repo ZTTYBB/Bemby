@@ -27,7 +27,9 @@ const SCHEMA = `
     app_client_id   TEXT,
     sort_order      INTEGER NOT NULL DEFAULT 0,
     tg_display_name TEXT,
-    tg_username     TEXT
+    tg_username     TEXT,
+    passkey               TEXT,
+    additional_attributes TEXT
   );
   CREATE TABLE IF NOT EXISTS job_templates (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +104,8 @@ function buildExportPayload(db: DB): ExportPayload {
     accounts: accounts.map((a: any) => ({
       name: a.name, phoneNumber: a.phone_number, apiId: a.api_id, apiHash: a.api_hash,
       sessionString: a.session_string, authStatus: a.auth_status, proxyId: a.proxy_id ?? null,
+      passkey: a.passkey ? JSON.parse(a.passkey) : null,
+      additionalAttributes: a.additional_attributes ? JSON.parse(a.additional_attributes) : {},
     })),
     templates: templates.map((t: any) => ({
       name: t.name, jobType: t.job_type, botUsername: t.bot_username, timezone: t.timezone,
@@ -125,7 +129,9 @@ function buildExportPayload(db: DB): ExportPayload {
         supplierIndex: supplierIdToIndex.get(m.supplier_id)!,
         modelId: m.model_id, label: m.label,
       })),
-    settings: Object.fromEntries(settings.map((s: any) => [s.key, s.value])),
+    settings: Object.fromEntries(
+      settings.filter((s: any) => s.key !== LEGACY_PASSKEY_STORE_KEY).map((s: any) => [s.key, s.value]),
+    ),
   };
 }
 
@@ -158,7 +164,11 @@ function runImport(db: DB, payload: ExportPayload, mode: 'merge' | 'replace', fo
           forceReauth ? null : (a.sessionString ?? null),
           forceReauth ? 'unauthenticated' : (a.authStatus ?? 'unauthenticated'),
           a.proxyId ?? null);
-      accountIndexToId.set(i, r.lastInsertRowid as number);
+      const newAccountId = r.lastInsertRowid as number;
+      accountIndexToId.set(i, newAccountId);
+      const pk = importedPasskey(a);
+      if (pk) savePasskey(db, newAccountId, pk);
+      restoreAttrs(db, newAccountId, a);
       results.accountsImported++;
     }
 
@@ -211,6 +221,7 @@ function runImport(db: DB, payload: ExportPayload, mode: 'merge' | 'replace', fo
     if (payload.settings && typeof payload.settings === 'object') {
       const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
       for (const [key, value] of Object.entries(payload.settings)) {
+        if (key === LEGACY_PASSKEY_STORE_KEY) continue;
         if (typeof value === 'string') { stmt.run(key, value); results.settingsUpdated++; }
       }
     }
@@ -310,6 +321,14 @@ describe('exportRequiresEncryption -- forces encryption for any credential', () 
     const jobs = [{ config: null }, { config: 'not json' }] as ExportPayload['jobs'];
     expect(exportRequiresEncryption({ ...base, jobs })).toBe(false);
   });
+
+  it('is true when an account carries a passkey private key (no session)', () => {
+    const accounts = [{
+      name: 'A', phoneNumber: '+1', apiId: 1, apiHash: '', sessionString: null, authStatus: 'unauthenticated',
+      passkey: { telegramPasskeyId: 'p', credentialId: 'c', privateKeyPem: 'KEY', rpId: 'r', userHandle: 'u', createdDate: 1 },
+    }] as ExportPayload['accounts'];
+    expect(exportRequiresEncryption({ ...base, accounts })).toBe(true);
+  });
 });
 
 describe('export excludes instance-local secrets', () => {
@@ -317,6 +336,83 @@ describe('export excludes instance-local secrets', () => {
     expect(EXPORT_EXCLUDED_SETTINGS.has('admin_password_hash')).toBe(true);
     expect(EXPORT_EXCLUDED_SETTINGS.has('admin_username')).toBe(true);
     expect(EXPORT_EXCLUDED_SETTINGS.has('jwt_secret')).toBe(true);
+  });
+});
+
+describe('full-database export/import -- passkeys & attributes', () => {
+  const seed = () => { const db = new Database(':memory:'); db.exec(SCHEMA); return db; };
+
+  it('carries the passkey per-account, never as a settings blob', () => {
+    const db = seed();
+    const { lastInsertRowid: id } = db.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h');
+    savePasskey(db, Number(id), makePasskey('pk1'));
+    const payload = buildExportPayload(db);
+    expect(payload.accounts[0].passkey?.telegramPasskeyId).toBe('pk1');
+    expect(payload.settings[LEGACY_PASSKEY_STORE_KEY]).toBeUndefined();
+  });
+
+  it('restores the passkey onto the new account row on merge import', () => {
+    const src = seed();
+    const { lastInsertRowid: srcId } = src.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h');
+    savePasskey(src, Number(srcId), makePasskey('pk1'));
+    const payload = buildExportPayload(src);
+
+    const dest = seed();
+    dest.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Filler', '+61999999999', 9, 'x');
+    runImport(dest, payload, 'merge');
+
+    const acct = dest.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(acct.id).not.toBe(Number(srcId));
+    expect(getPasskey(dest, acct.id)?.telegramPasskeyId).toBe('pk1');
+  });
+
+  it('round-trips the additional_attributes bag', () => {
+    const src = seed();
+    const { lastInsertRowid: id } = src.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h');
+    src.prepare('UPDATE tg_accounts SET additional_attributes = ? WHERE id = ?').run(JSON.stringify({ hasEmail: true, restriction: null }), id);
+    const payload = buildExportPayload(src);
+
+    const dest = seed();
+    runImport(dest, payload, 'merge');
+    const acct = dest.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(getAttrs(dest, acct.id)).toEqual({ hasEmail: true, restriction: null });
+  });
+
+  it('replace mode wipes the old passkey with its account and restores the imported one', () => {
+    const src = seed();
+    const { lastInsertRowid: srcId } = src.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h');
+    savePasskey(src, Number(srcId), makePasskey('pk1'));
+    const payload = buildExportPayload(src);
+
+    const dest = seed();
+    const { lastInsertRowid: oldId } = dest.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Old', '+61411111111', 5, 'y');
+    savePasskey(dest, Number(oldId), makePasskey('stale'));
+    runImport(dest, payload, 'replace');
+
+    const rows = dest.prepare('SELECT id, phone_number FROM tg_accounts').all() as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].phone_number).toBe('+61400000001');
+    expect(getPasskey(dest, rows[0].id)?.telegramPasskeyId).toBe('pk1'); // stale row (and its passkey) gone
+  });
+
+  // Backward compatibility: an older backup keeps passkeys in the raw settings blob
+  // (with account ids that no longer exist). Import must succeed and must NOT write
+  // that stale blob back, so passkeys never mis-attach to the wrong account.
+  it('imports an older backup without mis-attaching its stale passkey blob', () => {
+    const legacyStore = JSON.stringify({ old: { accountId: 999, ...makePasskey('old') } });
+    const payload = {
+      version: '1' as const, exportedAt: 'x',
+      accounts: [{ name: 'Alice', phoneNumber: '+61400000001', apiId: 1, apiHash: 'h', sessionString: null, authStatus: 'unauthenticated' }],
+      jobs: [], settings: { [LEGACY_PASSKEY_STORE_KEY]: legacyStore, some_other: 'kept' },
+    } as unknown as ExportPayload;
+
+    const dest = seed();
+    const r = runImport(dest, payload, 'merge');
+    expect(r.accountsImported).toBe(1);
+    const acct = dest.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(getPasskey(dest, acct.id)).toBeNull();                       // no stale attach
+    expect(dest.prepare('SELECT value FROM settings WHERE key = ?').get(LEGACY_PASSKEY_STORE_KEY)).toBeUndefined();
+    expect((dest.prepare('SELECT value FROM settings WHERE key = ?').get('some_other') as any).value).toBe('kept');
   });
 });
 
@@ -589,6 +685,45 @@ describe('full data import -- replace mode', () => {
 
 // ── Account-only export ───────────────────────────────────────────────────────
 
+// Passkeys now live in the dedicated tg_accounts.passkey column; the legacy settings
+// key is only recognised (and skipped) for backward compat on import.
+const LEGACY_PASSKEY_STORE_KEY = 'tg_passkey_secrets';
+
+// The persisted passkey form -- no accountId (it is the row id).
+const makePasskey = (id: string) => ({
+  telegramPasskeyId: id, credentialId: `cred-${id}`,
+  privateKeyPem: `-----BEGIN PRIVATE KEY-----${id}-----END PRIVATE KEY-----`,
+  rpId: 'telegram.org', userHandle: `handle-${id}`, createdDate: 1_700_000_000,
+  dcId: 2, serverAddress: '149.154.167.51', port: 443,
+});
+
+function savePasskey(db: DB, accountId: number, stored: any) {
+  db.prepare('UPDATE tg_accounts SET passkey = ? WHERE id = ?').run(JSON.stringify(stored), accountId);
+}
+function getPasskey(db: DB, accountId: number): any | null {
+  const r = db.prepare('SELECT passkey FROM tg_accounts WHERE id = ?').get(accountId) as { passkey: string | null } | undefined;
+  return r?.passkey ? JSON.parse(r.passkey) : null;
+}
+function getAttrs(db: DB, accountId: number): Record<string, unknown> {
+  const r = db.prepare('SELECT additional_attributes FROM tg_accounts WHERE id = ?').get(accountId) as { additional_attributes: string | null } | undefined;
+  return r?.additional_attributes ? JSON.parse(r.additional_attributes) : {};
+}
+// Mirrors passkeyStore.importedPasskeyFor (tolerates the interim `passkeys` array shape).
+function importedPasskey(a: any): any | null {
+  const raw = a?.passkey && typeof a.passkey === 'object' ? a.passkey
+    : Array.isArray(a?.passkeys) ? (a.passkeys.find((p: any) => p?.dcId != null) ?? a.passkeys[0]) : null;
+  if (!raw || typeof raw !== 'object') return null;
+  const { accountId: _omit, ...stored } = raw;
+  return stored;
+}
+// Mirrors accountAttributes.foldImportedAttributes + writeAttributes.
+function restoreAttrs(db: DB, accountId: number, a: any) {
+  const bag = a?.additionalAttributes;
+  if (bag && typeof bag === 'object' && Object.keys(bag).length) {
+    db.prepare('UPDATE tg_accounts SET additional_attributes = ? WHERE id = ?').run(JSON.stringify(bag), accountId);
+  }
+}
+
 // Mirrors the POST /accounts/export route logic
 function exportAccounts(db: DB, ids?: number[]) {
   let rows: any[];
@@ -604,6 +739,8 @@ function exportAccounts(db: DB, ids?: number[]) {
       name: a.name, phoneNumber: a.phone_number, apiId: a.api_id, apiHash: a.api_hash,
       sessionString: a.session_string, authStatus: a.auth_status,
       proxyId: a.proxy_id ?? null, appClientId: a.app_client_id ?? null, disabled: Boolean(a.disabled),
+      passkey: getPasskey(db, a.id),
+      additionalAttributes: getAttrs(db, a.id),
     })),
   };
 }
@@ -615,8 +752,12 @@ function importAccounts(db: DB, items: any[], forceReauth = true) {
     if (!a.phoneNumber || !a.apiId || !a.apiHash) { skipped++; continue; }
     const existing = db.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get(a.phoneNumber) as { id: number } | undefined;
     if (existing) { skipped++; continue; }
-    db.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id, app_client_id, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    const info = db.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id, app_client_id, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(a.name || a.phoneNumber, a.phoneNumber, Number(a.apiId), a.apiHash, forceReauth ? null : (a.sessionString ?? null), forceReauth ? 'unauthenticated' : (a.authStatus ?? 'unauthenticated'), a.proxyId ?? null, a.appClientId ?? null, a.disabled ? 1 : 0);
+    const newId = Number(info.lastInsertRowid);
+    const pk = importedPasskey(a);
+    if (pk) savePasskey(db, newId, pk);
+    restoreAttrs(db, newId, a);
     imported++;
   }
   return { imported, skipped };
@@ -718,5 +859,83 @@ describe('account-only import', () => {
     importAccounts(db, [{ phoneNumber: '+61400000001', apiId: 1, apiHash: 'h', disabled: true }], false);
     const row = db.prepare('SELECT disabled FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
     expect(row.disabled).toBe(1);
+  });
+});
+
+describe('account-only export/import -- passkey & attributes', () => {
+  let db: DB;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    db.exec(SCHEMA);
+  });
+
+  it('includes the account passkey in the export', () => {
+    const { lastInsertRowid: id } = db.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h');
+    savePasskey(db, Number(id), makePasskey('pk1'));
+    const exported = exportAccounts(db);
+    expect(exported.accounts[0].passkey.privateKeyPem).toContain('pk1');
+    expect(exported.accounts[0].passkey.dcId).toBe(2);
+  });
+
+  it('restores the passkey onto the new account row on import', () => {
+    const src = new Database(':memory:');
+    src.exec(SCHEMA);
+    const { lastInsertRowid: srcId } = src.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h');
+    savePasskey(src, Number(srcId), makePasskey('pk1'));
+    const exported = exportAccounts(src);
+
+    // Pre-seed the target DB so the imported account gets a different id
+    db.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Filler', '+61999999999', 9, 'x');
+    importAccounts(db, exported.accounts);
+
+    const newAcct = db.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(newAcct.id).not.toBe(Number(srcId));
+    const restored = getPasskey(db, newAcct.id);
+    expect(restored.telegramPasskeyId).toBe('pk1');
+    expect(restored.privateKeyPem).toContain('pk1');
+    expect(restored.accountId).toBeUndefined(); // stored form omits accountId
+  });
+
+  it('round-trips the additional_attributes bag', () => {
+    const src = new Database(':memory:');
+    src.exec(SCHEMA);
+    const { lastInsertRowid: id } = src.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash) VALUES (?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h');
+    src.prepare('UPDATE tg_accounts SET additional_attributes = ? WHERE id = ?').run(JSON.stringify({ hasPasskey: true, restriction: 'none' }), id);
+
+    importAccounts(db, exportAccounts(src).accounts);
+    const row = db.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(getAttrs(db, row.id)).toEqual({ hasPasskey: true, restriction: 'none' });
+  });
+
+  it('keeps the passkey even when forceReauth clears the session', () => {
+    const src = new Database(':memory:');
+    src.exec(SCHEMA);
+    const { lastInsertRowid: srcId } = src.prepare('INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status) VALUES (?, ?, ?, ?, ?, ?)').run('Alice', '+61400000001', 1, 'h', 'sess', 'authenticated');
+    savePasskey(src, Number(srcId), makePasskey('pk1'));
+
+    importAccounts(db, exportAccounts(src).accounts, true); // forceReauth
+    const row = db.prepare('SELECT * FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(row.session_string).toBeNull();                  // session dropped
+    expect(getPasskey(db, row.id)?.telegramPasskeyId).toBe('pk1'); // passkey survives
+  });
+
+  // Backward compatibility: an export produced by an older Bemby has no passkey field
+  // on its accounts. Import must still succeed and simply store none.
+  it('imports an older export that has no passkey field', () => {
+    const legacyAccount = { phoneNumber: '+61400000001', apiId: 1, apiHash: 'h', sessionString: 'sess', authStatus: 'authenticated' };
+    expect('passkey' in legacyAccount).toBe(false);
+    const r = importAccounts(db, [legacyAccount]);
+    expect(r.imported).toBe(1);
+    const row = db.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(getPasskey(db, row.id)).toBeNull();
+  });
+
+  // Interim builds (this session) briefly exported a `passkeys` array; still importable.
+  it('imports the interim passkeys-array shape', () => {
+    const item = { phoneNumber: '+61400000001', apiId: 1, apiHash: 'h', passkeys: [{ accountId: 7, ...makePasskey('arr') }] };
+    importAccounts(db, [item]);
+    const row = db.prepare('SELECT id FROM tg_accounts WHERE phone_number = ?').get('+61400000001') as any;
+    expect(getPasskey(db, row.id)?.telegramPasskeyId).toBe('arr');
   });
 });

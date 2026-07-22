@@ -19,13 +19,46 @@ import {
   verifyLoginEmail,
   getPasskeys,
   deletePasskey,
+  registerPasskey,
+  verifyPasskeyLogin,
+  startPasskeyLogin,
+  getSessionDc,
   type PasswordInfo,
 } from "../auth/tgAuth";
 import { checkSpamStatus } from "../jobs/checkin";
+import {
+  startBulkAdd,
+  getBulkAddStatus,
+  cancelBulkAdd,
+  isBulkAccountManagementEnabled,
+  type BulkAddOptions,
+} from "../jobs/bulkAdd";
+import {
+  changeLoginEmailViaGmail,
+  testGmailImap,
+} from "../jobs/bulkLoginEmail";
 import type { AuthStatus } from "../types";
 import { parseTgProxy } from "../jobs/runner";
 import { resolveAppClientParams, previewDeviceModel } from "../tg/appClient";
 import { isAuthError, markSessionExpired } from "../tg/liveClient";
+import {
+  savePasskeySecret,
+  getPasskeySecret,
+  deletePasskeySecret,
+  storedPasskeyIdsForAccount,
+  accountPasskeySecrets,
+  parseStoredPasskey,
+  importedPasskeyFor,
+  setAccountPasskeyDc,
+  pruneAccountPasskeySecrets,
+} from "../tg/passkeyStore";
+import {
+  parseAttributes,
+  publicAttributes,
+  writeAttributes,
+  patchAttributes,
+  foldImportedAttributes,
+} from "../db/accountAttributes";
 import { refreshScheduler } from "../scheduler";
 
 type EncryptedEnvelope = {
@@ -117,6 +150,8 @@ type AccountRow = {
   tg_display_name: string | null;
   tg_username: string | null;
   notes: string | null;
+  passkey: string | null;
+  additional_attributes: string | null;
 };
 
 /** Resolves effective API credentials, falling back to global defaults. Throws if neither is set. */
@@ -174,6 +209,15 @@ function toJson(row: AccountRow) {
     tgUsername: row.tg_username ?? null,
     notes: row.notes ?? null,
     resolvedDeviceModel: previewDeviceModel(row.id, row.app_client_id),
+    // Generic UI-safe flags; the passkey secret is deliberately never included here.
+    attributes: publicAttributes(parseAttributes(row.additional_attributes)),
+    // Whether the Telegram account has ANY passkey (any device/origin). Sourced from the
+    // stored flag, refreshed whenever Bemby lists the account's passkeys.
+    hasPasskey:
+      (parseAttributes(row.additional_attributes).hasPasskey as boolean | undefined) ??
+      false,
+    // Whether Bemby holds a stored passkey usable for login (its home DC is known).
+    hasBembyPasskey: parseStoredPasskey(row.passkey)?.dcId != null,
   };
 }
 
@@ -293,6 +337,58 @@ router.post("/", (req, res) => {
   res.status(201).json(toJson(row));
 });
 
+// POST /bulk-add -- create accounts from "phone----apiUrl" lines, then
+// authenticate them one by one using codes/2FA served by each API page
+// Reject bulk-management requests unless enabled via BULK_ACCOUNT_MANAGEMENT
+const bulkMgmtGuard: import("express").RequestHandler = (_req, res, next) => {
+  if (!isBulkAccountManagementEnabled()) {
+    res.status(403).json({ error: "Bulk account management is not enabled" });
+    return;
+  }
+  next();
+};
+
+router.post("/bulk-add", bulkMgmtGuard, (req, res) => {
+  const { text, options } = req.body as {
+    text?: string;
+    options?: BulkAddOptions;
+  };
+  if (!text || !text.trim()) {
+    res.status(400).json({ error: "text is required" });
+    return;
+  }
+  const result = startBulkAdd(text, options);
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.status(201).json(result.batch);
+});
+
+// GET /bulk-add/status -- current batch progress (null if none has run)
+router.get("/bulk-add/status", bulkMgmtGuard, (_req, res) => {
+  res.json(getBulkAddStatus());
+});
+
+// POST /bulk-add/cancel -- stop the running batch after the current step
+router.post("/bulk-add/cancel", bulkMgmtGuard, (_req, res) => {
+  res.json({ cancelled: cancelBulkAdd() });
+});
+
+// POST /gmail/test -- check Gmail IMAP login works (for bulk login-email change)
+router.post("/gmail/test", bulkMgmtGuard, async (req, res) => {
+  const { gmail, appPassword } = req.body as {
+    gmail?: string;
+    appPassword?: string;
+  };
+  if (!gmail || !gmail.includes("@") || !appPassword) {
+    res.status(400).json({ error: "gmail and appPassword are required" });
+    return;
+  }
+  const result = await testGmailImap(gmail.trim(), appPassword);
+  res.json(result);
+});
+
 // PUT /reorder -- update sort_order for multiple accounts at once
 router.put("/reorder", (req, res) => {
   const { items } = req.body as {
@@ -328,6 +424,27 @@ router.put("/bulk-notes", (req, res) => {
   res.json({ ok: true });
 });
 
+// PUT /bulk-rename -- set the Bemby name for multiple accounts at once. Each
+// item carries its own pre-computed name; blank names are skipped.
+router.put("/bulk-rename", (req, res) => {
+  const { items } = req.body as {
+    items?: Array<{ id: number; name: string }>;
+  };
+  if (!Array.isArray(items) || !items.length) {
+    res.status(400).json({ error: "items array required" });
+    return;
+  }
+  const update = db.prepare("UPDATE tg_accounts SET name = ? WHERE id = ?");
+  const tx = db.transaction(() => {
+    for (const { id, name } of items) {
+      const trimmed = String(name ?? "").trim();
+      if (trimmed) update.run(trimmed, id);
+    }
+  });
+  tx();
+  res.json({ ok: true });
+});
+
 type AccountImportItem = {
   name?: string;
   phoneNumber: string;
@@ -338,6 +455,11 @@ type AccountImportItem = {
   proxyId?: string | null;
   appClientId?: string | null;
   disabled?: boolean;
+  // Passkey secret and generic flags travel inline with the account. `passkey` is the
+  // current shape; `passkeys` (array) from interim builds is still tolerated on import.
+  passkey?: unknown;
+  passkeys?: unknown;
+  additionalAttributes?: Record<string, unknown> | null;
 };
 
 // POST /export -- export selected (or all) accounts with sensitive fields
@@ -369,9 +491,17 @@ router.post("/export", (req, res) => {
       proxyId: a.proxy_id ?? null,
       appClientId: a.app_client_id ?? null,
       disabled: Boolean(a.disabled),
+      // Passkey secret (incl. private key + home DC) so the account can still log in
+      // after import, even when force-reauth clears the session string.
+      passkey: parseStoredPasskey(a.passkey),
+      // Generic per-account flags bag.
+      additionalAttributes: parseAttributes(a.additional_attributes),
     })),
   };
-  const hasSecrets = payload.accounts.some(a => a.sessionString != null || a.apiHash);
+  const hasSecrets = payload.accounts.some(
+    (a) =>
+      a.sessionString != null || a.apiHash || a.passkey?.privateKeyPem,
+  );
   if (hasSecrets && !secret) {
     res.status(400).json({
       error: 'This export contains session strings or API credentials. Provide an encryption secret.',
@@ -445,19 +575,29 @@ router.post("/import", (req, res) => {
         skipped++;
         continue;
       }
-      db.prepare(
-        "INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id, app_client_id, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      ).run(
-        a.name || a.phoneNumber,
-        a.phoneNumber,
-        a.apiId ? Number(a.apiId) : null,
-        a.apiHash,
-        forceReauth ? null : (a.sessionString ?? null),
-        forceReauth ? "unauthenticated" : (a.authStatus ?? "unauthenticated"),
-        a.proxyId ?? null,
-        a.appClientId ?? null,
-        a.disabled ? 1 : 0,
-      );
+      const info = db
+        .prepare(
+          "INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id, app_client_id, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          a.name || a.phoneNumber,
+          a.phoneNumber,
+          a.apiId ? Number(a.apiId) : null,
+          a.apiHash,
+          forceReauth ? null : (a.sessionString ?? null),
+          forceReauth ? "unauthenticated" : (a.authStatus ?? "unauthenticated"),
+          a.proxyId ?? null,
+          a.appClientId ?? null,
+          a.disabled ? 1 : 0,
+        );
+      const newId = Number(info.lastInsertRowid);
+      // Restore the passkey secret under the newly assigned account id. The passkey (with
+      // its home DC) is what lets the account log in after a force-reauth import.
+      const pk = importedPasskeyFor(a);
+      if (pk) savePasskeySecret({ ...pk, accountId: newId });
+      // Restore the generic attributes bag.
+      const attrs = foldImportedAttributes(a);
+      if (attrs) writeAttributes(newId, attrs);
       imported++;
     }
   })();
@@ -682,11 +822,106 @@ router.post("/:id/check-spam", async (req, res) => {
       proxy,
       deviceParams,
     );
+    // Persist the restriction for the account-list badge: store the status when the
+    // account is restricted, clear it when confirmed free, leave it on an unknown result.
+    if (result.spamStatus === "free") {
+      patchAttributes(account.id, { restriction: undefined });
+    } else if (result.spamStatus !== "unknown") {
+      patchAttributes(account.id, { restriction: result.spamStatus });
+    }
     res.json(result);
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account.id);
     internalError(res, err, 'check-spam');
   }
+});
+
+// POST /:id/fetch-attributes -- refresh all TG meta and extra attributes for one
+// account (display name/username, hasEmail, hasPasskey). Deliberately excludes the
+// spam check. Each step runs independently so one failure does not block the rest;
+// per-step failures are returned as warnings.
+router.post("/:id/fetch-attributes", async (req, res) => {
+  const account = db
+    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
+    .get(req.params.id) as AccountRow | undefined;
+  if (!requireAuth(account, res)) return;
+
+  let apiId!: number;
+  let apiHash!: string;
+  let proxy!: ReturnType<typeof parseTgProxy>;
+  let deviceParams!: ReturnType<typeof resolveAppClientParams>;
+  try {
+    ({ apiId, apiHash } = resolveApiCredentials(account));
+    proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
+    deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+  } catch (err: any) {
+    internalError(res, err, "fetch-attributes");
+    return;
+  }
+
+  const warnings: string[] = [];
+  let authExpired = false;
+  // Skip remaining steps once the session is known dead; they would only fail too.
+  const runStep = async (label: string, fn: () => Promise<void>) => {
+    if (authExpired) return;
+    try {
+      await fn();
+    } catch (err: any) {
+      if (isAuthError(err?.message ?? "")) {
+        markSessionExpired(account.id);
+        authExpired = true;
+      }
+      warnings.push(
+        `${label}: ${err?.errorMessage ?? err?.message ?? "failed"}`,
+      );
+    }
+  };
+
+  await runStep("status", async () => {
+    const status = await checkAccountStatus(
+      apiId,
+      apiHash,
+      account.session_string,
+      proxy,
+      deviceParams,
+    );
+    if (statusNeedsReauth(status)) {
+      markSessionExpired(account.id);
+      authExpired = true;
+    }
+    saveTgMeta(account.id, status.firstName, status.lastName, status.username);
+  });
+  await runStep("password-info", async () => {
+    const info = await getPasswordInfo(
+      apiId,
+      apiHash,
+      account.session_string,
+      proxy,
+      deviceParams,
+    );
+    patchAttributes(account.id, {
+      hasEmail: info.loginEmailPattern ? true : undefined,
+    });
+  });
+  await runStep("passkeys", async () => {
+    const passkeys = await getPasskeys(
+      apiId,
+      apiHash,
+      account.session_string,
+      proxy,
+      deviceParams,
+    );
+    pruneAccountPasskeySecrets(
+      account.id,
+      passkeys.map((p) => p.id),
+    );
+    patchAttributes(account.id, { hasPasskey: passkeys.length > 0 });
+  });
+
+  const row = db
+    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
+    .get(account.id) as AccountRow;
+  res.json({ account: toJson(row), warnings, authExpired });
 });
 
 // POST /:id/update-2fa -- set, change, or remove the account's 2FA password
@@ -921,6 +1156,12 @@ router.post("/:id/force-reauth", (req, res) => {
     res.status(404).json({ error: "Not found" });
     return;
   }
+  // Capture the account's DC onto its stored passkeys before we drop the session,
+  // so a later passkey login can still reach the right data centre.
+  if (account.session_string) {
+    const dc = getSessionDc(account.session_string);
+    if (dc) setAccountPasskeyDc(account.id, dc);
+  }
   db.prepare(
     "UPDATE tg_accounts SET session_string = NULL, auth_status = 'unauthenticated' WHERE id = ?",
   ).run(account.id);
@@ -951,6 +1192,8 @@ router.get("/:id/password-info", async (req, res) => {
     const proxy = parseTgProxy(proxyUrl);
     const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
     const info = await getPasswordInfo(apiId, apiHash, account.session_string, proxy, deviceParams);
+    // Store hasEmail only when a login email is found; drop the flag otherwise.
+    patchAttributes(account.id, { hasEmail: info.loginEmailPattern ? true : undefined });
     res.json(info);
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
@@ -978,6 +1221,46 @@ router.post("/:id/login-email/send-code", async (req, res) => {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
     if (rpcBadRequest(res, err, "login-email/send-code")) return;
     internalError(res, err, "login-email/send-code");
+  }
+});
+
+// POST /:id/login-email/auto -- set a Gmail plus-address login email and read
+// the confirmation code back over IMAP. Gated by BULK_ACCOUNT_MANAGEMENT.
+router.post("/:id/login-email/auto", bulkMgmtGuard, async (req, res) => {
+  const account = db
+    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
+    .get(req.params.id) as AccountRow | undefined;
+  if (!requireAuth(account, res)) return;
+  const { gmail, appPassword, tag } = req.body as {
+    gmail?: string;
+    appPassword?: string;
+    tag?: string;
+  };
+  if (!gmail || !gmail.includes("@") || !appPassword) {
+    res.status(400).json({ error: "gmail and appPassword are required" });
+    return;
+  }
+  try {
+    const { apiId, apiHash } = resolveApiCredentials(account);
+    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
+    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+    const result = await changeLoginEmailViaGmail({
+      apiId,
+      apiHash,
+      sessionString: account.session_string,
+      phoneNumber: account.phone_number,
+      accountId: account.id,
+      proxy,
+      deviceParams,
+      gmail: gmail.trim(),
+      appPassword,
+      tag: (tag ?? "").trim(),
+    });
+    res.json(result);
+  } catch (err: any) {
+    if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
+    if (rpcBadRequest(res, err, "login-email/auto")) return;
+    internalError(res, err, "login-email/auto");
   }
 });
 
@@ -1016,10 +1299,90 @@ router.get("/:id/passkeys", async (req, res) => {
     const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
     const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
     const passkeys = await getPasskeys(apiId, apiHash, account.session_string, proxy, deviceParams);
-    res.json({ passkeys });
+    // Telegram is authoritative: drop stored keys for passkeys that no longer
+    // exist there (e.g. removed when the 2FA password was changed), so storedIds
+    // stay accurate.
+    pruneAccountPasskeySecrets(account.id, passkeys.map((p) => p.id));
+    // Record whether the account has ANY passkey (any device/origin) for the list flag.
+    patchAttributes(account.id, { hasPasskey: passkeys.length > 0 });
+    res.json({ passkeys, storedIds: storedPasskeyIdsForAccount(account.id) });
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
+    if (rpcBadRequest(res, err, "passkeys/list")) return;
     internalError(res, err, "passkeys/list");
+  }
+});
+
+// POST /:id/passkeys -- register a new passkey (experimental; WebAuthn ceremony run server-side)
+router.post("/:id/passkeys", async (req, res) => {
+  const account = db
+    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
+    .get(req.params.id) as AccountRow | undefined;
+  if (!requireAuth(account, res)) return;
+  try {
+    const { apiId, apiHash } = resolveApiCredentials(account);
+    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
+    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+    const origin = typeof req.body?.origin === "string" ? req.body.origin : undefined;
+    const result = await registerPasskey(
+      apiId,
+      apiHash,
+      account.session_string,
+      origin,
+      proxy,
+      deviceParams,
+    );
+    // Persist the private key so the passkey can later be used/verified for login.
+    const dc = getSessionDc(account.session_string) ?? {};
+    savePasskeySecret({
+      accountId: account.id,
+      telegramPasskeyId: result.passkey.id,
+      credentialId: result.credentialId,
+      privateKeyPem: result.privateKeyPem,
+      rpId: result.rpId,
+      userHandle: result.userHandle,
+      createdDate: result.passkey.date,
+      ...dc,
+    });
+    // The account now has a passkey (this one, created by Bemby).
+    patchAttributes(account.id, { hasPasskey: true });
+    res.json({ passkey: result.passkey });
+  } catch (err: any) {
+    if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
+    if (rpcBadRequest(res, err, "passkeys/register")) return;
+    internalError(res, err, "passkeys/register");
+  }
+});
+
+// POST /:id/passkeys/:passkeyId/verify -- prove the passkey works via a real login
+router.post("/:id/passkeys/:passkeyId/verify", async (req, res) => {
+  const account = db
+    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
+    .get(req.params.id) as AccountRow | undefined;
+  if (!requireAuth(account, res)) return;
+  const secret = getPasskeySecret(req.params.passkeyId);
+  if (!secret || secret.accountId !== account!.id) {
+    res.status(404).json({ error: "no stored key for this passkey" });
+    return;
+  }
+  try {
+    const { apiId, apiHash } = resolveApiCredentials(account);
+    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
+    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+    const origin = typeof req.body?.origin === "string" ? req.body.origin : undefined;
+    const result = await verifyPasskeyLogin(
+      apiId,
+      apiHash,
+      account.session_string,
+      secret,
+      origin,
+      proxy,
+      deviceParams,
+    );
+    res.json(result);
+  } catch (err: any) {
+    if (rpcBadRequest(res, err, "passkeys/verify")) return;
+    internalError(res, err, "passkeys/verify");
   }
 });
 
@@ -1041,9 +1404,11 @@ router.delete("/:id/passkeys/:passkeyId", async (req, res) => {
       proxy,
       deviceParams,
     );
+    if (ok) deletePasskeySecret(req.params.passkeyId);
     res.json({ ok });
   } catch (err: any) {
     if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
+    if (rpcBadRequest(res, err, "passkeys/delete")) return;
     internalError(res, err, "passkeys/delete");
   }
 });
@@ -1064,6 +1429,41 @@ router.post("/:id/auth/request", async (req, res) => {
     const proxyUrl = resolveProxyUrl(account.proxy_id);
     const proxy = parseTgProxy(proxyUrl);
     const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+
+    // Prefer passkey login when we hold a usable (DC-known) stored passkey; fall
+    // back to the code flow if none exist or the passkey is rejected.
+    const secret = accountPasskeySecrets(account.id).find((s) => s.dcId != null);
+    if (secret) {
+      try {
+        const result = await startPasskeyLogin(
+          account.id,
+          apiId,
+          apiHash,
+          secret,
+          undefined,
+          proxy,
+        );
+        if (result.needsPassword) {
+          db.prepare(
+            "UPDATE tg_accounts SET auth_status = 'pending_2fa' WHERE id = ?",
+          ).run(account.id);
+          res.json({ method: "passkey", step: "2fa" });
+        } else {
+          db.prepare(
+            "UPDATE tg_accounts SET auth_status = 'authenticated', session_string = ? WHERE id = ?",
+          ).run(result.session, account.id);
+          res.json({ method: "passkey", step: "done" });
+        }
+        return;
+      } catch (err: any) {
+        // Passkey unusable -- fall through to the code flow below.
+        console.warn(
+          `[accounts] passkey login failed for ${account.id}, falling back to code:`,
+          err?.errorMessage ?? err?.message ?? err,
+        );
+      }
+    }
+
     const { isCodeViaApp } = await requestCode(
       account.id,
       apiId,
@@ -1075,8 +1475,9 @@ router.post("/:id/auth/request", async (req, res) => {
     db.prepare(
       "UPDATE tg_accounts SET auth_status = 'pending_code' WHERE id = ?",
     ).run(account.id);
-    res.json({ message: "Verification code sent", isCodeViaApp });
+    res.json({ method: "code", message: "Verification code sent", isCodeViaApp });
   } catch (err: any) {
+    if (rpcBadRequest(res, err, 'auth/request')) return;
     internalError(res, err, 'auth/request');
   }
 });
@@ -1093,6 +1494,7 @@ router.post("/:id/auth/resend", async (req, res) => {
     await resendCodeAsSms(account.id);
     res.json({ ok: true });
   } catch (err: any) {
+    if (rpcBadRequest(res, err, 'auth/resend')) return;
     internalError(res, err, 'auth/resend');
   }
 });
@@ -1134,6 +1536,7 @@ router.post("/:id/auth/verify", async (req, res) => {
         .json({ error: "Invalid auth state or missing credentials" });
     }
   } catch (err: any) {
+    if (rpcBadRequest(res, err, 'auth/verify')) return;
     internalError(res, err, 'auth/verify');
   }
 });

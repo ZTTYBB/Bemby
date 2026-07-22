@@ -105,6 +105,60 @@ export type Account = {
   notes: string | null;
   /** Device model Telegram sees, with template variables expanded (server-computed, read-only). */
   resolvedDeviceModel?: string | null;
+  /** Generic per-account flags bag (UI-safe; never contains the passkey secret). */
+  attributes?: Record<string, unknown>;
+  /** True when the Telegram account has any passkey (any device/origin). */
+  hasPasskey?: boolean;
+  /** True when Bemby holds a stored passkey (key + known DC) usable for login. */
+  hasBembyPasskey?: boolean;
+};
+
+export type BulkAddItemStatus =
+  | "pending"
+  | "requesting_code"
+  | "fetching_code"
+  | "submitting_code"
+  | "submitting_2fa"
+  | "waiting"
+  | "created"
+  | "done"
+  | "failed";
+
+export type BulkAddOptions = {
+  gapSeconds?: number;
+  namePrefix?: string;
+  nameIndexMode?: "total" | "batch";
+  namePadDigits?: number;
+  notesTemplate?: string;
+  codeFieldId?: string;
+  codeRegex?: string;
+  twoFaMode?: "api" | "fixed";
+  twoFaFieldId?: string;
+  twoFaRegex?: string;
+  twoFaFixed?: string;
+  deviceIds?: string[];
+  proxyIds?: string[];
+  apiCredentials?: { apiId: number; apiHash: string }[];
+};
+
+export type BulkAddItem = {
+  index: number;
+  phoneNumber: string;
+  apiUrl: string;
+  accountId: number | null;
+  accountName: string | null;
+  status: BulkAddItemStatus;
+  message: string;
+  error: string | null;
+};
+
+export type BulkAddBatch = {
+  id: string;
+  createdAt: string;
+  running: boolean;
+  cancelled: boolean;
+  total: number;
+  items: BulkAddItem[];
 };
 
 // The account's own editable Telegram profile
@@ -130,6 +184,18 @@ export type Passkey = {
   lastUsageDate: number | null;
 };
 
+export type PasskeySecret = {
+  telegramPasskeyId: string;
+  credentialId: string;
+  privateKeyPem: string;
+  rpId: string;
+  userHandle: string;
+  createdDate: number;
+  dcId?: number;
+  serverAddress?: string;
+  port?: number;
+};
+
 export type AccountExportItem = {
   name: string;
   phoneNumber: string;
@@ -140,6 +206,8 @@ export type AccountExportItem = {
   proxyId: string | null;
   appClientId: string | null;
   disabled: boolean;
+  passkey: PasskeySecret | null;
+  additionalAttributes: Record<string, unknown> | null;
 };
 
 export type AccountExportPayload = {
@@ -460,8 +528,10 @@ export const accountsApi = {
   requestCode: (id: number) =>
     api
       .post<{
-        message: string;
-        isCodeViaApp: boolean;
+        method: "passkey" | "code";
+        step?: "2fa" | "done";
+        message?: string;
+        isCodeViaApp?: boolean;
       }>(`/accounts/${id}/auth/request`)
       .then((r) => r.data),
   resendCode: (id: number) =>
@@ -478,6 +548,12 @@ export const accountsApi = {
     api
       .post<{ tgDisplayName: string | null; tgUsername: string | null }>(
         `/accounts/${id}/refresh-tg-meta`,
+      )
+      .then((r) => r.data),
+  fetchAttributes: (id: number) =>
+    api
+      .post<{ account: Account; warnings: string[]; authExpired: boolean }>(
+        `/accounts/${id}/fetch-attributes`,
       )
       .then((r) => r.data),
   getProfile: (id: number) =>
@@ -537,6 +613,20 @@ export const accountsApi = {
     api.put("/accounts/reorder", { items }).then((r) => r.data),
   bulkUpdateNotes: (ids: number[], notes: string | null) =>
     api.put("/accounts/bulk-notes", { ids, notes }).then((r) => r.data),
+  bulkRename: (items: Array<{ id: number; name: string }>) =>
+    api.put("/accounts/bulk-rename", { items }).then((r) => r.data),
+  bulkAdd: (text: string, options?: BulkAddOptions) =>
+    api
+      .post<BulkAddBatch>("/accounts/bulk-add", { text, options })
+      .then((r) => r.data),
+  bulkAddStatus: () =>
+    api
+      .get<BulkAddBatch | null>("/accounts/bulk-add/status")
+      .then((r) => r.data),
+  bulkAddCancel: () =>
+    api
+      .post<{ cancelled: boolean }>("/accounts/bulk-add/cancel")
+      .then((r) => r.data),
   forceReauth: (id: number) =>
     api.post<Account>(`/accounts/${id}/force-reauth`).then((r) => r.data),
   getPasswordInfo: (id: number) =>
@@ -552,14 +642,48 @@ export const accountsApi = {
     api
       .post<{ email: string | null }>(`/accounts/${id}/login-email/verify`, { code })
       .then((r) => r.data),
+  autoLoginEmail: (id: number, gmail: string, appPassword: string, tag: string) =>
+    api
+      .post<{ email: string }>(`/accounts/${id}/login-email/auto`, {
+        gmail,
+        appPassword,
+        tag,
+      })
+      .then((r) => r.data),
+  testGmail: (gmail: string, appPassword: string) =>
+    api
+      .post<{ ok: boolean; error?: string }>("/accounts/gmail/test", {
+        gmail,
+        appPassword,
+      })
+      .then((r) => r.data),
   getPasskeys: (id: number) =>
     api
-      .get<{ passkeys: Passkey[] }>(`/accounts/${id}/passkeys`)
-      .then((r) => r.data.passkeys),
+      .get<{ passkeys: Passkey[]; storedIds: string[] }>(
+        `/accounts/${id}/passkeys`,
+      )
+      .then((r) => r.data),
   deletePasskey: (id: number, passkeyId: string) =>
     api
       .delete<{ ok: boolean }>(
         `/accounts/${id}/passkeys/${encodeURIComponent(passkeyId)}`,
+      )
+      .then((r) => r.data),
+  registerPasskey: (id: number, origin?: string) =>
+    api
+      .post<{ passkey: Passkey }>(`/accounts/${id}/passkeys`, { origin })
+      .then((r) => r.data),
+  verifyPasskey: (id: number, passkeyId: string, origin?: string) =>
+    api
+      .post<{
+        ok: boolean;
+        passwordRequired: boolean;
+        userId: string;
+        firstName: string | null;
+        username: string | null;
+      }>(
+        `/accounts/${id}/passkeys/${encodeURIComponent(passkeyId)}/verify`,
+        { origin },
       )
       .then((r) => r.data),
 };
@@ -722,6 +846,8 @@ export type Settings = {
   default_device_name: string;
   /** Server-computed: "true" when any AI supplier, legacy setting or env provides a key. */
   ai_key_configured?: string;
+  /** Server-computed: "true" when bulk account management is enabled via the BULK_ACCOUNT_MANAGEMENT env var. */
+  bulk_account_management?: string;
   ai_model: string;
   /** ai_models row id pinning the default model to an exact supplier. */
   ai_default_model_id?: string;

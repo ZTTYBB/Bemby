@@ -62,15 +62,28 @@ function getSetting(key: string): string | undefined {
   return row?.value;
 }
 
-function buildAuthHeader(deviceName: string, token?: string): string {
+// Emby's dashboard shows the session's app name/version from the Client and
+// Version fields of X-Emby-Authorization, not the HTTP User-Agent. Derive them
+// from the chosen UA so a custom preset (e.g. "CapyPlayer/1.0") is reflected in
+// the Emby backend instead of a hardcoded client name.
+function parseUaClient(ua: string): { client: string; version: string } {
+  const match = /^([^/\s]+)\/([^\s(]+)/.exec(ua.trim());
+  if (match?.[1] && match?.[2]) {
+    return { client: match[1], version: match[2] };
+  }
+  return parseUaClient(DEFAULT_UA);
+}
+
+function buildAuthHeader(deviceName: string, ua: string, token?: string): string {
   // DeviceId must stay URL-safe: some stream proxies embed it in signed
   // redirect URLs and break on whitespace (the display name can keep spaces)
-  const deviceId = `${deviceName.replace(/\s+/g, '-')}-001`;
+  const deviceId = `${deviceName.replace(/\s+/g, '-')}`;
+  const { client, version } = parseUaClient(ua);
   const parts = [
-    'MediaBrowser Client="SenPlayer"',
+    `MediaBrowser Client="${client}"`,
     `Device="${deviceName}"`,
     `DeviceId="${deviceId}"`,
-    'Version="6.1.0"',
+    `Version="${version}"`,
   ];
   if (token) parts.push(`Token="${token}"`);
   return parts.join(', ');
@@ -87,7 +100,7 @@ async function embyRequest<T = any>(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'User-Agent': opts.ua,
-    'X-Emby-Authorization': buildAuthHeader(opts.deviceName, opts.token),
+    'X-Emby-Authorization': buildAuthHeader(opts.deviceName, opts.ua, opts.token),
   };
   const body = opts.body != null ? JSON.stringify(opts.body) : undefined;
 

@@ -5,8 +5,14 @@ import type { TgProxy } from "../types";
 import {
   invokeGetPasskeys,
   invokeDeletePasskey,
+  invokeRegisterPasskey,
+  invokeVerifyPasskeyLogin,
+  invokePasskeyLogin,
   type Passkey,
+  type RegisterPasskeyResult,
+  type PasskeyLoginVerification,
 } from "../tg/passkeys";
+import type { PasskeySecret } from "../tg/passkeyStore";
 
 export type TgDeviceParams = {
   deviceModel?: string;
@@ -97,6 +103,17 @@ export async function resendCodeAsSms(accountId: number): Promise<void> {
   );
   // Update the hash from the resend response
   entry.phoneCodeHash = (result as any).phoneCodeHash ?? entry.phoneCodeHash;
+}
+
+// Destroy and drop a parked pending-auth client. Callers that abandon an
+// auth flow mid-way (e.g. bulk-add moving on after a failure) must call this,
+// or the connected client leaks -- nothing else evicts it unless requestCode
+// is retried for the same account id.
+export async function cancelPendingAuth(accountId: number): Promise<void> {
+  const entry = pending.get(accountId);
+  if (!entry) return;
+  pending.delete(accountId);
+  await entry.client.destroy().catch(() => undefined);
 }
 
 export async function submitCode(
@@ -492,6 +509,27 @@ function makeTgClient(
   });
 }
 
+/** Returns the account's own Telegram numeric user id as a string. */
+export async function getSelfId(
+  apiId: number,
+  apiHash: string,
+  sessionString: string,
+  proxy?: TgProxy,
+  deviceParams?: TgDeviceParams,
+): Promise<string> {
+  const client = makeTgClient(sessionString, apiId, apiHash, proxy, deviceParams);
+  try {
+    await client.connect();
+    const me = await client.getMe();
+    const id = (me as { id?: unknown } | null)?.id;
+    if (id === undefined || id === null)
+      throw new Error("Could not resolve Telegram user id");
+    return String(id);
+  } finally {
+    await client.destroy().catch(() => undefined);
+  }
+}
+
 export async function getPasswordInfo(
   apiId: number,
   apiHash: string,
@@ -608,5 +646,130 @@ export async function deletePasskey(
     return await invokeDeletePasskey(client, passkeyId);
   } finally {
     await client.destroy().catch(() => undefined);
+  }
+}
+
+// Experimental: registers a new passkey by running the WebAuthn ceremony in Node
+// (no browser). Returns the private key material for a possible future login.
+export async function registerPasskey(
+  apiId: number,
+  apiHash: string,
+  sessionString: string,
+  originOverride?: string,
+  proxy?: TgProxy,
+  deviceParams?: TgDeviceParams,
+): Promise<RegisterPasskeyResult> {
+  const client = makeTgClient(sessionString, apiId, apiHash, proxy, deviceParams);
+  try {
+    await client.connect();
+    return await invokeRegisterPasskey(client, originOverride);
+  } finally {
+    await client.destroy().catch(() => undefined);
+  }
+}
+
+// Verifies a stored passkey by logging in with it on a fresh (empty) session.
+// Passkey login is DC-specific: it must run on the DC where the account lives, so
+// we pin the fresh session to the authorised session's DC (avoids the cross-DC
+// finishPasskeyLogin path, which otherwise fails as PASSKEY_CHALLENGE_EXPIRED).
+export async function verifyPasskeyLogin(
+  apiId: number,
+  apiHash: string,
+  accountSessionString: string,
+  secret: PasskeySecret,
+  originOverride?: string,
+  proxy?: TgProxy,
+  deviceParams?: TgDeviceParams,
+): Promise<PasskeyLoginVerification> {
+  const authed = new StringSession(accountSessionString);
+  const fresh = new StringSession("");
+  fresh.setDC(authed.dcId, authed.serverAddress, authed.port);
+  const client = new TelegramClient(fresh, apiId, apiHash, {
+    connectionRetries: 3,
+    baseLogger: new Logger(LogLevel.NONE),
+    ...(proxy ? { proxy } : {}),
+    ...(deviceParams ?? {}),
+  });
+  try {
+    await client.connect();
+    return await invokeVerifyPasskeyLogin(
+      client,
+      apiId,
+      apiHash,
+      secret,
+      originOverride,
+    );
+  } finally {
+    await client.destroy().catch(() => undefined);
+  }
+}
+
+// Reads the account's home DC out of an authorised session string.
+export function getSessionDc(
+  sessionString: string,
+): { dcId: number; serverAddress: string; port: number } | null {
+  if (!sessionString) return null;
+  try {
+    const s = new StringSession(sessionString);
+    if (s.dcId == null || !s.serverAddress || s.port == null) return null;
+    return { dcId: s.dcId, serverAddress: s.serverAddress, port: s.port };
+  } catch {
+    return null;
+  }
+}
+
+// Logs in using a stored passkey as the first factor. On success without 2FA the
+// session is returned; when the account has a cloud password, the connected client
+// is parked in `pending` (step "2fa") so submitPassword() finishes it exactly like
+// the code flow. Throws (caller falls back to code login) if the passkey is rejected.
+export async function startPasskeyLogin(
+  accountId: number,
+  apiId: number,
+  apiHash: string,
+  secret: PasskeySecret,
+  originOverride?: string,
+  proxy?: TgProxy,
+): Promise<{ needsPassword: boolean; session?: string }> {
+  const existing = pending.get(accountId);
+  if (existing) {
+    await existing.client.destroy().catch(() => undefined);
+    pending.delete(accountId);
+  }
+
+  const fresh = new StringSession("");
+  if (secret.dcId != null && secret.serverAddress && secret.port != null) {
+    fresh.setDC(secret.dcId, secret.serverAddress, secret.port);
+  }
+  // No deviceParams during auth (same rationale as requestCode).
+  const client = new TelegramClient(fresh, apiId, apiHash, {
+    connectionRetries: 3,
+    baseLogger: new Logger(LogLevel.NONE),
+    ...(proxy ? { proxy } : {}),
+  });
+
+  try {
+    await client.connect();
+    try {
+      await invokePasskeyLogin(client, apiId, apiHash, secret, originOverride);
+    } catch (err: any) {
+      const msg = err?.errorMessage ?? err?.message ?? "";
+      if (msg.includes("SESSION_PASSWORD_NEEDED")) {
+        // Keep the client alive for the 2FA step.
+        pending.set(accountId, {
+          client,
+          phoneNumber: "",
+          phoneCodeHash: "",
+          step: "2fa",
+        });
+        return { needsPassword: true };
+      }
+      throw err;
+    }
+    const session = client.session.save() as unknown as string;
+    await client.destroy().catch(() => undefined);
+    return { needsPassword: false, session };
+  } catch (err) {
+    await client.destroy().catch(() => undefined);
+    throw err;
   }
 }

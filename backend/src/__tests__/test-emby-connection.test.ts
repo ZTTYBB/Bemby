@@ -119,6 +119,15 @@ describe('testEmbyConnection', () => {
     expect((mockUndiciFetch.mock.calls[0][1] as any).headers['User-Agent']).toContain('SenPlayer');
   });
 
+  it('derives the auth header Client and Version from the user agent', async () => {
+    mockAuthSuccess();
+    await testEmbyConnection('https://emby.example.com', { ...creds, userAgent: 'CapyPlayer/1.2.3 CFNetwork/1.0' });
+    const auth = (mockUndiciFetch.mock.calls[0][1] as any).headers['X-Emby-Authorization'];
+    expect(auth).toContain('Client="CapyPlayer"');
+    expect(auth).toContain('Version="1.2.3"');
+    expect(auth).not.toContain('SenPlayer');
+  });
+
   it('routes through the configured proxy when proxyId is given', async () => {
     vi.mocked(db.prepare).mockReturnValue({
       get: vi.fn().mockImplementation((key: string) =>

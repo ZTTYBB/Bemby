@@ -2,10 +2,11 @@
   <img src="docs/logo.png" width="200" alt="Bemby" />
 </p>
 
-# Bemby v0.9.33-patch-1
+# Bemby v0.9.34
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/liveinaus/bemby)](https://hub.docker.com/r/liveinaus/bemby)
 [![更新日志](https://img.shields.io/badge/%E6%9B%B4%E6%96%B0%E6%97%A5%E5%BF%97-%E6%9F%A5%E7%9C%8B-blue)](https://github.com/liveinaus/Bemby/blob/main/CHANGELOG.md)
+[![Telegram](https://img.shields.io/badge/Telegram-%E4%BA%A4%E6%B5%81%E7%BE%A4-2CA5E0?logo=telegram&logoColor=white)](https://t.me/cool_bemby)
 
 [English](#english) | **简体中文**
 
@@ -37,10 +38,11 @@
 
 ## 功能特性
 
-- **多账号** — 管理多个 Telegram 账号，每个账号通过 MTProto 独立认证；支持拖拽排序；会话失效时自动标记并显示重新认证按钮；代理徽章直接显示在账号行；账号列表新增 TG 账号列，显示 Telegram 显示名称和用户名（存储于数据库，首次访问自动获取，可手动刷新）；手机号下方自动显示根据号码解析出的国旗与国家名称；添加/编辑账号表单校验名称、手机号及（无全局默认凭据时的）API ID/Hash
-- **Telegram 账户安全管理** — 在账户编辑面板的"高级"选项卡中管理 2FA 密码（设置/修改/移除）、活跃会话（查看设备信息、单独终止或一键终止所有其他设备）、恢复邮箱（查看、设置、更改或移除；含完整的邮件确认流程）、以及通行密钥（查看并移除已注册的 Passkeys）
+- **多账号** — 管理多个 Telegram 账号，每个账号通过 MTProto 独立认证；支持拖拽排序；会话失效时自动标记并显示重新认证按钮；代理徽章直接显示在账号行；账号列表新增 TG 账号列，显示 Telegram 显示名称和用户名（存储于数据库，首次访问自动获取，可手动刷新）；手机号下方自动显示根据号码解析出的国旗与国家名称；可切换显示"额外信息"列（登录邮箱、受限状态、通行密钥标记）；表格中可按住 Shift 点击选中连续区间；添加/编辑账号表单校验名称、手机号及（无全局默认凭据时的）API ID/Hash
+- **Telegram 账户安全管理** — 在账户编辑面板的"高级"选项卡中管理 2FA 密码（设置/修改/移除）、活跃会话（查看设备信息、单独终止或一键终止所有其他设备）、恢复邮箱（查看、设置、更改或移除；含完整的邮件确认流程）、以及通行密钥（查看、添加、移除已注册的 Passkeys；添加后可"使用通行密钥登录"，仅需再输入 2FA 密码，另可"验证"通行密钥是否仍被 Telegram 接受，实验性功能）
 - **更新 Telegram 个人资料** — 在"个人资料"选项卡中直接修改该账户的名字、姓氏和简介
 - **账户备注** — 可为每个账户添加自由文本备注；表格中备注列可切换显示；支持批量设置备注
+- **批量账户管理** — 账户批量操作统一收纳至"批量操作"菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免 Telegram 限流：**批量重命名**（`{index}` 递增序号、可补零、实时预览）、**批量获取属性**（刷新 TG 信息与附加属性）、**批量修改登录邮箱**（`+` 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行、绝不存储）、**批量修改凭据**（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥、按模板追加备注）、**批量添加通行密钥**；开启环境变量 `BULK_ACCOUNT_MANAGEMENT=1` 后还提供 **批量添加账户**（每行 `手机号----API网址`，自动创建并逐个从各 API 网页读取验证码/2FA 完成认证，支持名称编号方案、候选设备/代理/API 凭据随机选取、自定义提取正则）与 **批量清理**
 - **账户备份加密** — 导出会话文件时可设置自定义密码保护；导入时自动识别加密状态并提示输入密码；"强制重新认证"选项可在导入时清除令牌，避免 Telegram 因同一令牌多设备使用而撤销会话
 - **内置 Telegram 消息客户端** — 独立页面视图，直接在 Bemby 中与联系人、群组和频道聊天；支持表情回应、引用回复、内联图片查看、发送图片与文件、频道帖子评论线程、机器人命令自动补全、自动标记已读、贴纸显示、右键菜单静音（8小时/1周/永久）和取消静音、加入文件夹、编辑联系人姓名、简介链接化、小程序显示模式切换（应用内/浏览器）；拉黑/取消拉黑、举报（附原因与备注，举报用户/机器人时同步拉黑并删除聊天）、删除聊天/消息（可选"为对方也删除"）、编辑自己发送的消息、转发消息、多选批量转发/删除、双向输入中提示；群组/频道搜索兼顾本地标题匹配与全局搜索，结果更全面；移动端聊天头部按钮合并为 ⋯ 菜单，新增"跳转到最新消息"悬浮按钮；账号级"清除缓存"与"清理账号"（退出全部群组/删除全部私聊/移除全部联系人及文件夹，需二次确认）；打开非 Telegram 链接时可选择在 Bemby 内嵌或浏览器打开，内嵌前自动探测目标站点是否允许被嵌入，不允许时经内置代理加载并提示
 - **三种任务类型**
@@ -173,6 +175,7 @@ Railway 支持直接从 Docker Hub 镜像部署，无需 Fork 或连接 GitHub�
 - **默认 TG API 凭据** — 在设置中统一配置 API ID 和 Hash，无独立凭据的账号自动使用全局默认值；Hash 在界面中始终脱敏显示
 - **默认密码强制修改** — 使用默认密码（`changeme`）登录时，全屏弹窗强制更改密码后方可访问
 - **TRUST_PROXY** — 通过 `TRUST_PROXY` 环境变量配置反向代理跳数，确保速率限制和 IP 检测在 nginx/Caddy/Railway/Cloudflare 等代理后正常工作
+- **BULK_ACCOUNT_MANAGEMENT** — 设为 `1`（或 `true`）以显示"批量添加账户"和"批量清理"按钮并启用其后端接口（默认关闭）
 - **管理员凭证** — 修改管理员用户名或密码
 
 ---
@@ -321,8 +324,9 @@ Bemby 仅供个人自动化和学习目的使用。请负责任地使用，并�
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/liveinaus/bemby)](https://hub.docker.com/r/liveinaus/bemby)
 [![Changelog](https://img.shields.io/badge/changelog-view-blue)](CHANGELOG.md)
+[![Telegram](https://img.shields.io/badge/Telegram-community-2CA5E0?logo=telegram&logoColor=white)](https://t.me/cool_bemby)
 
-[简体中文](#bemby-v0933) | **English**
+[简体中文](#bemby-v0934) | **English**
 
 > If Bemby saves you time, please consider giving it a star on GitHub. It helps others find the project and keeps development going.
 
@@ -351,10 +355,11 @@ A self-hosted automation tool for managing daily Telegram bot check-ins (签到)
 
 ### Features
 
-- **Multi-account** — manage multiple Telegram accounts, each independently authenticated via MTProto; drag-and-drop reordering; automatic session-expiry detection with re-auth prompt; proxy badge shown inline on each account row; a TG Name column shows each account's Telegram display name and username (stored in the database, auto-fetched on first visit, refreshable on demand); the phone number cell shows a flag and country name resolved from the calling code; the add/edit form validates name, phone number, and (when no global default is set) API ID/Hash
-- **Telegram account security** — manage 2FA password (set/change/remove), active login sessions (view device info, terminate individual or all others), recovery email (view, set, change, or remove with a full confirmation code flow), and passkeys (list and remove registered WebAuthn passkeys) — all from the Advanced tab of the account edit panel
+- **Multi-account** — manage multiple Telegram accounts, each independently authenticated via MTProto; drag-and-drop reordering; automatic session-expiry detection with re-auth prompt; proxy badge shown inline on each account row; a TG Name column shows each account's Telegram display name and username (stored in the database, auto-fetched on first visit, refreshable on demand); the phone number cell shows a flag and country name resolved from the calling code; a toggleable **Extra Info** column surfaces login email, restriction status, and passkey flags; hold Shift and click to select a contiguous range of rows; the add/edit form validates name, phone number, and (when no global default is set) API ID/Hash
+- **Telegram account security** — manage 2FA password (set/change/remove), active login sessions (view device info, terminate individual or all others), recovery email (view, set, change, or remove with a full confirmation code flow), and passkeys (list, add, and remove registered WebAuthn passkeys — once added, **Log in with passkey** signs in and then asks only for the 2FA password, and **Verify** confirms Telegram still accepts the passkey; experimental) — all from the Advanced tab of the account edit panel
 - **Update Telegram profile** — edit the account's first name, last name, and bio directly from the Profile tab
 - **Account notes** — add free-text notes per account; the Notes column in the accounts table is toggleable (always hidden on mobile); bulk-update notes across selected accounts at once
+- **Bulk account management** — bulk operations are consolidated under a **Bulk Actions** menu and share a "Gap between accounts (seconds)" control to avoid Telegram flood limits: **Bulk Rename** (`{index}` running number, zero-padding, live preview), **Fetch Attributes** (refresh TG info and extra attributes), **Bulk Change Login Email** (`+`-tag template with variables, codes read from Gmail over IMAP with an app password used only for the run and never stored), **Bulk Change Credential** (set/rotate 2FA password, optionally removing other devices/passkeys and appending to notes), and **Bulk Add Passkey**; setting `BULK_ACCOUNT_MANAGEMENT=1` additionally enables **Bulk Add** (one `phone----apiUrl` per line, auto-creating and authenticating each account by reading the code/2FA from its API page, with a numbering scheme, random candidate device/proxy/API credentials, and custom extraction regexes) and **Bulk Clean**
 - **Encrypted account backup** — export account sessions protected by a user-supplied password; imports require the matching key; optional "force re-auth" clears session tokens on import to prevent Telegram revoking a shared token
 - **Built-in Telegram Messenger** — a dedicated page view to chat with contacts, groups, and channels directly from Bemby; supports emoji reactions, quoted replies, inline photo viewing, sending images and files, channel post comment threads, bot command autocomplete, automatic read-marking, sticker display, mute/unmute from the context menu (8 h / 1 week / forever), add chats to folders, edit contact names in the profile panel, clickable URLs and @mentions in bios, mini app display toggle (in-app or browser); block/unblock, report (with a reason and comment, blocking and deleting the chat too when reporting a user/bot), delete chats/messages (with an optional "also delete for them"), edit your own sent messages, forward messages, multi-select bulk forward/delete, and two-way typing indicators; group/channel search combines local title matching with a global search for much more complete results; chat header buttons collapse into a single ⋯ menu on mobile, plus a floating "jump to latest" button; per-account **Clear cache** and **Clean account** (leave every group, delete every private chat, remove every contact and folder — gated behind a confirmation checkbox); opening a non-Telegram link offers a choice between opening in Bemby or the browser, probing first whether the target site allows embedding and falling back to a built-in proxy with a warning banner when it doesn't
 - **Three job types**
@@ -487,6 +492,7 @@ Go to **Settings** to configure:
 - **Default TG API credentials** — set a global API ID and Hash in Settings that pre-fill the Add Account form; the Hash is masked in the UI; accounts without their own credentials fall back to the global default
 - **Forced admin password change** — logging in with the default password triggers a full-screen modal requiring a new password before the app is accessible
 - **TRUST_PROXY** — set the `TRUST_PROXY` env var to the number of reverse-proxy hops in front of the app so rate limiting and IP detection work correctly behind nginx, Caddy, Railway, Cloudflare, etc.
+- **BULK_ACCOUNT_MANAGEMENT** — set to `1` (or `true`) to show the "Bulk Add" and "Bulk Clean" buttons and enable their API routes (disabled by default)
 - **Admin credentials** — change the admin username or password
 
 ---
