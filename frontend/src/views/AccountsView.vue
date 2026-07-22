@@ -1256,6 +1256,91 @@
               <input v-model="bulkOptions.notesTemplate" class="form-input" />
               <div class="form-hint">{{ t("accounts.bulkAdd.notesHint") }}</div>
             </div>
+            <div class="bulk-add-options-row">
+              <div class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkAdd.devicesLabel")
+                }}</label>
+                <select
+                  v-model="bulkOptions.deviceIds"
+                  multiple
+                  class="form-select bulk-add-multiselect"
+                >
+                  <option
+                    v-for="c in appClientsList"
+                    :key="c.id"
+                    :value="c.id"
+                  >
+                    {{ c.name }}
+                  </option>
+                </select>
+                <div class="form-hint">
+                  {{ t("accounts.bulkAdd.candidateHint") }}
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkAdd.proxiesLabel")
+                }}</label>
+                <select
+                  v-model="bulkOptions.proxyIds"
+                  multiple
+                  class="form-select bulk-add-multiselect"
+                >
+                  <option
+                    v-for="p in proxiesList"
+                    :key="p.id"
+                    :value="p.id"
+                  >
+                    {{ p.name }}
+                  </option>
+                </select>
+                <div class="form-hint">
+                  {{ t("accounts.bulkAdd.candidateHint") }}
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{
+                t("accounts.bulkAdd.apiCredsLabel")
+              }}</label>
+              <div
+                v-for="(cred, i) in bulkApiCreds"
+                :key="i"
+                class="bulk-add-cred-row"
+              >
+                <input
+                  v-model="cred.apiId"
+                  type="number"
+                  min="1"
+                  class="form-input"
+                  :placeholder="t('accounts.bulkAdd.apiIdPlaceholder')"
+                />
+                <input
+                  v-model="cred.apiHash"
+                  class="form-input bulk-add-mono"
+                  :placeholder="t('accounts.bulkAdd.apiHashPlaceholder')"
+                  autocomplete="off"
+                />
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-icon"
+                  :title="t('common.delete')"
+                  @click="removeBulkApiCred(i)"
+                >
+                  <i class="fa-solid fa-xmark"></i>
+                </button>
+              </div>
+              <button
+                type="button"
+                class="btn btn-ghost btn-sm"
+                @click="addBulkApiCred"
+              >
+                <i class="fa-solid fa-plus"></i>
+                {{ t("accounts.bulkAdd.apiCredAdd") }}
+              </button>
+              <div class="form-hint">{{ t("accounts.bulkAdd.apiCredsHint") }}</div>
+            </div>
             <div class="form-group">
               <label class="form-label">{{
                 t("accounts.bulkAdd.twoFaModeLabel")
@@ -3041,7 +3126,25 @@ const bulkOptions = reactive({
   twoFaFieldId: "pass2fa",
   twoFaRegex: 'id="pass2fa"[^>]*value="([^"]*)"',
   twoFaFixed: "",
+  // Candidate device / proxy ids; empty = any configured entry.
+  deviceIds: [] as string[],
+  proxyIds: [] as string[],
 });
+
+// Candidate API ID/hash pairs; one is picked at random per account. Empty rows
+// are dropped on submit; when none are provided the global default is used.
+const bulkApiCreds = ref<{ apiId: string; apiHash: string }[]>([
+  { apiId: "", apiHash: "" },
+]);
+
+function addBulkApiCred() {
+  bulkApiCreds.value.push({ apiId: "", apiHash: "" });
+}
+
+function removeBulkApiCred(index: number) {
+  bulkApiCreds.value.splice(index, 1);
+  if (!bulkApiCreds.value.length) bulkApiCreds.value.push({ apiId: "", apiHash: "" });
+}
 
 const bulkAddPlaceholder =
   "+12025550143----https://example.com/getcode?id=80323dfc-9002-4083-a997-7ea29346d620\n+12025550178----https://example.com/getcode?id=0eaa294a-8d56-4aa4-bec9-6192356fadfc\n+12025550199";
@@ -3112,6 +3215,12 @@ function buildBulkOptions(): BulkAddOptions {
     o.twoFaFieldId = bulkOptions.twoFaFieldId;
     if (bulkAdvancedRegex.value) o.twoFaRegex = bulkOptions.twoFaRegex;
   }
+  if (bulkOptions.deviceIds.length) o.deviceIds = [...bulkOptions.deviceIds];
+  if (bulkOptions.proxyIds.length) o.proxyIds = [...bulkOptions.proxyIds];
+  const creds = bulkApiCreds.value
+    .map((c) => ({ apiId: Number(c.apiId), apiHash: c.apiHash.trim() }))
+    .filter((c) => Number.isInteger(c.apiId) && c.apiId > 0 && !!c.apiHash);
+  if (creds.length) o.apiCredentials = creds;
   return o;
 }
 
@@ -4882,6 +4991,27 @@ tr.drag-over td {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
   background: #fbfbfd;
+}
+
+.bulk-add-multiselect {
+  min-height: 92px;
+  padding: 4px;
+}
+
+.bulk-add-cred-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.bulk-add-cred-row .form-input:first-child {
+  flex: 0 0 130px;
+}
+
+.bulk-add-cred-row .form-input:nth-child(2) {
+  flex: 1;
+  min-width: 0;
 }
 
 .bulk-add-status-dot {

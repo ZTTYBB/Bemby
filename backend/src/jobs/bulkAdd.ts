@@ -139,6 +139,12 @@ export type BulkAddOptions = {
   twoFaRegex?: string;
   /** Fixed 2FA password, used when twoFaMode is "fixed". */
   twoFaFixed?: string;
+  /** Candidate device (app client) ids; one is picked at random per account. Empty = all configured. */
+  deviceIds?: string[];
+  /** Candidate proxy ids; one is picked at random per account. Empty = all configured. */
+  proxyIds?: string[];
+  /** Candidate API ID/hash pairs; one is picked at random per account. Empty = leave NULL (global default). */
+  apiCredentials?: { apiId: number; apiHash: string }[];
 };
 
 type BulkAddConfig = {
@@ -158,6 +164,9 @@ type BulkAddConfig = {
   twoFaMode: "api" | "fixed";
   twoFaEx: FieldExtractor;
   twoFaFixed: string;
+  deviceIds: string[];
+  proxyIds: string[];
+  apiCredentials: { apiId: number; apiHash: string }[];
 };
 
 const DEFAULT_GAP_SECONDS = 70;
@@ -183,6 +192,20 @@ function resolveConfig(opts?: BulkAddOptions): BulkAddConfig {
     twoFaMode: opts?.twoFaMode === "fixed" ? "fixed" : "api",
     twoFaEx: { fieldId: opts?.twoFaFieldId, regex: opts?.twoFaRegex },
     twoFaFixed: opts?.twoFaFixed ?? "",
+    deviceIds: Array.isArray(opts?.deviceIds)
+      ? opts!.deviceIds.filter((x): x is string => typeof x === "string")
+      : [],
+    proxyIds: Array.isArray(opts?.proxyIds)
+      ? opts!.proxyIds.filter((x): x is string => typeof x === "string")
+      : [],
+    apiCredentials: Array.isArray(opts?.apiCredentials)
+      ? opts!.apiCredentials
+          .map((c) => ({
+            apiId: Number(c?.apiId),
+            apiHash: String(c?.apiHash ?? "").trim(),
+          }))
+          .filter((c) => Number.isInteger(c.apiId) && c.apiId > 0 && !!c.apiHash)
+      : [],
   };
 }
 
@@ -408,8 +431,16 @@ function createAccounts(
   lines: ParsedBulkLine[],
   config: BulkAddConfig,
 ): BulkAddItem[] {
-  const proxies = readSettingList<{ id: string }>("proxies");
-  const clients = readSettingList<{ id: string }>("tg_app_clients");
+  // Restrict the random pools to the user-selected candidates; an empty
+  // selection means "any configured entry".
+  const allProxies = readSettingList<{ id: string }>("proxies");
+  const allClients = readSettingList<{ id: string }>("tg_app_clients");
+  const proxies = config.proxyIds.length
+    ? allProxies.filter((p) => config.proxyIds.includes(p.id))
+    : allProxies;
+  const clients = config.deviceIds.length
+    ? allClients.filter((c) => config.deviceIds.includes(c.id))
+    : allClients;
 
   const countRow = db
     .prepare("SELECT COUNT(*) AS c FROM tg_accounts")
@@ -433,7 +464,7 @@ function createAccounts(
   let sortOrder = maxRow.m;
 
   const insert = db.prepare(
-    "INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, proxy_id, app_client_id, sort_order, notes) VALUES (?, ?, NULL, NULL, ?, ?, ?, ?)",
+    "INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, proxy_id, app_client_id, sort_order, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
 
   lines.forEach((line, index) => {
@@ -441,10 +472,15 @@ function createAccounts(
     const name = `${config.namePrefix}${padWidth ? String(num).padStart(padWidth, "0") : num}`;
     const proxyId = pickRandom(proxies)?.id ?? null;
     const appClientId = pickRandom(clients)?.id ?? null;
+    // A picked pair overrides the account's api credentials; otherwise leave
+    // NULL so authentication falls back to the global default.
+    const cred = pickRandom(config.apiCredentials);
     const notes = config.notesTemplate.replace(/\{apiUrl\}/g, line.apiUrl);
     const res = insert.run(
       name,
       line.phoneNumber,
+      cred?.apiId ?? null,
+      cred?.apiHash ?? null,
       proxyId,
       appClientId,
       ++sortOrder,
@@ -485,17 +521,23 @@ export function startBulkAdd(
   if (!lines.length) {
     return { ok: false, error: "No valid account lines provided" };
   }
-  // Credentials are only needed for accounts that will be authenticated.
+  const config = resolveConfig(options);
+
+  // Credentials are only needed for accounts that will be authenticated; the
+  // per-batch pairs cover this without global defaults.
   const needsAuth = lines.some((l) => l.apiUrl);
-  if (needsAuth && !getDefaultTgApiCredentials()) {
+  if (
+    needsAuth &&
+    config.apiCredentials.length === 0 &&
+    !getDefaultTgApiCredentials()
+  ) {
     return {
       ok: false,
       error:
-        "Global Telegram API credentials are required (configure them in Settings)",
+        "Telegram API credentials are required (add API ID/hash pairs or configure global defaults in Settings)",
     };
   }
 
-  const config = resolveConfig(options);
   const items = createAccounts(lines, config);
 
   const batch: BulkAddBatch = {

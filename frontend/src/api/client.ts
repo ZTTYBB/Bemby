@@ -136,6 +136,9 @@ export type BulkAddOptions = {
   twoFaFieldId?: string;
   twoFaRegex?: string;
   twoFaFixed?: string;
+  deviceIds?: string[];
+  proxyIds?: string[];
+  apiCredentials?: { apiId: number; apiHash: string }[];
 };
 
 export type BulkAddItem = {
