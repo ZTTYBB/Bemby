@@ -613,6 +613,8 @@ export const accountsApi = {
     api.put("/accounts/reorder", { items }).then((r) => r.data),
   bulkUpdateNotes: (ids: number[], notes: string | null) =>
     api.put("/accounts/bulk-notes", { ids, notes }).then((r) => r.data),
+  bulkRename: (items: Array<{ id: number; name: string }>) =>
+    api.put("/accounts/bulk-rename", { items }).then((r) => r.data),
   bulkAdd: (text: string, options?: BulkAddOptions) =>
     api
       .post<BulkAddBatch>("/accounts/bulk-add", { text, options })

@@ -45,6 +45,10 @@
               <i class="fa-solid fa-arrows-rotate"></i>
               {{ t("accounts.bulkFetch.btn") }}
             </button>
+            <button class="bulk-menu-item" @click="runBulk(openBulkRename)">
+              <i class="fa-solid fa-i-cursor"></i>
+              {{ t("accounts.bulkRename.btn") }}
+            </button>
             <button class="bulk-menu-item" @click="runBulk(openBulkNotes)">
               <i class="fa-solid fa-note-sticky"></i>
               {{ t("accounts.setNotesSelected") }}
@@ -367,6 +371,84 @@
             @click="saveBulkNotes"
           >
             {{ bulkNotesSaving ? t("common.saving") : t("common.save") }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bulk rename modal -->
+    <div v-if="showBulkRename" class="modal-backdrop">
+      <div class="modal" style="max-width: 460px">
+        <h3 class="modal-title">
+          {{ t("accounts.bulkRename.title") }} ({{ bulkRenameTargets.length }})
+        </h3>
+        <div class="bulk-add-options-row">
+          <div class="form-group" style="flex: 2">
+            <label class="form-label">{{
+              t("accounts.bulkRename.formatLabel")
+            }}</label>
+            <input v-model="bulkRenameForm.format" class="form-input" />
+            <div class="form-hint">{{ t("accounts.bulkRename.formatHint") }}</div>
+          </div>
+        </div>
+        <div class="bulk-add-options-row">
+          <div class="form-group">
+            <label class="form-label">{{
+              t("accounts.bulkRename.startLabel")
+            }}</label>
+            <input
+              v-model.number="bulkRenameForm.startIndex"
+              type="number"
+              class="form-input"
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{
+              t("accounts.bulkRename.digitsLabel")
+            }}</label>
+            <input
+              v-model.number="bulkRenameForm.indexDigits"
+              type="number"
+              min="0"
+              max="9"
+              class="form-input"
+            />
+            <div class="form-hint">{{ t("accounts.bulkRename.digitsHint") }}</div>
+          </div>
+        </div>
+        <div v-if="bulkRenamePreview.length" class="form-group">
+          <label class="form-label">{{
+            t("accounts.bulkRename.previewLabel")
+          }}</label>
+          <div class="bulk-rename-preview">
+            <div
+              v-for="(p, i) in bulkRenamePreview"
+              :key="i"
+              class="bulk-rename-preview-row"
+            >
+              <span class="bulk-rename-old">{{ p.old }}</span>
+              <i class="fa-solid fa-arrow-right"></i>
+              <span class="bulk-rename-new">{{ p.next }}</span>
+            </div>
+            <div v-if="bulkRenameTargets.length > bulkRenamePreview.length" class="form-hint">
+              …{{ bulkRenameTargets.length - bulkRenamePreview.length }}
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button
+            class="btn btn-ghost"
+            :disabled="bulkRenameSaving"
+            @click="showBulkRename = false"
+          >
+            {{ t("common.cancel") }}
+          </button>
+          <button
+            class="btn btn-primary"
+            :disabled="bulkRenameSaving || !bulkRenameTargets.length"
+            @click="saveBulkRename"
+          >
+            {{ bulkRenameSaving ? t("common.saving") : t("common.save") }}
           </button>
         </div>
       </div>
@@ -2942,6 +3024,61 @@ async function saveBulkNotes() {
   }
 }
 
+// ── Bulk rename ───────────────────────────────────────────────────────────────
+const showBulkRename = ref(false);
+const bulkRenameSaving = ref(false);
+const bulkRenameForm = reactive({
+  format: "A_{index}",
+  startIndex: 1,
+  indexDigits: 3,
+});
+
+// Selected accounts in their displayed order, so the running index matches
+// what the user sees.
+const bulkRenameTargets = computed(() =>
+  accounts.value.filter((a) => selectedIds.value.has(a.id)),
+);
+
+// {index} is replaced with the (optionally zero-padded) running number.
+function buildRenameName(index: number): string {
+  const digits =
+    Number(bulkRenameForm.indexDigits) > 0
+      ? Math.floor(Number(bulkRenameForm.indexDigits))
+      : 0;
+  const idxStr = digits > 0 ? String(index).padStart(digits, "0") : String(index);
+  return (bulkRenameForm.format || "{index}").replace(/\{index\}/g, idxStr);
+}
+
+const bulkRenamePreview = computed(() => {
+  const start = Number(bulkRenameForm.startIndex) || 0;
+  return bulkRenameTargets.value.slice(0, 5).map((a, i) => ({
+    old: a.name,
+    next: buildRenameName(start + i),
+  }));
+});
+
+function openBulkRename() {
+  showBulkRename.value = true;
+}
+
+async function saveBulkRename() {
+  const targets = bulkRenameTargets.value;
+  if (!targets.length) return;
+  bulkRenameSaving.value = true;
+  try {
+    const start = Number(bulkRenameForm.startIndex) || 0;
+    const items = targets.map((a, i) => ({
+      id: a.id,
+      name: buildRenameName(start + i),
+    }));
+    await accountsApi.bulkRename(items);
+    await load();
+    showBulkRename.value = false;
+  } finally {
+    bulkRenameSaving.value = false;
+  }
+}
+
 // ── Selection state ───────────────────────────────────────────────────────────
 const selectedIds = ref(new Set<number>());
 const bulkMenuOpen = ref(false);
@@ -5012,6 +5149,30 @@ tr.drag-over td {
 .bulk-add-cred-row .form-input:nth-child(2) {
   flex: 1;
   min-width: 0;
+}
+
+.bulk-rename-preview {
+  border: 1px solid #e0e0e6;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fbfbfd;
+  font-size: 13px;
+}
+
+.bulk-rename-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.bulk-rename-old {
+  color: #888;
+}
+
+.bulk-rename-new {
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .bulk-add-status-dot {

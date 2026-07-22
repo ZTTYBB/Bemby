@@ -212,6 +212,16 @@ const zh = {
     notesPlaceholder: "填写账户备注信息",
     bulkNotesTitle: "批量设置备注",
     bulkNotesSaved: "备注已保存",
+    bulkRename: {
+      btn: "批量重命名",
+      title: "批量重命名",
+      formatLabel: "名称格式",
+      formatHint: "{index} 将替换为递增编号，例如 A_{index}",
+      startLabel: "起始编号",
+      digitsLabel: "编号位数",
+      digitsHint: "0 表示不补零",
+      previewLabel: "预览",
+    },
     bulkAdd: {
       btn: "批量添加账户",
       title: "批量添加账户",
@@ -1171,6 +1181,16 @@ const en: typeof zh = {
     notesPlaceholder: "Account notes",
     bulkNotesTitle: "Set Notes",
     bulkNotesSaved: "Notes saved",
+    bulkRename: {
+      btn: "Bulk Rename",
+      title: "Bulk Rename",
+      formatLabel: "Name format",
+      formatHint: "{index} is replaced with the running number, e.g. A_{index}",
+      startLabel: "Start index",
+      digitsLabel: "Index digits",
+      digitsHint: "0 means no zero-padding",
+      previewLabel: "Preview",
+    },
     bulkAdd: {
       btn: "Bulk Add",
       title: "Bulk Add Accounts",

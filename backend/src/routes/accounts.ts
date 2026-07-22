@@ -424,6 +424,27 @@ router.put("/bulk-notes", (req, res) => {
   res.json({ ok: true });
 });
 
+// PUT /bulk-rename -- set the Bemby name for multiple accounts at once. Each
+// item carries its own pre-computed name; blank names are skipped.
+router.put("/bulk-rename", (req, res) => {
+  const { items } = req.body as {
+    items?: Array<{ id: number; name: string }>;
+  };
+  if (!Array.isArray(items) || !items.length) {
+    res.status(400).json({ error: "items array required" });
+    return;
+  }
+  const update = db.prepare("UPDATE tg_accounts SET name = ? WHERE id = ?");
+  const tx = db.transaction(() => {
+    for (const { id, name } of items) {
+      const trimmed = String(name ?? "").trim();
+      if (trimmed) update.run(trimmed, id);
+    }
+  });
+  tx();
+  res.json({ ok: true });
+});
+
 type AccountImportItem = {
   name?: string;
   phoneNumber: string;
