@@ -109,35 +109,44 @@ async function fetchTelegramLoginCode(opts: {
     logger: false,
   });
   await client.connect();
-  const lock = await client.getMailboxLock("INBOX");
+  // logout is guarded here so a failure to acquire the mailbox lock still
+  // closes the connection instead of leaking it.
   try {
-    const deadline = Date.now() + opts.timeoutMs;
-    const since = new Date(opts.sinceMs);
-    while (true) {
-      let uids: number[] = [];
-      try {
-        await client.noop();
-        uids = (await client.search(
-          { since, to: opts.toAddress },
-          { uid: true },
-        )) || [];
-      } catch {
-        uids = [];
+    const lock = await client.getMailboxLock("INBOX");
+    try {
+      const deadline = Date.now() + opts.timeoutMs;
+      const since = new Date(opts.sinceMs);
+      while (true) {
+        let uids: number[] = [];
+        try {
+          await client.noop();
+          uids = (await client.search(
+            { since, to: opts.toAddress },
+            { uid: true },
+          )) || [];
+        } catch {
+          uids = [];
+        }
+        // Newest first
+        for (const uid of [...uids].reverse()) {
+          const msg = await client.fetchOne(
+            uid,
+            { source: true },
+            { uid: true },
+          );
+          if (!msg || !msg.source) continue;
+          const parsed = await simpleParser(msg.source);
+          const body = parsed.text || parsed.html || "";
+          const code = extractLoginCode(parsed.subject ?? "", body);
+          if (code) return code;
+        }
+        if (Date.now() >= deadline) return null;
+        await new Promise((r) => setTimeout(r, 5000));
       }
-      // Newest first
-      for (const uid of [...uids].reverse()) {
-        const msg = await client.fetchOne(uid, { source: true }, { uid: true });
-        if (!msg || !msg.source) continue;
-        const parsed = await simpleParser(msg.source);
-        const body = parsed.text || parsed.html || "";
-        const code = extractLoginCode(parsed.subject ?? "", body);
-        if (code) return code;
-      }
-      if (Date.now() >= deadline) return null;
-      await new Promise((r) => setTimeout(r, 5000));
+    } finally {
+      lock.release();
     }
   } finally {
-    lock.release();
     await client.logout().catch(() => undefined);
   }
 }

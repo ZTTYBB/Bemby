@@ -98,7 +98,7 @@ describe('embywatch fetch routing', () => {
     await expect(runEmbywatch('https://emby.example.com', baseConfig)).rejects.toThrow();
 
     const headers = (mockUndiciFetch.mock.calls[0][1] as any)?.headers;
-    expect(headers['X-Emby-Authorization']).toContain('DeviceId="Macbook-Pro-001"');
+    expect(headers['X-Emby-Authorization']).toContain('DeviceId="Macbook-Pro"');
     expect(headers['X-Emby-Authorization']).toContain('Device="Macbook Pro"');
   });
 

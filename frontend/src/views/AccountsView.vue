@@ -3163,6 +3163,13 @@ function toggleSelect(id: number, idx: number, event?: MouseEvent) {
   lastSelectedIdx = idx;
 }
 
+// The anchor is an index into the current list, so it becomes meaningless when
+// the list is replaced (search, pagination, reload, reorder) -- clear it so the
+// next shift-click starts a fresh range instead of spanning stale rows.
+watch(accounts, () => {
+  lastSelectedIdx = null;
+});
+
 // ── Export state ──────────────────────────────────────────────────────────────
 const showExportWarn = ref(false);
 const exportSecret = ref("");

@@ -105,6 +105,17 @@ export async function resendCodeAsSms(accountId: number): Promise<void> {
   entry.phoneCodeHash = (result as any).phoneCodeHash ?? entry.phoneCodeHash;
 }
 
+// Destroy and drop a parked pending-auth client. Callers that abandon an
+// auth flow mid-way (e.g. bulk-add moving on after a failure) must call this,
+// or the connected client leaks -- nothing else evicts it unless requestCode
+// is retried for the same account id.
+export async function cancelPendingAuth(accountId: number): Promise<void> {
+  const entry = pending.get(accountId);
+  if (!entry) return;
+  pending.delete(accountId);
+  await entry.client.destroy().catch(() => undefined);
+}
+
 export async function submitCode(
   accountId: number,
   code: string,

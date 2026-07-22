@@ -4,6 +4,62 @@ All notable changes to Bemby are documented here.
 
 ---
 
+## v0.9.34
+
+### 中文
+
+**新功能**
+
+- **通行密钥（Passkey）注册、登录与验证** -- 可为账户添加通行密钥（"添加通行密钥"），整个 WebAuthn 注册流程在服务端完成，无需浏览器操作，每个账户存储一个通行密钥。已持有通行密钥的账户，登录对话框中会出现"使用通行密钥登录"：先以通行密钥登录，随后仅需输入 2FA 密码即可完成。"验证"操作用于确认 Telegram 仍接受已存储的通行密钥。另提供"批量添加通行密钥"，会自动跳过（并顺带验证）已持有 Bemby 通行密钥的账户。（实验性功能）
+- **批量重命名** -- "批量重命名" 按名称格式批量重命名所选账户，`{index}` 会替换为递增序号，可配置起始序号与序号位数（补零），并提供实时预览
+- **批量获取属性** -- "获取属性" 为所选已认证账户刷新 TG 信息及附加属性（名称、用户名、登录邮箱、通行密钥状态），不执行发消息许可检测
+- **批量修改登录邮箱** -- "批量修改登录邮箱" 使用 `+` 标签模板为所选账户设置登录邮箱，模板支持 `{phoneNum}`、`{tgId}`、`{id}` 及随机变量（`{word:4}`、`{alpha:8}`、`{uuid}`）；因 Telegram 拒绝纯数字邮箱标签，数字会映射为字母（0=a … 9=j）。确认码通过 Gmail 应用专用密码经 IMAP 读取（仅用于本次运行，绝不存储），开始前需先"测试登录"
+- **批量修改凭据** -- "批量修改凭据" 为所选账户批量设置/轮换 2FA 密码，可选同时"移除其他所有已登录设备"、"移除其他所有通行密钥（保留 Bemby 管理的）"，并可按模板将结果追加至备注
+- **额外信息列** -- 账户现可存储更多元信息（登录邮箱、受限状态、通行密钥标记）；新增"显示额外信息 / 隐藏额外信息"切换与"额外信息"列，展示 Bemby 通行密钥、通行密钥、登录邮箱、受限状态等属性
+- **批量添加账户（需开启）** -- "批量添加账户" 每行粘贴 `手机号----API网址`，Bemby 先批量创建账户，再逐个认证：请求验证码、从各账户的 API 网页读取验证码与 2FA 密码、按配置的间隔等待后处理下一个（仅填手机号则只创建不认证）。"选项"面板支持逐账户间隔、名称前缀与编号方案、备注模板（`{apiUrl}` 逐账户展开）、候选设备/代理/API ID Hash（逐账户随机选取，可"批量粘贴"多组 API 凭据），以及提取验证码/2FA 的自定义正则。此功能与"批量清理"均需设置环境变量 `BULK_ACCOUNT_MANAGEMENT=1` 才会显示
+- **Shift 范围选择** -- 账户表格中可按住 Shift 点击，选中上次点击行与本次点击行之间的连续区间
+- **精简账户视图 / 批量操作菜单** -- 账户视图重构为更少的行内按钮，批量操作统一收纳至"批量操作"菜单
+- **账户间间隔** -- 各顺序批量操作共用"每个账户之间的间隔（秒）"设置（0 表示不等待），避免触发 Telegram 限流
+- **备份包含通行密钥与账户属性** -- 数据导出/导入现随账户一并携带其通行密钥与附加属性；包含通行密钥私钥的备份导出时会强制加密
+- **更清晰的认证错误提示** -- 认证流程改为返回具体且已本地化的错误（验证码错误、验证码已过期、操作过于频繁），不再是笼统的失败提示
+
+**修复**
+
+- **修复 Emby 观看自定义 User Agent 未生效** -- Emby 会话的应用名与版本此前无论选择何种 UA 都被硬编码为 `SenPlayer` / `6.1.0`，现从所选 UA 中解析客户端名称与版本，自定义 UA 预设可在 Emby 后台正确显示
+- **修复回调按钮点击超时被误判为失败** -- 按钮点击回调触发 `BOT_RESPONSE_TIMEOUT` 时，即便签到实际已生效仍被判为失败。现重新拉取消息，若 `editDate` 已变化则视为机器人已处理点击，不再误报失败
+- **修复无法添加通行密钥**
+- **修复通行密钥登录标记判断错误** -- 登录对话框此前用了错误的标记（`hasPasskey`，包含非 Bemby 通行密钥），现改用 `hasBembyPasskey`，仅在 Bemby 确实持有私钥时才触发"通行密钥 + 2FA"自动流程
+- **修复批量清理按钮文案与层级** -- 批量发消息许可检测按钮误显示为"开始清理"，现更正为"开始检测"，并修正中文文案错别字
+- **修复账户视图弹窗样式** -- 提高弹窗遮罩层级，使其位于移动端头部与侧边栏之上（标题不再被遮挡）；弹窗内容过长时可滚动，底部按钮始终固定可点击
+
+### English
+
+**Features**
+
+- **Passkey register, log in, and verify** -- add a passkey to an account (**Add passkey**) via a fully server-side WebAuthn registration ceremony (no browser needed), storing one passkey per account. Accounts holding a passkey get **Log in with passkey** in the auth dialog: it logs in with the passkey and then prompts only for the 2FA password. A **Verify** action confirms Telegram still accepts the stored passkey, and **Bulk Add Passkey** skips (and verifies) accounts that already hold a Bemby passkey. (Experimental)
+- **Bulk rename** -- **Bulk Rename** renames selected accounts by a name format where `{index}` becomes a running number, with a configurable start index and index digits (zero-padding) and a live preview
+- **Bulk fetch attributes** -- **Fetch Attributes** refreshes TG info and extra attributes (name, username, login email, passkey status) for selected authenticated accounts, without running the send-permission check
+- **Bulk change login email** -- **Bulk Change Login Email** sets a login email on selected accounts using a `+`-tag template with variables (`{phoneNum}`, `{tgId}`, `{id}`, and random `{word:4}`, `{alpha:8}`, `{uuid}`); digits are mapped to letters (0=a … 9=j) because Telegram rejects numeric email tags. Codes are read from Gmail over IMAP using a Gmail app password (used only for the run, never stored), with a required **Test login** step first
+- **Bulk change credential** -- **Bulk Change Credential** sets/rotates the 2FA password across selected accounts, with optional "remove all other logged-in devices" and "remove all other passkeys (keep Bemby-managed)", plus an append-to-notes-on-success template
+- **Extra Info column** -- accounts now store more meta info (login email, restriction status, passkey flags); a new **Show / Hide Extra Info** toggle and **Extra Info** column surface attributes such as Bemby Passkey, Passkey, Login Email, and Restriction
+- **Bulk add accounts (opt-in)** -- **Bulk Add** takes one `phone----apiUrl` per line, creating every account first and then authenticating each one sequentially: request the code, read the verification code and 2FA password back from the account's API web page, wait a configurable gap, and move on (a phone-only line creates without authenticating). The **Options** panel adds a per-account gap, a name prefix and numbering scheme, a notes template (`{apiUrl}` expands per account), candidate device/proxy/API ID-Hash pickers (chosen at random per account, with **Bulk paste** for multiple API credential pairs), and custom regexes for extracting the code / 2FA. This feature and **Bulk Clean** are hidden unless `BULK_ACCOUNT_MANAGEMENT=1` is set in the environment
+- **Shift-click range selection** -- hold Shift and click in the accounts table to select the contiguous range between the last-clicked row and the shift-clicked row
+- **Slimmer account view / Bulk Actions menu** -- the account view was refactored to show fewer inline buttons, with bulk operations consolidated under a **Bulk Actions** menu
+- **Gap between accounts** -- a shared "Gap between accounts (seconds)" control (0 = no wait) across the sequential bulk operations avoids Telegram flood limits
+- **Backups carry passkeys and account attributes** -- data export/import now carries each account's stored passkey and additional attributes inline; a backup containing a passkey private key is forced to be encrypted on export
+- **Clearer auth error messages** -- the auth flow now returns specific, localised errors (invalid verification code, code expired, too many attempts) instead of a generic failure
+
+**Fixes**
+
+- **Fix Emby watch custom User Agent not taking effect** -- the Emby session's app name and version were hardcoded to `SenPlayer` / `6.1.0` regardless of the chosen UA. The client name and version are now parsed from the selected UA, so a custom UA preset shows correctly in the Emby dashboard
+- **Fix callback button-click timeout wrongly reported as failure** -- a `BOT_RESPONSE_TIMEOUT` on a button-click callback was treated as a failure even though the check-in often still registered. The job now re-fetches the message and treats a changed `editDate` as proof the bot processed the click, so those runs are no longer reported as failed
+- **Fix passkeys could not be added**
+- **Fix wrong passkey login flag** -- the auth dialog gated the passkey shortcut on the wrong flag (`hasPasskey`, which includes non-Bemby passkeys); it now uses `hasBembyPasskey`, so the automatic passkey-then-2FA flow triggers only when Bemby actually holds the key
+- **Fix bulk clean button label and z-index** -- the bulk send-permission check button incorrectly showed the "Start Cleaning" label; it now reads "Start Check", and a Chinese typo was corrected
+- **Fix account view modal style** -- the modal overlay z-index was raised above the mobile header and sidebar (the title is no longer covered), the modal body now scrolls for tall content, and the footer buttons stay pinned to the bottom and reachable
+
+---
+
 ## v0.9.33-patch-1
 
 ### 中文

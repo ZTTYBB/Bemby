@@ -1,6 +1,11 @@
 import crypto from "crypto";
 import { db, getDefaultTgApiCredentials } from "../db/database";
-import { requestCode, submitCode, submitPassword } from "../auth/tgAuth";
+import {
+  cancelPendingAuth,
+  requestCode,
+  submitCode,
+  submitPassword,
+} from "../auth/tgAuth";
 import { parseTgProxy } from "./runner";
 import { resolveAppClientParams } from "../tg/appClient";
 
@@ -411,6 +416,9 @@ async function runBatch(
         item.status = "failed";
         item.error = err?.message ?? String(err);
         item.message = "Failed";
+        // requestCode may have parked a connected client before the failure;
+        // drop it so abandoned accounts don't leak sessions.
+        if (item.accountId != null) await cancelPendingAuth(item.accountId);
       }
       // Pause before the next account that needs authentication
       const next = batch.items[i + 1];

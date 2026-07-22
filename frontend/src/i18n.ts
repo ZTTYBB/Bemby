@@ -11,6 +11,7 @@ const zh = {
     logs: "日志",
     help: "帮助",
     messenger: "消息",
+    community: "交流群",
     logout: "退出登录",
   },
   common: {
@@ -979,6 +980,7 @@ const en: typeof zh = {
     logs: "Logs",
     help: "Help",
     messenger: "Messenger",
+    community: "Community",
     logout: "Logout",
   },
   common: {

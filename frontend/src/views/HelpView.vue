@@ -152,7 +152,25 @@
                 <tr>
                   <td>通行密钥（Passkeys）</td>
                   <td>
-                    在<strong>高级</strong>选项卡中查看已注册的通行密钥（WebAuthn，含名称、添加与最近使用时间）并可移除。新增通行密钥仍需在官方 Telegram 客户端中进行。
+                    在<strong>高级</strong>选项卡中查看已注册的通行密钥（WebAuthn，含名称、添加与最近使用时间）、<strong>添加通行密钥</strong>（整个注册流程在服务端完成，每账户一个）、<strong>验证</strong>（确认 Telegram 仍接受该密钥）并可移除。已添加通行密钥的账户，登录对话框会出现<strong>使用通行密钥登录</strong>：先以通行密钥登录，随后仅需输入 2FA 密码。（实验性功能）
+                  </td>
+                </tr>
+                <tr>
+                  <td>额外信息列</td>
+                  <td>
+                    通过页面顶部的"显示额外信息 / 隐藏额外信息"按钮切换<strong>额外信息</strong>列，展示登录邮箱、受限状态、通行密钥标记等属性。勾选账户后可点击"获取属性"批量刷新。
+                  </td>
+                </tr>
+                <tr>
+                  <td>Shift 范围选择</td>
+                  <td>
+                    在账户表格中按住 Shift 点击，可选中上次点击行与本次点击行之间的连续区间。
+                  </td>
+                </tr>
+                <tr>
+                  <td>批量操作</td>
+                  <td>
+                    勾选多个账户后，操作收纳于<strong>批量操作</strong>菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免限流：<strong>批量重命名</strong>（按 <code>{index}</code> 递增序号，可补零、实时预览）、<strong>获取属性</strong>、<strong>批量修改登录邮箱</strong>（<code>+</code> 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行且不存储，开始前需"测试登录"）、<strong>批量修改凭据</strong>（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥）、<strong>批量添加通行密钥</strong>。设置环境变量 <code>BULK_ACCOUNT_MANAGEMENT=1</code> 后还提供<strong>批量添加账户</strong>（每行 <code>手机号----API网址</code>，自动创建并从各 API 网页读取验证码/2FA 完成认证）与<strong>批量清理</strong>。
                   </td>
                 </tr>
                 <tr>
@@ -282,10 +300,54 @@
                 <tr>
                   <td>Passkeys</td>
                   <td>
-                    List registered WebAuthn passkeys (name, added and last-used
-                    times) from the <strong>Advanced</strong> tab and remove
-                    them. Creating new passkeys still requires the official
-                    Telegram client.
+                    From the <strong>Advanced</strong> tab, list registered
+                    WebAuthn passkeys (name, added and last-used times),
+                    <strong>Add passkey</strong> (the whole registration runs
+                    server-side, one per account), <strong>Verify</strong> that
+                    Telegram still accepts it, and remove them. Accounts with a
+                    passkey get <strong>Log in with passkey</strong> in the auth
+                    dialog: it signs in and then asks only for the 2FA password.
+                    (Experimental)
+                  </td>
+                </tr>
+                <tr>
+                  <td>Extra Info column</td>
+                  <td>
+                    Toggle the <strong>Extra Info</strong> column via the
+                    Show/Hide Extra Info button to surface login email,
+                    restriction status, and passkey flags. Select accounts and
+                    click <strong>Fetch Attributes</strong> to refresh them in
+                    bulk.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Shift-click range select</td>
+                  <td>
+                    Hold Shift and click in the accounts table to select the
+                    contiguous range between the last-clicked row and the
+                    shift-clicked row.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Bulk actions</td>
+                  <td>
+                    Select multiple accounts and operations appear under the
+                    <strong>Bulk Actions</strong> menu, sharing a "Gap between
+                    accounts (seconds)" control to avoid flood limits:
+                    <strong>Bulk Rename</strong> (<code>{index}</code> running
+                    number, zero-padding, live preview),
+                    <strong>Fetch Attributes</strong>,
+                    <strong>Bulk Change Login Email</strong> (<code>+</code>-tag
+                    template with variables, codes read from Gmail over IMAP with
+                    an app password used only for the run and never stored, after
+                    a required Test login), <strong>Bulk Change Credential</strong>
+                    (set/rotate the 2FA password, optionally removing other
+                    devices/passkeys), and <strong>Bulk Add Passkey</strong>.
+                    Setting <code>BULK_ACCOUNT_MANAGEMENT=1</code> also enables
+                    <strong>Bulk Add</strong> (one <code>phone----apiUrl</code>
+                    per line, auto-creating and authenticating each account by
+                    reading the code/2FA from its API page) and
+                    <strong>Bulk Clean</strong>.
                   </td>
                 </tr>
                 <tr>
