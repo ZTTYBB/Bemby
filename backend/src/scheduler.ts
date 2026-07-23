@@ -32,6 +32,33 @@ type ScheduleEntry = {
 
 const schedule = new Map<number, ScheduleEntry>();
 
+/** Node's setTimeout delay is a 32-bit signed int; larger values overflow and
+ * fire almost immediately (coerced to 1ms). See issue #25. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/**
+ * setTimeout for delays that may exceed Node's 32-bit limit (~24.8 days).
+ * Chains timers, re-arming until the remaining delay fits. `onTimer` is called
+ * with each armed timer handle so the caller can keep a clearable reference to
+ * the currently-pending timer.
+ */
+function armLongTimeout(
+  delayMs: number,
+  callback: () => void,
+  onTimer: (timer: ReturnType<typeof setTimeout>) => void,
+): void {
+  if (delayMs <= MAX_TIMEOUT_MS) {
+    onTimer(setTimeout(callback, delayMs));
+    return;
+  }
+  onTimer(
+    setTimeout(
+      () => armLongTimeout(delayMs - MAX_TIMEOUT_MS, callback, onTimer),
+      MAX_TIMEOUT_MS,
+    ),
+  );
+}
+
 export const DEFAULT_SCHEDULE_GAP_MINUTES = 2;
 const MAX_SCHEDULE_GAP_MINUTES = 30;
 
@@ -305,7 +332,16 @@ function scheduleOne(job: Job, account: TgAccount | null, daysAhead = 0): void {
   );
   const delayMs = Math.max(0, nextRun.toMillis() - Date.now());
 
-  const timer = setTimeout(() => executeJob(job, account), delayMs);
+  let timer!: ReturnType<typeof setTimeout>;
+  armLongTimeout(
+    delayMs,
+    () => executeJob(job, account),
+    (t) => {
+      timer = t;
+      const entry = schedule.get(job.id);
+      if (entry) entry.timer = t;
+    },
+  );
   schedule.set(job.id, {
     job,
     account,
