@@ -52,11 +52,11 @@
               <td colspan="6" class="empty">{{ t('templates.noTemplates') }}</td>
             </tr>
             <tr
-              v-for="tpl in templates"
+              v-for="(tpl, idx) in templates"
               :key="tpl.id"
               style="cursor:pointer"
               :class="selectedIds.includes(tpl.id) ? 'row-selected' : ''"
-              @click="toggleSelect(tpl.id)"
+              @click="toggleSelect(tpl.id, idx, $event)"
             >
               <td>{{ tpl.name }}</td>
               <td><span :class="jobTypeBadge(tpl.jobType)">{{ t(`logs.jobType.${tpl.jobType}`) }}</span></td>
@@ -937,11 +937,35 @@ const confirmBulkDeleteTpls = ref(false);
 function toggleAll() {
   selectedIds.value = allSelected.value ? [] : templates.value.map(t => t.id);
 }
-function toggleSelect(id: number) {
-  const idx = selectedIds.value.indexOf(id);
-  if (idx === -1) selectedIds.value.push(id);
-  else selectedIds.value.splice(idx, 1);
+// Index of the last row toggled without Shift; anchors Shift-click ranges.
+let lastSelectedIdx: number | null = null;
+
+function toggleSelect(id: number, idx: number, event?: MouseEvent) {
+  // Shift-click selects the contiguous range between the anchor row and this
+  // one; other clicks toggle a single row and reset the anchor.
+  if (event?.shiftKey && lastSelectedIdx !== null) {
+    // Shift-click would otherwise highlight the intervening table text.
+    window.getSelection?.()?.removeAllRanges();
+    const next = new Set(selectedIds.value);
+    const [lo, hi] = [lastSelectedIdx, idx].sort((a, b) => a - b);
+    for (let i = lo; i <= hi; i++) {
+      const row = templates.value[i];
+      if (row) next.add(row.id);
+    }
+    selectedIds.value = [...next];
+    return;
+  }
+  const arrIdx = selectedIds.value.indexOf(id);
+  if (arrIdx === -1) selectedIds.value.push(id);
+  else selectedIds.value.splice(arrIdx, 1);
+  lastSelectedIdx = idx;
 }
+
+// The anchor indexes the current list, so clear it whenever the list is
+// replaced (search, filter, reload) to avoid spanning stale rows.
+watch(templates, () => {
+  lastSelectedIdx = null;
+});
 
 const customActions = ref<CustomActionForm[]>([]);
 const customJobMaxRetries = ref(1);

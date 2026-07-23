@@ -103,10 +103,10 @@
               <td colspan="7" class="empty">{{ t('jobs.noJobs') }}</td>
             </tr>
             <tr
-              v-for="j in jobs" :key="j.id"
+              v-for="(j, idx) in jobs" :key="j.id"
               style="cursor:pointer"
               :class="selectedJobIds.includes(j.id) ? 'row-selected' : ''"
-              @click="toggleJobSelect(j.id)"
+              @click="toggleJobSelect(j.id, idx, $event)"
             >
               <td>{{ j.name }}</td>
               <td>{{ jobAccountLabel(j) }}</td>
@@ -1834,11 +1834,35 @@ function toggleAllJobs() {
   selectedJobIds.value = allJobsSelected.value ? [] : jobs.value.map(j => j.id);
 }
 
-function toggleJobSelect(id: number) {
-  const idx = selectedJobIds.value.indexOf(id);
-  if (idx === -1) selectedJobIds.value.push(id);
-  else selectedJobIds.value.splice(idx, 1);
+// Index of the last row toggled without Shift; anchors Shift-click ranges.
+let lastJobSelectedIdx: number | null = null;
+
+function toggleJobSelect(id: number, idx: number, event?: MouseEvent) {
+  // Shift-click selects the contiguous range between the anchor row and this
+  // one; other clicks toggle a single row and reset the anchor.
+  if (event?.shiftKey && lastJobSelectedIdx !== null) {
+    // Shift-click would otherwise highlight the intervening table text.
+    window.getSelection?.()?.removeAllRanges();
+    const next = new Set(selectedJobIds.value);
+    const [lo, hi] = [lastJobSelectedIdx, idx].sort((a, b) => a - b);
+    for (let i = lo; i <= hi; i++) {
+      const row = jobs.value[i];
+      if (row) next.add(row.id);
+    }
+    selectedJobIds.value = [...next];
+    return;
+  }
+  const arrIdx = selectedJobIds.value.indexOf(id);
+  if (arrIdx === -1) selectedJobIds.value.push(id);
+  else selectedJobIds.value.splice(arrIdx, 1);
+  lastJobSelectedIdx = idx;
 }
+
+// The anchor indexes the current list, so clear it whenever the list is
+// replaced (search, filter, reload) to avoid spanning stale rows.
+watch(jobs, () => {
+  lastJobSelectedIdx = null;
+});
 
 async function bulkEnableJobs() {
   await Promise.all(selectedJobIds.value.map(id => jobsApi.update(id, { enabled: true })));
