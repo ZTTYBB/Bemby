@@ -50,6 +50,32 @@ const isEditUpdate = (update: any): boolean =>
   update?.className === "UpdateEditMessage" ||
   update?.className === "UpdateEditChannelMessage";
 
+// Lowest message id an action will accept for a given scope. scope 0 (default)
+// admits only messages newer than the anchor -- the reply to what we just sent,
+// which stops a stale menu from an earlier turn being clicked. scope -N also
+// admits the N most recent incoming messages that predate the anchor, for bots
+// whose live menu sits on an earlier message. anchorId 0 (nothing sent yet)
+// falls back to accepting everything.
+async function resolveScopeFloor(
+  client: TelegramClient,
+  target: Api.TypeEntityLike,
+  anchorId: number,
+  scope?: number,
+): Promise<number> {
+  const freshFloor = anchorId + 1;
+  if (!scope || scope >= 0) return freshFloor;
+  const n = -scope;
+  const recent = (await client
+    .getMessages(target, { limit: n + 20 })
+    .catch(() => [])) as Api.Message[];
+  const prior = recent
+    .filter((m) => m && !m.out && m.id <= anchorId)
+    .map((m) => m.id)
+    .sort((a, b) => b - a); // newest first
+  if (!prior.length) return freshFloor;
+  return prior[Math.min(n, prior.length) - 1];
+}
+
 // Authoritative membership check: GetParticipant throws USER_NOT_PARTICIPANT for pending
 // join requests, unlike the Channel.left flag which can lag behind actual state.
 async function isChannelMember(client: TelegramClient, channel: Api.Channel): Promise<boolean> {
@@ -72,6 +98,7 @@ async function waitForButtonsInChat(
   chat: Api.TypeEntityLike,
   maxMs: number,
   signal?: AbortSignal,
+  minId = 0,
 ): Promise<Api.Message[]> {
   const chatPeerId = await client.getPeerId(chat);
 
@@ -117,6 +144,7 @@ async function waitForButtonsInChat(
       if (!isEditUpdate(update)) return;
       const msg = update.message as Api.Message;
       if (!msg || msg.out) return;
+      if (msg.id < minId) return; // out of scope (edit of a pre-anchor message)
       if (!msg.peerId || utils.getPeerId(msg.peerId) !== chatPeerId) return;
       if (hasInlineButtons(msg)) succeed(msg);
     };
@@ -272,7 +300,7 @@ async function waitForReply(
   successContains?: string,
   failContains?: string,
   signal?: AbortSignal,
-  sinceAnchor?: SendAnchor | null,
+  minId = 0,
 ): Promise<Api.Message[]> {
   const botPeerId = await client.getPeerId(fromUsername);
 
@@ -361,6 +389,7 @@ async function waitForReply(
       if (!isEditUpdate(update)) return;
       const msg = update.message as Api.Message;
       if (!msg || msg.out) return;
+      if (msg.id < minId) return; // out of scope (edit of a pre-anchor message)
       if (!msg.peerId || utils.getPeerId(msg.peerId) !== botPeerId) return;
       consider(msg);
     };
@@ -372,17 +401,16 @@ async function waitForReply(
     client.addEventHandler(editHandler, new Raw({}));
 
     // Best-effort: pick up replies delivered in the send-to-listen gap
-    if (sinceAnchor) {
+    if (minId > 1) {
       client
-        .getMessages(fromUsername, { limit: 5 })
+        .getMessages(fromUsername, { limit: 10 })
         .then((recent) => {
           const missed = (recent as Api.Message[])
             .filter(
               (m) =>
                 m &&
                 !m.out &&
-                (m.id > sinceAnchor.msgId ||
-                  (m.editDate ?? 0) >= sinceAnchor.dateSec) &&
+                m.id >= minId &&
                 !collected.some((c) => c.id === m.id),
             )
             .reverse(); // process oldest first
@@ -404,7 +432,7 @@ async function waitForButtonsMessage(
   fromUsername: string,
   maxMs: number,
   signal?: AbortSignal,
-  sinceAnchor?: SendAnchor | null,
+  minId = 0,
   excludeId?: number,
 ): Promise<Api.Message[]> {
   const botPeerId = await client.getPeerId(fromUsername);
@@ -454,6 +482,7 @@ async function waitForButtonsMessage(
       if (!isEditUpdate(update)) return;
       const msg = update.message as Api.Message;
       if (!msg || msg.out) return;
+      if (msg.id < minId) return; // out of scope (edit of a pre-anchor message)
       if (!msg.peerId || utils.getPeerId(msg.peerId) !== botPeerId) return;
       if (hasInlineButtons(msg)) succeed(msg);
     };
@@ -464,19 +493,20 @@ async function waitForButtonsMessage(
     );
     client.addEventHandler(editHandler, new Raw({}));
 
-    // Best-effort: a buttons message may have landed in the send-to-listen gap
-    if (sinceAnchor) {
+    // Best-effort: a buttons message may have landed in the send-to-listen gap.
+    // getMessages returns newest-first, so this seeds the most recent in-scope
+    // match ("last available button").
+    if (minId > 1) {
       client
-        .getMessages(fromUsername, { limit: 5 })
+        .getMessages(fromUsername, { limit: 10 })
         .then((recent) => {
           const seed = (recent as Api.Message[]).find(
             (m) =>
               m &&
               !m.out &&
               m.id !== excludeId &&
-              hasInlineButtons(m) &&
-              (m.id > sinceAnchor.msgId ||
-                (m.editDate ?? 0) >= sinceAnchor.dateSec),
+              m.id >= minId &&
+              hasInlineButtons(m),
           );
           if (seed) succeed(seed);
         })
@@ -525,6 +555,9 @@ export async function runCustom(
       let lastMessages: Api.Message[] = [];
       let lastButtonsMsg: Api.Message | null = null;
       let sendAnchor: SendAnchor | null = null;
+      // Last message we sent to each specific contact, keyed by the trimmed
+      // contact handle -- the scope anchor for click_message_button.
+      const contactAnchors = new Map<string, SendAnchor>();
       let jobAttemptFailed = false;
 
       for (let i = 0; i < config.actions.length; i++) {
@@ -571,7 +604,7 @@ export async function runCustom(
                     undefined,
                     undefined,
                     signal,
-                    sendAnchor,
+                    sendAnchor ? sendAnchor.msgId + 1 : 0,
                   );
                   lastMessages = msgs;
                 }
@@ -692,7 +725,10 @@ export async function runCustom(
                 }
                 const expanded = expandCommand(content);
                 step.label = `Send to ${contact}: "${expanded}"`;
-                await client.sendMessage(entity, { message: expanded });
+                const sentContact = await client.sendMessage(entity, {
+                  message: expanded,
+                });
+                contactAnchors.set(contact, anchorFromSent(sentContact));
                 step.result = "Sent";
                 break;
               }
@@ -706,6 +742,12 @@ export async function runCustom(
                   .filter(Boolean)
                   .join(", ");
                 step.label = `Wait reply (max ${action.maxWaitMs}ms)${hints ? ` [${hints}]` : ""}`;
+                const minId = await resolveScopeFloor(
+                  client,
+                  botUsername,
+                  sendAnchor?.msgId ?? 0,
+                  action.scope,
+                );
                 const msgs = await waitForReply(
                   client,
                   botUsername,
@@ -713,7 +755,7 @@ export async function runCustom(
                   successContains,
                   failContains,
                   signal,
-                  sendAnchor,
+                  minId,
                 );
                 lastMessages = msgs;
                 step.msgCount = msgs.length;
@@ -755,7 +797,18 @@ export async function runCustom(
               case "click_button": {
                 step.label = `Click button "${action.button}"`;
 
-                let buttonsMsg: Api.Message | null = lastButtonsMsg;
+                const minId = await resolveScopeFloor(
+                  client,
+                  botUsername,
+                  sendAnchor?.msgId ?? 0,
+                  action.scope,
+                );
+                // Ignore a cached buttons message that falls outside the scope
+                // (e.g. a menu from before the command we just sent).
+                let buttonsMsg: Api.Message | null =
+                  lastButtonsMsg && lastButtonsMsg.id >= minId
+                    ? lastButtonsMsg
+                    : null;
                 let preClickImages: string[] = [];
                 if (buttonsMsg) {
                   // The bot may have edited the message since we captured it (swapped or
@@ -776,7 +829,7 @@ export async function runCustom(
                     botUsername,
                     action.maxWaitMs,
                     signal,
-                    sendAnchor,
+                    minId,
                   );
                   lastMessages = msgs;
                   buttonsMsg =
@@ -894,17 +947,13 @@ export async function runCustom(
                       lastButtonsMsg = fresh;
                     }
                     if (!markupContainsTarget(buttonsMsg)) {
-                      const retryAnchor: SendAnchor = {
-                        msgId: buttonsMsg?.id ?? 0,
-                        dateSec: Math.floor(t0 / 1000),
-                      };
                       const msgs: Api.Message[] | null =
                         await waitForButtonsMessage(
                           client,
                           botUsername,
                           action.maxWaitMs,
                           signal,
-                          retryAnchor,
+                          minId,
                           buttonsMsg?.id,
                         ).catch(() => null);
                       if (msgs) {
@@ -1109,8 +1158,14 @@ export async function runCustom(
                 const peer = await client.getInputEntity(entity);
                 const chatPeerId = await client.getPeerId(entity);
 
+                const minId = await resolveScopeFloor(
+                  client,
+                  entity,
+                  contactAnchors.get(contact)?.msgId ?? 0,
+                  action.scope,
+                );
                 const findButtonsMsg = (msgs: Api.Message[]): Api.Message | null =>
-                  msgs.find((m) => hasInlineButtons(m)) ?? null;
+                  msgs.find((m) => m.id >= minId && hasInlineButtons(m)) ?? null;
 
                 // Seed from the contact's most recent messages (newest first); otherwise wait
                 // for an incoming message carrying buttons.
@@ -1124,6 +1179,7 @@ export async function runCustom(
                     entity,
                     action.maxWaitMs,
                     signal,
+                    minId,
                   );
                   buttonsMsg =
                     [...msgs].reverse().find((m) => hasInlineButtons(m)) ??
@@ -1229,6 +1285,7 @@ export async function runCustom(
                         entity,
                         action.maxWaitMs,
                         signal,
+                        minId,
                       ).catch(() => null);
                       if (msgs) {
                         const bm = [...msgs]

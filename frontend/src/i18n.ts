@@ -616,6 +616,9 @@ const zh = {
       buttonHint:
         "支持特殊值：{anyBtn} 随机，{aiBtn} AI 识别，{aiBtn:提示} 带提示的 AI 识别",
       labelMaxRetries: "最大重试次数",
+      labelScope: "消息范围",
+      scopeHint:
+        "限定查找哪些消息。0（默认）只看发送命令之后的新回复；-1 表示额外包含发送前最近 1 条消息，-3 表示最近 3 条。用于避免点到发送命令前的旧按钮",
       labelCaptchaLength: "验证码长度（可选）",
       labelSuccessContains: "成功包含文字（可选）",
       labelFailContains: "失败包含文字（可选）",
@@ -1603,6 +1606,9 @@ const en: typeof zh = {
       labelButton: "Button text",
       buttonHint: "Special values: {anyBtn} random, {aiBtn} AI pick",
       labelMaxRetries: "Max retries",
+      labelScope: "Message scope",
+      scopeHint:
+        "Limits which messages are considered. 0 (default) only looks at new replies after the command was sent; -1 also includes the last 1 message before it, -3 the last 3. Use this to avoid clicking a stale button from before the command",
       labelCaptchaLength: "Captcha length (optional)",
       labelSuccessContains: "Success contains (optional)",
       labelFailContains: "Fail contains (optional)",

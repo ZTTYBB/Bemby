@@ -277,6 +277,7 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       maxRetries?: number;
+      scope?: number;
     }
   | { type: "delay"; waitMs: number }
   | {
@@ -286,6 +287,7 @@ export type CustomAction =
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
+      scope?: number;
     }
   | {
       type: "click_message_button";
@@ -295,6 +297,7 @@ export type CustomAction =
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
+      scope?: number;
     }
   | {
       type: "enter_captcha";

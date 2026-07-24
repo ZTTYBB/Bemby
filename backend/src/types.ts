@@ -86,12 +86,16 @@ export type CustomAction =
       content: string;
       maxRetries?: number;
     }
+  // `scope` limits which messages an action considers, relative to the last
+  // message we sent (the anchor). 0 (default) = only replies newer than the
+  // anchor; -N = also the N most recent incoming messages before the anchor.
   | {
       type: "wait_reply";
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
       maxRetries?: number;
+      scope?: number;
     }
   | { type: "delay"; waitMs: number }
   | {
@@ -101,6 +105,7 @@ export type CustomAction =
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
+      scope?: number;
     }
   | {
       // Click a button on the latest message from a specific contact (bot/group/user),
@@ -113,6 +118,7 @@ export type CustomAction =
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
+      scope?: number;
     }
   | {
       type: "enter_captcha";
