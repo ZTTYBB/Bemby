@@ -121,6 +121,7 @@ export type BulkAddItemStatus =
   | "submitting_2fa"
   | "waiting"
   | "created"
+  | "skipped"
   | "done"
   | "failed";
 
@@ -147,6 +148,7 @@ export type BulkAddItem = {
   apiUrl: string;
   accountId: number | null;
   accountName: string | null;
+  existing: boolean;
   status: BulkAddItemStatus;
   message: string;
   error: string | null;

@@ -3366,8 +3366,8 @@ const bulkAddPlaceholder =
 
 const bulkDoneCount = computed(
   () =>
-    bulkBatch.value?.items.filter(
-      (i) => i.status === "done" || i.status === "failed",
+    bulkBatch.value?.items.filter((i) =>
+      ["done", "failed", "created", "skipped"].includes(i.status),
     ).length ?? 0,
 );
 
@@ -5272,6 +5272,9 @@ tr.drag-over td {
 }
 .bulk-add-status-dot.status-created {
   background: #1296db;
+}
+.bulk-add-status-dot.status-skipped {
+  background: #95de64;
 }
 .bulk-add-status-dot.status-failed {
   background: #ff4d4f;

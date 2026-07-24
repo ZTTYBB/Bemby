@@ -22,6 +22,7 @@ export type BulkAddItemStatus =
   | "submitting_2fa"
   | "waiting"
   | "created"
+  | "skipped"
   | "done"
   | "failed";
 
@@ -31,6 +32,8 @@ export type BulkAddItem = {
   apiUrl: string;
   accountId: number | null;
   accountName: string | null;
+  /** True when the account already existed and was reused, not created. */
+  existing: boolean;
   status: BulkAddItemStatus;
   message: string;
   error: string | null;
@@ -398,21 +401,57 @@ async function authenticateAccount(
   item.message = "Authenticated";
 }
 
+function isAccountAuthenticated(accountId: number): boolean {
+  const row = db
+    .prepare("SELECT auth_status FROM tg_accounts WHERE id = ?")
+    .get(accountId) as { auth_status: string } | undefined;
+  return row?.auth_status === "authenticated";
+}
+
 async function runBatch(
   batch: BulkAddBatch,
   config: BulkAddConfig,
 ): Promise<void> {
   try {
+    // The inter-account gap spaces Telegram sendCode calls, so it belongs
+    // between two authentications -- applied before every auth except the
+    // first. Accounts that are skipped (already authenticated) or only created
+    // never trigger a gap.
+    let authenticatedAny = false;
     for (let i = 0; i < batch.items.length; i++) {
       if (batch.cancelled) break;
       const item = batch.items[i];
-      // Phone-only line: account already created, no API page to authenticate
-      // against -- leave it unauthenticated and skip the inter-account gap.
-      if (!item.apiUrl) {
-        item.status = "created";
-        item.message = "Added without authentication";
+
+      // A pre-existing account that is already authenticated needs nothing.
+      if (
+        item.existing &&
+        item.accountId != null &&
+        isAccountAuthenticated(item.accountId)
+      ) {
+        item.status = "skipped";
+        item.message = "Already authenticated";
         continue;
       }
+
+      // No API page: nothing to authenticate against. A new line is left as a
+      // created-but-unauthenticated account; an existing one is left as is.
+      if (!item.apiUrl) {
+        item.status = item.existing ? "skipped" : "created";
+        item.message = item.existing
+          ? "Already exists, no API page to authenticate"
+          : "Added without authentication";
+        continue;
+      }
+
+      // Needs authentication -- respect the rate-limit gap before all but the
+      // first auth in this batch.
+      if (authenticatedAny) {
+        item.status = "waiting";
+        item.message = `Waiting ${Math.round(config.betweenAccountsMs / 1000)}s before authenticating`;
+        await sleep(config.betweenAccountsMs, batch);
+        if (batch.cancelled) break;
+      }
+
       try {
         await authenticateAccount(batch, item, config);
       } catch (err: any) {
@@ -423,13 +462,7 @@ async function runBatch(
         // drop it so abandoned accounts don't leak sessions.
         if (item.accountId != null) await cancelPendingAuth(item.accountId);
       }
-      // Pause before the next account that needs authentication
-      const next = batch.items[i + 1];
-      if (next && next.apiUrl && !batch.cancelled) {
-        next.status = "waiting";
-        next.message = `Waiting ${Math.round(config.betweenAccountsMs / 1000)}s before next account`;
-        await sleep(config.betweenAccountsMs, batch);
-      }
+      authenticatedAny = true;
     }
   } finally {
     batch.running = false;
@@ -437,7 +470,9 @@ async function runBatch(
 }
 
 // Creates the accounts for the parsed lines, returning the created items.
-// Name = {prefix}(current account count + 1), incrementing per account.
+// A line whose phone number already exists in the system reuses that account
+// instead of inserting a duplicate; only genuinely new lines are created and
+// consume a generated name. Name = {prefix}(current account count + 1).
 function createAccounts(
   lines: ParsedBulkLine[],
   config: BulkAddConfig,
@@ -477,8 +512,32 @@ function createAccounts(
   const insert = db.prepare(
     "INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, proxy_id, app_client_id, sort_order, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
+  const findByPhone = db.prepare(
+    "SELECT id, name FROM tg_accounts WHERE phone_number = ?",
+  );
 
   lines.forEach((line, index) => {
+    // Reuse an existing account rather than inserting a duplicate. It keeps its
+    // own name and credentials; authentication (if needed) is decided at run
+    // time from its current auth_status.
+    const existing = findByPhone.get(line.phoneNumber) as
+      | { id: number; name: string }
+      | undefined;
+    if (existing) {
+      items.push({
+        index,
+        phoneNumber: line.phoneNumber,
+        apiUrl: line.apiUrl,
+        accountId: existing.id,
+        accountName: existing.name,
+        existing: true,
+        status: "pending",
+        message: "",
+        error: null,
+      });
+      return;
+    }
+
     const num = count + 1;
     const name = `${config.namePrefix}${padWidth ? String(num).padStart(padWidth, "0") : num}`;
     const proxyId = pickRandom(proxies)?.id ?? null;
@@ -504,6 +563,7 @@ function createAccounts(
       apiUrl: line.apiUrl,
       accountId: Number(res.lastInsertRowid),
       accountName: name,
+      existing: false,
       status: "pending",
       message: "",
       error: null,
