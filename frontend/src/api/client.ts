@@ -306,6 +306,17 @@ export type CustomAction =
       scope?: number;
     }
   | {
+      type: "ai_multiple_btn";
+      contact?: string;
+      hint?: string;
+      gapMs: number;
+      maxRetries: number;
+      maxWaitMs: number;
+      successContains?: string;
+      failContains?: string;
+      scope?: number;
+    }
+  | {
       type: "enter_captcha";
       maxWaitMs: number;
       captchaLength?: number;

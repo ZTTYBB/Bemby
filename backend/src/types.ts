@@ -121,6 +121,20 @@ export type CustomAction =
       scope?: number;
     }
   | {
+      // AI selects and clicks multiple buttons in order. The AI returns a JSON array of
+      // exact button texts; each is clicked in sequence with `gapMs` between clicks.
+      // `contact` empty/undefined targets the job's bot chat; otherwise that peer.
+      type: "ai_multiple_btn";
+      contact?: string;
+      hint?: string;
+      gapMs: number;
+      maxRetries: number;
+      maxWaitMs: number;
+      successContains?: string;
+      failContains?: string;
+      scope?: number;
+    }
+  | {
       type: "enter_captcha";
       maxWaitMs: number;
       captchaLength?: number;
@@ -181,6 +195,8 @@ export type CustomStepLog = {
   preClickButtons?: string[][];
   preClickHasMedia?: boolean;
   clickedButton?: string;
+  /** For ai_multiple_btn: every button clicked, in order */
+  clickedButtons?: string[];
   /** Bot response after the action */
   responseHtml?: string;
   responseImage?: string;
