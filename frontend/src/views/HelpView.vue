@@ -1052,6 +1052,12 @@
                   </td>
                 </tr>
                 <tr>
+                  <td>点击多个按钮（AI 选择）</td>
+                  <td>
+                    由 AI 返回一组按钮文字并按顺序依次点击，每次点击之间可配置<strong>点击间隔（毫秒）</strong>。适用于需按序点选多个选项的流程（如人机验证）。留空<strong>联系人</strong>则在任务机器人对话中操作，填写则在该联系人对话中操作。<strong>成功包含文字</strong>仅在最后一次点击后校验，<strong>失败包含文字</strong>每次点击后校验。
+                  </td>
+                </tr>
+                <tr>
                   <td>输入验证码</td>
                   <td>
                     等待含图片的机器人消息，通过 AI
@@ -1392,6 +1398,20 @@
                     <code>{aiBtn}</code> (AI picks the button),
                     <code>{anyBtn}</code> (random pick), or exact text. Has its
                     own <strong>Max retries</strong> setting.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Click multiple buttons (AI picks)</td>
+                  <td>
+                    The AI returns a list of button texts and clicks each in
+                    order, with a configurable <strong>gap between clicks
+                    (ms)</strong>. Useful for flows that require selecting
+                    several options in sequence (e.g. a captcha). Leave
+                    <strong>Contact</strong> blank to operate in the job's bot
+                    chat, or set one to operate in that chat.
+                    <strong>Success contains</strong> is checked only after the
+                    final click; <strong>Fail contains</strong> is checked after
+                    every click.
                   </td>
                 </tr>
                 <tr>
