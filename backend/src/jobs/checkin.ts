@@ -363,6 +363,71 @@ export async function selectButtonWithAI(
   throw err;
 }
 
+type AiMultiSelectionResult = { buttons: string[]; prompt: string; response: string; retries: string[] };
+
+/** Strips a Markdown code fence some models wrap JSON in (```json ... ``` or ``` ... ```). */
+function stripCodeFence(text: string): string {
+  const m = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  return (m ? m[1] : text).trim();
+}
+
+/**
+ * Like selectButtonWithAI but picks multiple buttons to click in order. The AI replies
+ * with a JSON array of exact button texts (avoids delimiter-in-label ambiguity); every
+ * entry must map to an available button or the attempt is retried.
+ */
+export async function selectMultipleButtonsWithAI(
+  buttons: string[][],
+  html: string,
+  images: string[],
+  hint?: string,
+  maxRetries = 0,
+): Promise<AiMultiSelectionResult> {
+  if (!resolveAICreds().apiKey) throw new Error('The multiple-button click action requires an AI API key — configure it in Settings');
+
+  const flat = buttons.flat();
+  const text = htmlToText(html);
+  const task = hint ?? ('pick the buttons that should be clicked based on the message' + (images.length ? ' and attached image(s).' : ''));
+  const prompt = `Task: "${task}".\n\nThe message:\n${text}\n\nThe available inline buttons are: ${JSON.stringify(flat)}\n\nWhich button(s) should be clicked to "${task}", and in what order? You MUST reply with ONLY a JSON array of the EXACT BUTTON TEXTS to click, listed in click order, e.g. ["Button A", "Button B"]. Use ONLY texts from the available list. Do NOT include any other text or thinking logic.`;
+
+  const effectiveMax = Math.min(maxRetries, 5); // hard cap to avoid exhausting AI credits
+  const failedResponses: string[] = [];
+
+  for (let attempt = 0; attempt <= effectiveMax; attempt++) {
+    const { response: picked } = await callAIWithFallback(images, prompt, AI_ANSWER_MAX_TOKENS);
+    if (!picked) throw new Error('AI API returned an empty response');
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stripCodeFence(picked));
+    } catch {
+      failedResponses.push(picked);
+      continue;
+    }
+    if (!Array.isArray(parsed) || !parsed.length || !parsed.every((e) => typeof e === 'string')) {
+      failedResponses.push(picked);
+      continue;
+    }
+
+    const matched: string[] = [];
+    let ok = true;
+    for (const entry of parsed as string[]) {
+      const val = entry.trim();
+      const btn = flat.find(b => b === val) ?? flat.find(b => b.includes(val) || val.includes(b));
+      if (!btn) { ok = false; break; }
+      matched.push(btn);
+    }
+    if (ok && matched.length) return { buttons: matched, prompt, response: picked, retries: failedResponses };
+    failedResponses.push(picked);
+  }
+
+  const err = new Error(`AI selection "${failedResponses.at(-1)}" did not map to available buttons after ${effectiveMax + 1} attempt(s): ${JSON.stringify(flat)}`);
+  (err as any).aiRetries = failedResponses;
+  (err as any).aiPrompt = prompt;
+  (err as any).aiResponse = failedResponses.at(-1) ?? '';
+  throw err;
+}
+
 // ── HTML helpers ──────────────────────────────────────────────────────────────
 
 export function escapeHtml(s: string): string {

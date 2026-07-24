@@ -44,6 +44,32 @@ type PendingAuth = {
 // In-memory pending auth sessions keyed by account ID
 const pending = new Map<number, PendingAuth>();
 
+// Bound on the connect+sendCode round trip. GramJS's connectionRetries limits
+// reconnect attempts but not total wall-clock time, so a dead/slow proxy or an
+// unresponsive DC can leave the await pending forever -- which stalls the
+// sequential bulk-add loop on that account. Turning the stall into a rejection
+// lets callers fail the account and move on.
+const REQUEST_CODE_TIMEOUT_MS = 180_000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
 export type SendCodeResult = {
   isCodeViaApp: boolean; // true = sent to Telegram app; false = SMS/call
 };
@@ -72,8 +98,12 @@ export async function requestCode(
     ...(proxy ? { proxy } : {}),
   });
   try {
-    await client.connect();
-    const sent = await client.sendCode({ apiId, apiHash }, phoneNumber);
+    await withTimeout(client.connect(), REQUEST_CODE_TIMEOUT_MS, "connect");
+    const sent = await withTimeout(
+      client.sendCode({ apiId, apiHash }, phoneNumber),
+      REQUEST_CODE_TIMEOUT_MS,
+      "sendCode",
+    );
     const isCodeViaApp =
       (sent as any).type?.className === "auth.SentCodeTypeApp";
     pending.set(accountId, {

@@ -4,6 +4,24 @@ All notable changes to Bemby are documented here.
 
 ---
 
+## v0.9.35
+
+### 中文
+
+**新功能**
+
+- **消息范围（Scope）—— ⚠️ 请留意，可能影响既有自定义任务** -- "等待回复""点击按钮""点击消息按钮"等动作新增<strong>消息范围</strong>设置，用于限定动作查看哪些消息。默认值 <code>0</code> 表示只处理发送命令之后的新回复（以上一条已发送消息为锚点），可避免误点发送命令之前的旧按钮。<strong>既有自定义任务若依赖点击更早消息上的按钮，升级后可能因默认范围而找不到目标</strong>——此时请将该动作的消息范围设为负值（如 <code>-1</code> 额外包含发送前最近 1 条消息，<code>-3</code> 为最近 3 条）以恢复原有行为。
+- **点击多个按钮（AI 选择）** -- 自定义任务新增"点击多个按钮（AI 选择）"动作：AI 根据消息内容返回一组按钮文字（JSON 数组，避免按钮文字含逗号等分隔符时产生歧义），Bemby 按顺序依次点击，每次点击之间可配置<strong>点击间隔（毫秒）</strong>。适用于需要按顺序点选多个选项的流程（如人机验证）。留空<strong>联系人</strong>则在任务机器人的对话中操作，填写则在该联系人对话中操作。可选配<strong>成功包含文字</strong>（仅在最后一次点击后校验，因确认消息通常在整段序列完成后才出现）与<strong>失败包含文字</strong>（每次点击后校验，出现即中止）。若 AI 选择无法完整匹配可用按钮，或任一按钮在重试后仍无法点击，则整个动作失败。
+
+### English
+
+**Features**
+
+- **Message scope -- ⚠️ heads-up, may affect existing custom jobs** -- **Wait for reply**, **Click button**, and **Click message button** actions gained a <strong>Message scope</strong> setting that limits which messages an action considers. The default of <code>0</code> only looks at new replies after the command was sent (anchored to the last sent message), which avoids clicking a stale button from before the command. <strong>Existing custom jobs that relied on clicking a button on an earlier message may no longer find their target after upgrading</strong> -- set that action's Message scope to a negative value (e.g. <code>-1</code> to also include the last message before the send, <code>-3</code> for the last 3) to restore the previous behaviour.
+- **Click multiple buttons (AI picks)** -- a new custom-job action: the AI returns an ordered list of button texts (a JSON array, so labels containing commas or other delimiters stay unambiguous) based on the message, and Bemby clicks each in order with a configurable <strong>gap between clicks (ms)</strong>. Useful for flows that require selecting several options in sequence (e.g. a captcha). Leave <strong>Contact</strong> blank to operate in the job's bot chat, or set one to operate in that chat. Optional <strong>Success contains</strong> is checked only after the final click (the confirmation usually appears once the whole sequence is done) and <strong>Fail contains</strong> is checked after every click (aborting on the first match). The action fails if the AI selection can't be fully matched to available buttons, or if any button still can't be clicked after its retries.
+
+---
+
 ## v0.9.34
 
 ### 中文

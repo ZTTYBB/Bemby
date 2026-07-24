@@ -52,11 +52,11 @@
               <td colspan="6" class="empty">{{ t('templates.noTemplates') }}</td>
             </tr>
             <tr
-              v-for="tpl in templates"
+              v-for="(tpl, idx) in templates"
               :key="tpl.id"
               style="cursor:pointer"
               :class="selectedIds.includes(tpl.id) ? 'row-selected' : ''"
-              @click="toggleSelect(tpl.id)"
+              @click="toggleSelect(tpl.id, idx, $event)"
             >
               <td>{{ tpl.name }}</td>
               <td><span :class="jobTypeBadge(tpl.jobType)">{{ t(`logs.jobType.${tpl.jobType}`) }}</span></td>
@@ -231,6 +231,7 @@
                     <option value="delay">{{ t('jobs.custom.actionDelay') }}</option>
                     <option value="click_button">{{ t('jobs.custom.actionClickButton') }}</option>
                     <option value="click_message_button">{{ t('jobs.custom.actionClickMessageButton') }}</option>
+                    <option value="ai_multiple_btn" :disabled="aiKeyMissing">{{ t('jobs.custom.actionAiMultipleBtn') }}{{ aiKeyMissing ? ' (' + t('jobs.noApiKey') + ')' : '' }}</option>
                     <option value="enter_captcha" :disabled="aiKeyMissing">{{ t('jobs.custom.actionEnterCaptcha') }}{{ aiKeyMissing ? ' (' + t('jobs.noApiKey') + ')' : '' }}</option>
                     <option value="join_group">{{ t('jobs.custom.actionJoinGroup') }}</option>
                     <option value="subscribe_channel">{{ t('jobs.custom.actionSubscribeChannel') }}</option>
@@ -310,6 +311,11 @@
                     </div>
                   </div>
                   <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">{{ t('jobs.custom.labelScope') }}</label>
+                    <input v-model.number="action.scope" class="form-input" type="number" max="0" step="1" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.scopeHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0">
                     <label class="form-label">{{ t('jobs.custom.labelSuccessContains') }}</label>
                     <input v-model.trim="action.successContains" class="form-input" :placeholder="t('jobs.custom.successContainsPlaceholder')" />
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.successContainsHint') }}</div>
@@ -356,6 +362,11 @@
                     <input v-model.number="action.maxWaitMs" class="form-input" type="number" min="1000" step="1000" />
                   </div>
                   <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">{{ t('jobs.custom.labelScope') }}</label>
+                    <input v-model.number="action.scope" class="form-input" type="number" max="0" step="1" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.scopeHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0">
                     <label class="form-label">{{ t('jobs.custom.labelSuccessContains') }}</label>
                     <input v-model.trim="action.successContains" class="form-input" :placeholder="t('jobs.custom.successContainsPlaceholder')" />
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.successContainsHint') }}</div>
@@ -399,6 +410,56 @@
                   <div class="form-group" style="margin-bottom:0">
                     <label class="form-label">{{ t('jobs.custom.labelMaxWait') }}</label>
                     <input v-model.number="action.maxWaitMs" class="form-input" type="number" min="1000" step="1000" />
+                  </div>
+                  <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">{{ t('jobs.custom.labelScope') }}</label>
+                    <input v-model.number="action.scope" class="form-input" type="number" max="0" step="1" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.scopeHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">{{ t('jobs.custom.labelSuccessContains') }}</label>
+                    <input v-model.trim="action.successContains" class="form-input" :placeholder="t('jobs.custom.successContainsPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.successContainsHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">{{ t('jobs.custom.labelFailContains') }}</label>
+                    <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
+                  </div>
+                </div>
+
+                <!-- ai_multiple_btn -->
+                <div v-if="action.type === 'ai_multiple_btn'" class="custom-action-params">
+                  <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">{{ t('jobs.custom.labelContactOptional') }}</label>
+                    <input v-model.trim="action.contact" class="form-input" :placeholder="t('jobs.custom.contactOptionalPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.contactOptionalHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.aiHintLabel') }}</label>
+                    <input v-model.trim="action.buttonAiHint" class="form-input" :placeholder="t('jobs.aiHintPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.aiMultipleBtnHint') }}</div>
+                    <div v-if="aiKeyMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.aiKeyWarning') }}</div>
+                  </div>
+                  <div class="form-row" style="margin-bottom:0;margin-top:8px">
+                    <div class="form-group">
+                      <label class="form-label">{{ t('jobs.custom.labelGapMs') }}</label>
+                      <input v-model.number="action.gapMs" class="form-input" type="number" min="0" step="500" />
+                      <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.gapMsHint') }}</div>
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">{{ t('jobs.custom.labelMaxRetries') }}</label>
+                      <input v-model.number="action.maxRetries" class="form-input" type="number" min="0" max="10" />
+                    </div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">{{ t('jobs.custom.labelMaxWait') }}</label>
+                    <input v-model.number="action.maxWaitMs" class="form-input" type="number" min="1000" step="1000" />
+                  </div>
+                  <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">{{ t('jobs.custom.labelScope') }}</label>
+                    <input v-model.number="action.scope" class="form-input" type="number" max="0" step="1" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.scopeHint') }}</div>
                   </div>
                   <div class="form-group" style="margin-bottom:0">
                     <label class="form-label">{{ t('jobs.custom.labelSuccessContains') }}</label>
@@ -825,18 +886,20 @@ import { formatAccountLabel, loadAccountDisplaySetting } from '../composables/ac
 import PaginationBar from '../components/PaginationBar.vue';
 
 type CustomActionForm = {
-  type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'enter_captcha' | 'join_group' | 'subscribe_channel';
+  type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'ai_multiple_btn' | 'enter_captcha' | 'join_group' | 'subscribe_channel';
   content: string;
   contentDropdown: string;
   contentCustom: string;
   contentAiInputLength: string;
   maxWaitMs: number;
   waitMs: number;
+  gapMs: number;
   button: string;
   buttonDropdown: string;
   buttonCustom: string;
   buttonAiHint: string;
   maxRetries: number;
+  scope: number;
   captchaLength: string;
   successContains: string;
   failContains: string;
@@ -937,11 +1000,35 @@ const confirmBulkDeleteTpls = ref(false);
 function toggleAll() {
   selectedIds.value = allSelected.value ? [] : templates.value.map(t => t.id);
 }
-function toggleSelect(id: number) {
-  const idx = selectedIds.value.indexOf(id);
-  if (idx === -1) selectedIds.value.push(id);
-  else selectedIds.value.splice(idx, 1);
+// Index of the last row toggled without Shift; anchors Shift-click ranges.
+let lastSelectedIdx: number | null = null;
+
+function toggleSelect(id: number, idx: number, event?: MouseEvent) {
+  // Shift-click selects the contiguous range between the anchor row and this
+  // one; other clicks toggle a single row and reset the anchor.
+  if (event?.shiftKey && lastSelectedIdx !== null) {
+    // Shift-click would otherwise highlight the intervening table text.
+    window.getSelection?.()?.removeAllRanges();
+    const next = new Set(selectedIds.value);
+    const [lo, hi] = [lastSelectedIdx, idx].sort((a, b) => a - b);
+    for (let i = lo; i <= hi; i++) {
+      const row = templates.value[i];
+      if (row) next.add(row.id);
+    }
+    selectedIds.value = [...next];
+    return;
+  }
+  const arrIdx = selectedIds.value.indexOf(id);
+  if (arrIdx === -1) selectedIds.value.push(id);
+  else selectedIds.value.splice(arrIdx, 1);
+  lastSelectedIdx = idx;
 }
+
+// The anchor indexes the current list, so clear it whenever the list is
+// replaced (search, filter, reload) to avoid spanning stale rows.
+watch(templates, () => {
+  lastSelectedIdx = null;
+});
 
 const customActions = ref<CustomActionForm[]>([]);
 const customJobMaxRetries = ref(1);
@@ -1057,8 +1144,8 @@ function onJobTypeChange() {
 function defaultAction(): CustomActionForm {
   return {
     type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '',
-    contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到',
-    buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3,
+    contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, gapMs: 1000, button: '签到',
+    buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0,
     captchaLength: '', successContains: '', failContains: '', contact: '', groupId: '', checkMembership: false,
     verifyButton: '', verifyWaitMs: 30000, channelId: '',
   };
@@ -1154,6 +1241,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
             ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
             ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
             ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+            ...(a.scope ? { scope: a.scope } : {}),
           };
         }
         if (a.type === 'delay') return { type: 'delay' as const, waitMs: a.waitMs };
@@ -1168,6 +1256,17 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.verifyButton.trim() ? { verifyButton: a.verifyButton.trim(), verifyWaitMs: a.verifyWaitMs } : {}),
         };
         if (a.type === 'subscribe_channel') return { type: 'subscribe_channel' as const, channelId: a.channelId, ...(a.checkMembership ? { checkMembership: true } : {}) };
+        if (a.type === 'ai_multiple_btn') return {
+          type: 'ai_multiple_btn' as const,
+          gapMs: a.gapMs,
+          maxRetries: a.maxRetries,
+          maxWaitMs: a.maxWaitMs,
+          ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
+          ...(a.buttonAiHint.trim() ? { hint: a.buttonAiHint.trim() } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.scope ? { scope: a.scope } : {}),
+        };
         let button: string;
         if (a.buttonDropdown === 'custom') button = a.buttonCustom;
         else if (a.buttonDropdown === '{aiBtn}') button = a.buttonAiHint.trim() ? `{aiBtn:${a.buttonAiHint.trim()}}` : '{aiBtn}';
@@ -1180,6 +1279,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           maxWaitMs: a.maxWaitMs,
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.scope ? { scope: a.scope } : {}),
         };
         return {
           type: 'click_button' as const,
@@ -1188,6 +1288,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           maxWaitMs: a.maxWaitMs,
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.scope ? { scope: a.scope } : {}),
         };
       }),
     };
@@ -1335,11 +1436,12 @@ function openEdit(tpl: JobTemplate) {
             const contentDropdown = ACTION_CMD_PRESETS.has(a.content) ? a.content : 'custom';
             return { ...base, type: 'send_contact_message' as const, contact: a.contact, content: a.content, contentDropdown, contentCustom: contentDropdown === 'custom' ? a.content : '', contentAiInputLength: '', maxRetries: a.maxRetries ?? 0 };
           }
-          if (a.type === 'wait_reply') return { ...base, type: 'wait_reply' as const, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0 };
+          if (a.type === 'wait_reply') return { ...base, type: 'wait_reply' as const, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, scope: a.scope ?? 0 };
           if (a.type === 'delay') return { ...base, type: 'delay' as const, waitMs: a.waitMs };
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha' as const, maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group' as const, groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000 };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel' as const, channelId: a.channelId, checkMembership: a.checkMembership ?? false };
+          if (a.type === 'ai_multiple_btn') return { ...base, type: 'ai_multiple_btn' as const, contact: a.contact ?? '', buttonAiHint: a.hint ?? '', gapMs: a.gapMs ?? 1000, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
             let buttonDropdown: string, buttonCustom = '', buttonAiHint = '';
@@ -1350,7 +1452,7 @@ function openEdit(tpl: JobTemplate) {
             } else {
               buttonDropdown = 'custom'; buttonCustom = a.button;
             }
-            return { ...base, type: 'click_button' as const, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '' };
+            return { ...base, type: 'click_button' as const, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           }
           if (a.type === 'click_message_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
@@ -1362,7 +1464,7 @@ function openEdit(tpl: JobTemplate) {
             } else {
               buttonDropdown = 'custom'; buttonCustom = a.button;
             }
-            return { ...base, type: 'click_message_button' as const, contact: a.contact, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '' };
+            return { ...base, type: 'click_message_button' as const, contact: a.contact, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           }
           return base;
         });

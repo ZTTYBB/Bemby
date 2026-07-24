@@ -86,12 +86,16 @@ export type CustomAction =
       content: string;
       maxRetries?: number;
     }
+  // `scope` limits which messages an action considers, relative to the last
+  // message we sent (the anchor). 0 (default) = only replies newer than the
+  // anchor; -N = also the N most recent incoming messages before the anchor.
   | {
       type: "wait_reply";
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
       maxRetries?: number;
+      scope?: number;
     }
   | { type: "delay"; waitMs: number }
   | {
@@ -101,6 +105,7 @@ export type CustomAction =
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
+      scope?: number;
     }
   | {
       // Click a button on the latest message from a specific contact (bot/group/user),
@@ -113,6 +118,21 @@ export type CustomAction =
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
+      scope?: number;
+    }
+  | {
+      // AI selects and clicks multiple buttons in order. The AI returns a JSON array of
+      // exact button texts; each is clicked in sequence with `gapMs` between clicks.
+      // `contact` empty/undefined targets the job's bot chat; otherwise that peer.
+      type: "ai_multiple_btn";
+      contact?: string;
+      hint?: string;
+      gapMs: number;
+      maxRetries: number;
+      maxWaitMs: number;
+      successContains?: string;
+      failContains?: string;
+      scope?: number;
     }
   | {
       type: "enter_captcha";
@@ -175,6 +195,8 @@ export type CustomStepLog = {
   preClickButtons?: string[][];
   preClickHasMedia?: boolean;
   clickedButton?: string;
+  /** For ai_multiple_btn: every button clicked, in order */
+  clickedButtons?: string[];
   /** Bot response after the action */
   responseHtml?: string;
   responseImage?: string;

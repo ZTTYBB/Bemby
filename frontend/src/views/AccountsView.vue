@@ -1306,6 +1306,30 @@
             <div class="bulk-add-options-row">
               <div class="form-group">
                 <label class="form-label">{{
+                  t("accounts.bulkAdd.maxRetriesLabel")
+                }}</label>
+                <input
+                  v-model.number="bulkOptions.maxRetries"
+                  type="number"
+                  min="0"
+                  class="form-input"
+                />
+              </div>
+              <div class="form-group">
+                <label class="form-label">{{
+                  t("accounts.bulkAdd.retryDelayLabel")
+                }}</label>
+                <input
+                  v-model.number="bulkOptions.retryDelaySeconds"
+                  type="number"
+                  min="0"
+                  class="form-input"
+                />
+              </div>
+            </div>
+            <div class="bulk-add-options-row">
+              <div class="form-group">
+                <label class="form-label">{{
                   t("accounts.bulkAdd.nameIndexLabel")
                 }}</label>
                 <select v-model="bulkOptions.nameIndexMode" class="form-select">
@@ -3309,6 +3333,8 @@ let bulkPollTimer: ReturnType<typeof setTimeout> | null = null;
 const bulkAdvancedRegex = ref(false);
 const bulkOptions = reactive({
   gapSeconds: 70,
+  maxRetries: 2,
+  retryDelaySeconds: 300,
   namePrefix: "A_",
   nameIndexMode: "total" as "total" | "batch",
   namePadDigits: 0,
@@ -3366,8 +3392,8 @@ const bulkAddPlaceholder =
 
 const bulkDoneCount = computed(
   () =>
-    bulkBatch.value?.items.filter(
-      (i) => i.status === "done" || i.status === "failed",
+    bulkBatch.value?.items.filter((i) =>
+      ["done", "failed", "created", "skipped"].includes(i.status),
     ).length ?? 0,
 );
 
@@ -3416,6 +3442,8 @@ async function pollBulk() {
 function buildBulkOptions(): BulkAddOptions {
   const o: BulkAddOptions = {
     gapSeconds: bulkOptions.gapSeconds,
+    maxRetries: bulkOptions.maxRetries,
+    retryDelaySeconds: bulkOptions.retryDelaySeconds,
     namePrefix: bulkOptions.namePrefix,
     nameIndexMode: bulkOptions.nameIndexMode,
     namePadDigits: bulkOptions.namePadDigits,
@@ -5273,6 +5301,9 @@ tr.drag-over td {
 .bulk-add-status-dot.status-created {
   background: #1296db;
 }
+.bulk-add-status-dot.status-skipped {
+  background: #95de64;
+}
 .bulk-add-status-dot.status-failed {
   background: #ff4d4f;
 }
@@ -5288,6 +5319,10 @@ tr.drag-over td {
 .bulk-add-status-dot.status-fetching,
 .bulk-add-status-dot.status-working {
   background: #1296db;
+  animation: bulk-pulse 1s ease-in-out infinite;
+}
+.bulk-add-status-dot.status-retrying {
+  background: #faad14;
   animation: bulk-pulse 1s ease-in-out infinite;
 }
 

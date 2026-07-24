@@ -22,6 +22,8 @@ export type BulkAddItemStatus =
   | "submitting_2fa"
   | "waiting"
   | "created"
+  | "skipped"
+  | "retrying"
   | "done"
   | "failed";
 
@@ -31,6 +33,10 @@ export type BulkAddItem = {
   apiUrl: string;
   accountId: number | null;
   accountName: string | null;
+  /** True when the account already existed and was reused, not created. */
+  existing: boolean;
+  /** Number of authentication attempts made so far. */
+  attempts: number;
   status: BulkAddItemStatus;
   message: string;
   error: string | null;
@@ -150,6 +156,10 @@ export type BulkAddOptions = {
   proxyIds?: string[];
   /** Candidate API ID/hash pairs; one is picked at random per account. Empty = leave NULL (global default). */
   apiCredentials?: { apiId: number; apiHash: string }[];
+  /** How many times to retry an account after a failed authentication (default 2). */
+  maxRetries?: number;
+  /** Cooldown before a failed account is retried, in seconds (default 300). */
+  retryDelaySeconds?: number;
 };
 
 type BulkAddConfig = {
@@ -159,6 +169,10 @@ type BulkAddConfig = {
   rateLimitWaitMs: number;
   /** Pause after each account before moving to the next. */
   betweenAccountsMs: number;
+  /** Max retries after a failed authentication (0 disables retrying). */
+  maxRetries: number;
+  /** Cooldown before a failed account is re-queued for retry. */
+  retryDelayMs: number;
   /** Max attempts to read a code from the API page. */
   maxFetchAttempts: number;
   namePrefix: string;
@@ -175,11 +189,15 @@ type BulkAddConfig = {
 };
 
 const DEFAULT_GAP_SECONDS = 70;
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_RETRY_DELAY_SECONDS = 300;
 const DEFAULT_NAME_PREFIX = "A_";
 const DEFAULT_NOTES_TEMPLATE = "Automatically added via {apiUrl}";
 
 function resolveConfig(opts?: BulkAddOptions): BulkAddConfig {
   const gap = Number(opts?.gapSeconds);
+  const retries = Number(opts?.maxRetries);
+  const retryDelay = Number(opts?.retryDelaySeconds);
   return {
     initialWaitMs: 15_000,
     rateLimitWaitMs: 120_000,
@@ -187,6 +205,14 @@ function resolveConfig(opts?: BulkAddOptions): BulkAddConfig {
       Number.isFinite(gap) && gap >= 0
         ? gap * 1000
         : DEFAULT_GAP_SECONDS * 1000,
+    maxRetries:
+      Number.isFinite(retries) && retries >= 0
+        ? Math.floor(retries)
+        : DEFAULT_MAX_RETRIES,
+    retryDelayMs:
+      Number.isFinite(retryDelay) && retryDelay >= 0
+        ? retryDelay * 1000
+        : DEFAULT_RETRY_DELAY_SECONDS * 1000,
     maxFetchAttempts: 5,
     namePrefix: opts?.namePrefix ?? DEFAULT_NAME_PREFIX,
     nameIndexMode: opts?.nameIndexMode === "batch" ? "batch" : "total",
@@ -273,11 +299,14 @@ async function fetchApiCredentials(
   url: string,
   config: BulkAddConfig,
 ): Promise<{ code: string; pass2fa: string }> {
+  // A page that accepts the connection but never responds would hang the whole
+  // sequential batch on this account -- bound it so the retry loop can proceed.
   const resp = await fetch(url, {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     },
+    signal: AbortSignal.timeout(60_000),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const html = await resp.text();
@@ -395,38 +424,104 @@ async function authenticateAccount(
   item.message = "Authenticated";
 }
 
+function isAccountAuthenticated(accountId: number): boolean {
+  const row = db
+    .prepare("SELECT auth_status FROM tg_accounts WHERE id = ?")
+    .get(accountId) as { auth_status: string } | undefined;
+  return row?.auth_status === "authenticated";
+}
+
+// A unit of work in the run queue: the account plus the earliest time it may
+// be (re)attempted. Failed accounts are re-queued with readyAt in the future.
+type QueueEntry = { item: BulkAddItem; readyAt: number };
+
 async function runBatch(
   batch: BulkAddBatch,
   config: BulkAddConfig,
 ): Promise<void> {
   try {
-    for (let i = 0; i < batch.items.length; i++) {
+    // Resolve everything that needs no authentication up front (no gap, no
+    // queue), and collect the rest into a FIFO work queue.
+    const queue: QueueEntry[] = [];
+    for (const item of batch.items) {
       if (batch.cancelled) break;
-      const item = batch.items[i];
-      // Phone-only line: account already created, no API page to authenticate
-      // against -- leave it unauthenticated and skip the inter-account gap.
-      if (!item.apiUrl) {
-        item.status = "created";
-        item.message = "Added without authentication";
+
+      // A pre-existing account that is already authenticated needs nothing.
+      if (
+        item.existing &&
+        item.accountId != null &&
+        isAccountAuthenticated(item.accountId)
+      ) {
+        item.status = "skipped";
+        item.message = "Already authenticated";
         continue;
       }
+
+      // No API page: nothing to authenticate against. A new line is left as a
+      // created-but-unauthenticated account; an existing one is left as is.
+      if (!item.apiUrl) {
+        item.status = item.existing ? "skipped" : "created";
+        item.message = item.existing
+          ? "Already exists, no API page to authenticate"
+          : "Added without authentication";
+        continue;
+      }
+
+      queue.push({ item, readyAt: 0 });
+    }
+
+    // The inter-account gap spaces Telegram sendCode calls, so it belongs
+    // between two authentications -- applied before every auth except the
+    // first. A failed account is re-queued (readyAt = now + retryDelay) and
+    // retried up to config.maxRetries times; retries sit behind still-pending
+    // accounts and only wait out their remaining cooldown once reached.
+    const totalAttempts = config.maxRetries + 1;
+    let authenticatedAny = false;
+    while (queue.length && !batch.cancelled) {
+      const entry = queue.shift()!;
+      const { item } = entry;
+
+      const cooldownMs = entry.readyAt - Date.now();
+      if (cooldownMs > 0) {
+        item.status = "retrying";
+        item.message = `Retrying in ${Math.round(cooldownMs / 1000)}s (attempt ${item.attempts + 1}/${totalAttempts})`;
+        await sleep(cooldownMs, batch);
+        if (batch.cancelled) break;
+      }
+
+      if (authenticatedAny) {
+        item.status = "waiting";
+        item.message = `Waiting ${Math.round(config.betweenAccountsMs / 1000)}s before authenticating`;
+        await sleep(config.betweenAccountsMs, batch);
+        if (batch.cancelled) break;
+      }
+
+      item.attempts++;
       try {
         await authenticateAccount(batch, item, config);
+        item.error = null;
       } catch (err: any) {
-        item.status = "failed";
-        item.error = err?.message ?? String(err);
-        item.message = "Failed";
+        const reason = err?.message ?? String(err);
         // requestCode may have parked a connected client before the failure;
         // drop it so abandoned accounts don't leak sessions.
         if (item.accountId != null) await cancelPendingAuth(item.accountId);
+        // Re-queue for a later retry, unless out of attempts or cancelled. While
+        // a retry is pending the reason goes in the (non-error) message so the
+        // row reads as "retrying", not a hard failure; error is only set once
+        // all attempts are exhausted.
+        if (item.attempts <= config.maxRetries && !batch.cancelled) {
+          entry.readyAt = Date.now() + config.retryDelayMs;
+          item.status = "retrying";
+          item.error = null;
+          item.message = `Attempt ${item.attempts}/${totalAttempts} failed (${reason}) -- retrying in ${Math.round(config.retryDelayMs / 1000)}s`;
+          queue.push(entry);
+        } else {
+          item.status = "failed";
+          item.error = reason;
+          item.message = `Failed after ${item.attempts} attempt(s)`;
+        }
       }
-      // Pause before the next account that needs authentication
-      const next = batch.items[i + 1];
-      if (next && next.apiUrl && !batch.cancelled) {
-        next.status = "waiting";
-        next.message = `Waiting ${Math.round(config.betweenAccountsMs / 1000)}s before next account`;
-        await sleep(config.betweenAccountsMs, batch);
-      }
+      authenticatedAny = true;
     }
   } finally {
     batch.running = false;
@@ -434,7 +529,9 @@ async function runBatch(
 }
 
 // Creates the accounts for the parsed lines, returning the created items.
-// Name = {prefix}(current account count + 1), incrementing per account.
+// A line whose phone number already exists in the system reuses that account
+// instead of inserting a duplicate; only genuinely new lines are created and
+// consume a generated name. Name = {prefix}(current account count + 1).
 function createAccounts(
   lines: ParsedBulkLine[],
   config: BulkAddConfig,
@@ -474,8 +571,33 @@ function createAccounts(
   const insert = db.prepare(
     "INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, proxy_id, app_client_id, sort_order, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
+  const findByPhone = db.prepare(
+    "SELECT id, name FROM tg_accounts WHERE phone_number = ?",
+  );
 
   lines.forEach((line, index) => {
+    // Reuse an existing account rather than inserting a duplicate. It keeps its
+    // own name and credentials; authentication (if needed) is decided at run
+    // time from its current auth_status.
+    const existing = findByPhone.get(line.phoneNumber) as
+      | { id: number; name: string }
+      | undefined;
+    if (existing) {
+      items.push({
+        index,
+        phoneNumber: line.phoneNumber,
+        apiUrl: line.apiUrl,
+        accountId: existing.id,
+        accountName: existing.name,
+        existing: true,
+        attempts: 0,
+        status: "pending",
+        message: "",
+        error: null,
+      });
+      return;
+    }
+
     const num = count + 1;
     const name = `${config.namePrefix}${padWidth ? String(num).padStart(padWidth, "0") : num}`;
     const proxyId = pickRandom(proxies)?.id ?? null;
@@ -501,6 +623,8 @@ function createAccounts(
       apiUrl: line.apiUrl,
       accountId: Number(res.lastInsertRowid),
       accountName: name,
+      existing: false,
+      attempts: 0,
       status: "pending",
       message: "",
       error: null,

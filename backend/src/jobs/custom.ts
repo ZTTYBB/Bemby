@@ -7,6 +7,7 @@ import { NewMessage, NewMessageEvent, Raw } from "telegram/events";
 import {
   expandCommand,
   selectButtonWithAI,
+  selectMultipleButtonsWithAI,
   parseMessages,
   waitForBotMessageEdit,
   waitForNewBotMessage,
@@ -50,6 +51,32 @@ const isEditUpdate = (update: any): boolean =>
   update?.className === "UpdateEditMessage" ||
   update?.className === "UpdateEditChannelMessage";
 
+// Lowest message id an action will accept for a given scope. scope 0 (default)
+// admits only messages newer than the anchor -- the reply to what we just sent,
+// which stops a stale menu from an earlier turn being clicked. scope -N also
+// admits the N most recent incoming messages that predate the anchor, for bots
+// whose live menu sits on an earlier message. anchorId 0 (nothing sent yet)
+// falls back to accepting everything.
+async function resolveScopeFloor(
+  client: TelegramClient,
+  target: Api.TypeEntityLike,
+  anchorId: number,
+  scope?: number,
+): Promise<number> {
+  const freshFloor = anchorId + 1;
+  if (!scope || scope >= 0) return freshFloor;
+  const n = -scope;
+  const recent = (await client
+    .getMessages(target, { limit: n + 20 })
+    .catch(() => [])) as Api.Message[];
+  const prior = recent
+    .filter((m) => m && !m.out && m.id <= anchorId)
+    .map((m) => m.id)
+    .sort((a, b) => b - a); // newest first
+  if (!prior.length) return freshFloor;
+  return prior[Math.min(n, prior.length) - 1];
+}
+
 // Authoritative membership check: GetParticipant throws USER_NOT_PARTICIPANT for pending
 // join requests, unlike the Channel.left flag which can lag behind actual state.
 async function isChannelMember(client: TelegramClient, channel: Api.Channel): Promise<boolean> {
@@ -72,6 +99,7 @@ async function waitForButtonsInChat(
   chat: Api.TypeEntityLike,
   maxMs: number,
   signal?: AbortSignal,
+  minId = 0,
 ): Promise<Api.Message[]> {
   const chatPeerId = await client.getPeerId(chat);
 
@@ -117,6 +145,7 @@ async function waitForButtonsInChat(
       if (!isEditUpdate(update)) return;
       const msg = update.message as Api.Message;
       if (!msg || msg.out) return;
+      if (msg.id < minId) return; // out of scope (edit of a pre-anchor message)
       if (!msg.peerId || utils.getPeerId(msg.peerId) !== chatPeerId) return;
       if (hasInlineButtons(msg)) succeed(msg);
     };
@@ -272,7 +301,7 @@ async function waitForReply(
   successContains?: string,
   failContains?: string,
   signal?: AbortSignal,
-  sinceAnchor?: SendAnchor | null,
+  minId = 0,
 ): Promise<Api.Message[]> {
   const botPeerId = await client.getPeerId(fromUsername);
 
@@ -361,6 +390,7 @@ async function waitForReply(
       if (!isEditUpdate(update)) return;
       const msg = update.message as Api.Message;
       if (!msg || msg.out) return;
+      if (msg.id < minId) return; // out of scope (edit of a pre-anchor message)
       if (!msg.peerId || utils.getPeerId(msg.peerId) !== botPeerId) return;
       consider(msg);
     };
@@ -372,17 +402,16 @@ async function waitForReply(
     client.addEventHandler(editHandler, new Raw({}));
 
     // Best-effort: pick up replies delivered in the send-to-listen gap
-    if (sinceAnchor) {
+    if (minId > 1) {
       client
-        .getMessages(fromUsername, { limit: 5 })
+        .getMessages(fromUsername, { limit: 10 })
         .then((recent) => {
           const missed = (recent as Api.Message[])
             .filter(
               (m) =>
                 m &&
                 !m.out &&
-                (m.id > sinceAnchor.msgId ||
-                  (m.editDate ?? 0) >= sinceAnchor.dateSec) &&
+                m.id >= minId &&
                 !collected.some((c) => c.id === m.id),
             )
             .reverse(); // process oldest first
@@ -404,7 +433,7 @@ async function waitForButtonsMessage(
   fromUsername: string,
   maxMs: number,
   signal?: AbortSignal,
-  sinceAnchor?: SendAnchor | null,
+  minId = 0,
   excludeId?: number,
 ): Promise<Api.Message[]> {
   const botPeerId = await client.getPeerId(fromUsername);
@@ -454,6 +483,7 @@ async function waitForButtonsMessage(
       if (!isEditUpdate(update)) return;
       const msg = update.message as Api.Message;
       if (!msg || msg.out) return;
+      if (msg.id < minId) return; // out of scope (edit of a pre-anchor message)
       if (!msg.peerId || utils.getPeerId(msg.peerId) !== botPeerId) return;
       if (hasInlineButtons(msg)) succeed(msg);
     };
@@ -464,19 +494,20 @@ async function waitForButtonsMessage(
     );
     client.addEventHandler(editHandler, new Raw({}));
 
-    // Best-effort: a buttons message may have landed in the send-to-listen gap
-    if (sinceAnchor) {
+    // Best-effort: a buttons message may have landed in the send-to-listen gap.
+    // getMessages returns newest-first, so this seeds the most recent in-scope
+    // match ("last available button").
+    if (minId > 1) {
       client
-        .getMessages(fromUsername, { limit: 5 })
+        .getMessages(fromUsername, { limit: 10 })
         .then((recent) => {
           const seed = (recent as Api.Message[]).find(
             (m) =>
               m &&
               !m.out &&
               m.id !== excludeId &&
-              hasInlineButtons(m) &&
-              (m.id > sinceAnchor.msgId ||
-                (m.editDate ?? 0) >= sinceAnchor.dateSec),
+              m.id >= minId &&
+              hasInlineButtons(m),
           );
           if (seed) succeed(seed);
         })
@@ -525,6 +556,9 @@ export async function runCustom(
       let lastMessages: Api.Message[] = [];
       let lastButtonsMsg: Api.Message | null = null;
       let sendAnchor: SendAnchor | null = null;
+      // Last message we sent to each specific contact, keyed by the trimmed
+      // contact handle -- the scope anchor for click_message_button.
+      const contactAnchors = new Map<string, SendAnchor>();
       let jobAttemptFailed = false;
 
       for (let i = 0; i < config.actions.length; i++) {
@@ -571,7 +605,7 @@ export async function runCustom(
                     undefined,
                     undefined,
                     signal,
-                    sendAnchor,
+                    sendAnchor ? sendAnchor.msgId + 1 : 0,
                   );
                   lastMessages = msgs;
                 }
@@ -692,7 +726,10 @@ export async function runCustom(
                 }
                 const expanded = expandCommand(content);
                 step.label = `Send to ${contact}: "${expanded}"`;
-                await client.sendMessage(entity, { message: expanded });
+                const sentContact = await client.sendMessage(entity, {
+                  message: expanded,
+                });
+                contactAnchors.set(contact, anchorFromSent(sentContact));
                 step.result = "Sent";
                 break;
               }
@@ -706,6 +743,12 @@ export async function runCustom(
                   .filter(Boolean)
                   .join(", ");
                 step.label = `Wait reply (max ${action.maxWaitMs}ms)${hints ? ` [${hints}]` : ""}`;
+                const minId = await resolveScopeFloor(
+                  client,
+                  botUsername,
+                  sendAnchor?.msgId ?? 0,
+                  action.scope,
+                );
                 const msgs = await waitForReply(
                   client,
                   botUsername,
@@ -713,7 +756,7 @@ export async function runCustom(
                   successContains,
                   failContains,
                   signal,
-                  sendAnchor,
+                  minId,
                 );
                 lastMessages = msgs;
                 step.msgCount = msgs.length;
@@ -755,7 +798,18 @@ export async function runCustom(
               case "click_button": {
                 step.label = `Click button "${action.button}"`;
 
-                let buttonsMsg: Api.Message | null = lastButtonsMsg;
+                const minId = await resolveScopeFloor(
+                  client,
+                  botUsername,
+                  sendAnchor?.msgId ?? 0,
+                  action.scope,
+                );
+                // Ignore a cached buttons message that falls outside the scope
+                // (e.g. a menu from before the command we just sent).
+                let buttonsMsg: Api.Message | null =
+                  lastButtonsMsg && lastButtonsMsg.id >= minId
+                    ? lastButtonsMsg
+                    : null;
                 let preClickImages: string[] = [];
                 if (buttonsMsg) {
                   // The bot may have edited the message since we captured it (swapped or
@@ -776,7 +830,7 @@ export async function runCustom(
                     botUsername,
                     action.maxWaitMs,
                     signal,
-                    sendAnchor,
+                    minId,
                   );
                   lastMessages = msgs;
                   buttonsMsg =
@@ -894,17 +948,13 @@ export async function runCustom(
                       lastButtonsMsg = fresh;
                     }
                     if (!markupContainsTarget(buttonsMsg)) {
-                      const retryAnchor: SendAnchor = {
-                        msgId: buttonsMsg?.id ?? 0,
-                        dateSec: Math.floor(t0 / 1000),
-                      };
                       const msgs: Api.Message[] | null =
                         await waitForButtonsMessage(
                           client,
                           botUsername,
                           action.maxWaitMs,
                           signal,
-                          retryAnchor,
+                          minId,
                           buttonsMsg?.id,
                         ).catch(() => null);
                       if (msgs) {
@@ -1109,8 +1159,14 @@ export async function runCustom(
                 const peer = await client.getInputEntity(entity);
                 const chatPeerId = await client.getPeerId(entity);
 
+                const minId = await resolveScopeFloor(
+                  client,
+                  entity,
+                  contactAnchors.get(contact)?.msgId ?? 0,
+                  action.scope,
+                );
                 const findButtonsMsg = (msgs: Api.Message[]): Api.Message | null =>
-                  msgs.find((m) => hasInlineButtons(m)) ?? null;
+                  msgs.find((m) => m.id >= minId && hasInlineButtons(m)) ?? null;
 
                 // Seed from the contact's most recent messages (newest first); otherwise wait
                 // for an incoming message carrying buttons.
@@ -1124,6 +1180,7 @@ export async function runCustom(
                     entity,
                     action.maxWaitMs,
                     signal,
+                    minId,
                   );
                   buttonsMsg =
                     [...msgs].reverse().find((m) => hasInlineButtons(m)) ??
@@ -1229,6 +1286,7 @@ export async function runCustom(
                         entity,
                         action.maxWaitMs,
                         signal,
+                        minId,
                       ).catch(() => null);
                       if (msgs) {
                         const bm = [...msgs]
@@ -1408,6 +1466,417 @@ export async function runCustom(
                   throw new Error(
                     `Button "${targetText!}" not found after ${action.maxRetries + 1} attempt(s)`,
                   );
+                break;
+              }
+
+              case "ai_multiple_btn": {
+                const contact = action.contact?.trim() ?? "";
+                const botMode = contact.length === 0;
+                step.label = botMode
+                  ? "AI multi-click buttons"
+                  : `AI multi-click buttons from ${contact}`;
+
+                // Chat context: the job's bot by default, otherwise a named contact.
+                const target: Api.TypeEntityLike = botMode
+                  ? botUsername
+                  : await client.getEntity(contact);
+                const peer = await client.getInputEntity(target);
+                const editPeerId = await client.getPeerId(target);
+                const anchor = botMode
+                  ? sendAnchor
+                  : (contactAnchors.get(contact) ?? null);
+                const minId = await resolveScopeFloor(
+                  client,
+                  target,
+                  anchor?.msgId ?? 0,
+                  action.scope,
+                );
+
+                const refetch = (id: number): Promise<Api.Message | null> =>
+                  client
+                    .getMessages(target, { ids: [id] })
+                    .then((r) => (r as Api.Message[])?.[0] ?? null)
+                    .catch(() => null);
+                const waitButtons = (
+                  excludeId?: number,
+                ): Promise<Api.Message[]> =>
+                  botMode
+                    ? waitForButtonsMessage(
+                        client,
+                        botUsername,
+                        action.maxWaitMs,
+                        signal,
+                        minId,
+                        excludeId,
+                      )
+                    : waitForButtonsInChat(
+                        client,
+                        target,
+                        action.maxWaitMs,
+                        signal,
+                        minId,
+                      );
+                const waitNewMsg = (
+                  timeoutMs: number,
+                ): Promise<Api.Message | null> =>
+                  botMode
+                    ? waitForNewBotMessage(
+                        client,
+                        botUsername,
+                        timeoutMs,
+                        signal,
+                      )
+                    : waitForNewMessageInChat(
+                        client,
+                        target,
+                        timeoutMs,
+                        signal,
+                      );
+
+                // ── Obtain the message carrying the buttons ──
+                let buttonsMsg: Api.Message | null = null;
+                let preClickImages: string[] = [];
+                if (botMode) {
+                  buttonsMsg =
+                    lastButtonsMsg && lastButtonsMsg.id >= minId
+                      ? lastButtonsMsg
+                      : null;
+                  if (buttonsMsg) {
+                    const fresh = await refetch(buttonsMsg.id);
+                    if (hasInlineButtons(fresh)) {
+                      buttonsMsg = fresh;
+                      lastButtonsMsg = fresh;
+                    }
+                  }
+                } else {
+                  const recent = (await client.getMessages(target, {
+                    limit: 10,
+                  })) as Api.Message[];
+                  buttonsMsg =
+                    recent.find((m) => m.id >= minId && hasInlineButtons(m)) ??
+                    null;
+                }
+                if (!buttonsMsg) {
+                  const msgs = await waitButtons();
+                  if (botMode) lastMessages = msgs;
+                  buttonsMsg =
+                    [...msgs].reverse().find((m) => hasInlineButtons(m)) ?? null;
+                  if (buttonsMsg && botMode) lastButtonsMsg = buttonsMsg;
+                }
+                if (!buttonsMsg)
+                  throw new Error("No message with buttons available");
+
+                const preParsed = await parseMessages(
+                  [buttonsMsg],
+                  client,
+                  signal,
+                );
+                if (preParsed.html) step.preClickHtml = preParsed.html;
+                if (preParsed.images.length) {
+                  step.preClickImage = preParsed.images[0];
+                  preClickImages = preParsed.images;
+                }
+                if (preParsed.hasMedia) step.preClickHasMedia = preParsed.hasMedia;
+                if (preParsed.buttons.length)
+                  step.preClickButtons = preParsed.buttons;
+
+                // ── AI picks the ordered list of buttons to click ──
+                const buttonRows: string[][] = (
+                  (buttonsMsg as any).replyMarkup as Api.ReplyInlineMarkup
+                ).rows.map((row) => row.buttons.map((b: any) => b.text as string));
+                const aiStart = Date.now();
+                const aiResult = await selectMultipleButtonsWithAI(
+                  buttonRows,
+                  step.preClickHtml ?? buttonsMsg.message ?? "",
+                  preClickImages,
+                  action.hint,
+                  action.maxRetries,
+                )
+                  .then((r) => {
+                    step.aiPrompt = r.prompt;
+                    step.aiResponse = r.response;
+                    if (r.retries.length) step.aiRetries = r.retries;
+                    return r;
+                  })
+                  .finally(() => {
+                    step.aiDurationMs = Date.now() - aiStart;
+                  });
+
+                // Clicks one button by exact text against the current message, refreshing the
+                // markup on retry, and advances buttonsMsg to the reply so the next click sees
+                // the updated markup. Throws if the button never clicks (aborts the action).
+                const clickTarget = async (
+                  targetText: string,
+                ): Promise<{ clickedText: string; responseText: string }> => {
+                  let clicked = false;
+                  let retryCount = 0;
+                  let clickedText = "";
+                  let responseText = "";
+
+                  const markupHasTarget = (m: Api.Message | null): boolean =>
+                    hasInlineButtons(m) &&
+                    (
+                      (m as any).replyMarkup as Api.ReplyInlineMarkup
+                    ).rows.some((row) =>
+                      row.buttons.some(
+                        (b: any) => ((b.text as string) ?? "") === targetText,
+                      ),
+                    );
+
+                  for (
+                    let attempt = 0;
+                    attempt <= action.maxRetries && !clicked;
+                    attempt++
+                  ) {
+                    if (attempt > 0) {
+                      retryCount = attempt;
+                      const fresh = await refetch(buttonsMsg!.id);
+                      if (hasInlineButtons(fresh)) {
+                        buttonsMsg = fresh;
+                        if (botMode) lastButtonsMsg = fresh;
+                      }
+                      if (!markupHasTarget(buttonsMsg)) {
+                        const msgs = await waitButtons(buttonsMsg?.id).catch(
+                          () => null,
+                        );
+                        if (msgs) {
+                          if (botMode) lastMessages = msgs;
+                          const bm = [...msgs]
+                            .reverse()
+                            .find((m) => hasInlineButtons(m));
+                          if (bm) {
+                            buttonsMsg = bm;
+                            if (botMode) lastButtonsMsg = bm;
+                          }
+                        }
+                      }
+                    }
+
+                    const rows = (
+                      (buttonsMsg as any).replyMarkup as Api.ReplyInlineMarkup
+                    ).rows;
+                    for (const row of rows) {
+                      for (const btn of row.buttons) {
+                        const btnText = (btn as any).text as string;
+                        if (btnText !== targetText) continue;
+
+                        const clickAbort = new AbortController();
+                        const forwardAbort = () => clickAbort.abort();
+                        signal?.addEventListener("abort", forwardAbort, {
+                          once: true,
+                        });
+
+                        const editPromise = waitForBotMessageEdit(
+                          client,
+                          buttonsMsg!.id,
+                          10_000,
+                          clickAbort.signal,
+                          editPeerId,
+                        );
+                        const newMsgPromise = waitNewMsg(10_000);
+
+                        const callbackData = (btn as Api.KeyboardButtonCallback)
+                          .data;
+                        const preClickEditDate = (buttonsMsg as any).editDate as
+                          | number
+                          | undefined;
+                        let answer: Api.messages.BotCallbackAnswer | null = null;
+                        let callbackTimedOut = false;
+                        try {
+                          answer = (await client.invoke(
+                            new Api.messages.GetBotCallbackAnswer({
+                              peer,
+                              msgId: buttonsMsg!.id,
+                              data: callbackData,
+                            }),
+                          )) as Api.messages.BotCallbackAnswer;
+                        } catch (err: any) {
+                          if (
+                            !err?.message?.includes("BOT_RESPONSE_TIMEOUT")
+                          ) {
+                            clickAbort.abort();
+                            signal?.removeEventListener("abort", forwardAbort);
+                            throw err;
+                          }
+                          callbackTimedOut = true;
+                        }
+
+                        if (answer?.message)
+                          step.callbackAnswer = answer.message;
+                        clicked = true;
+                        step.retryCount = retryCount;
+
+                        const taggedEdit = editPromise.then((m) => ({
+                          msg: m,
+                          src: "edit" as const,
+                        }));
+                        const taggedNew = newMsgPromise.then((m) => ({
+                          msg: m,
+                          src: "new_message" as const,
+                        }));
+                        const first = await Promise.race([
+                          taggedEdit,
+                          taggedNew,
+                        ]);
+                        let second:
+                          | {
+                              msg: Api.Message | null;
+                              src: "edit" | "new_message";
+                            }
+                          | null = null;
+                        if (first.msg && !hasInlineButtons(first.msg)) {
+                          const other =
+                            first.src === "edit" ? taggedNew : taggedEdit;
+                          second = await Promise.race([
+                            other,
+                            new Promise<null>((r) =>
+                              setTimeout(() => r(null), 1_500),
+                            ),
+                          ]);
+                        }
+                        clickAbort.abort();
+                        signal?.removeEventListener("abort", forwardAbort);
+
+                        const responses = [first, second].filter(
+                          (
+                            r,
+                          ): r is {
+                            msg: Api.Message;
+                            src: "edit" | "new_message";
+                          } => !!r?.msg && !signal?.aborted,
+                        );
+                        if (responses.length) {
+                          const primary =
+                            responses.find((r) => hasInlineButtons(r.msg)) ??
+                            responses[0];
+                          step.responseSource = primary.src;
+                          if (hasInlineButtons(primary.msg)) {
+                            buttonsMsg = primary.msg;
+                            if (botMode) lastButtonsMsg = primary.msg;
+                          }
+                          if (botMode)
+                            lastMessages = responses.map((r) => r.msg);
+                          const parsed = await parseMessages(
+                            responses.map((r) => r.msg),
+                            client,
+                            signal,
+                          );
+                          step.responseHtml = parsed.html || undefined;
+                          step.responseImage = parsed.images[0];
+                          step.responseHasMedia = parsed.hasMedia || undefined;
+                          step.responseButtons = parsed.buttons.length
+                            ? parsed.buttons
+                            : undefined;
+                        }
+
+                        if (callbackTimedOut && !responses.length) {
+                          const fresh = await refetch(buttonsMsg!.id);
+                          const freshEditDate = (fresh as any)?.editDate as
+                            | number
+                            | undefined;
+                          const wasEdited =
+                            !!fresh &&
+                            !!freshEditDate &&
+                            freshEditDate !== preClickEditDate;
+                          if (!wasEdited)
+                            throw new Error(
+                              `Button "${btnText}" click timed out (BOT_RESPONSE_TIMEOUT) with no response`,
+                            );
+                          step.responseSource = "edit";
+                          if (hasInlineButtons(fresh)) {
+                            buttonsMsg = fresh;
+                            if (botMode) lastButtonsMsg = fresh;
+                          }
+                          if (botMode) lastMessages = [fresh!];
+                          const parsed = await parseMessages(
+                            [fresh!],
+                            client,
+                            signal,
+                          );
+                          step.responseHtml = parsed.html || undefined;
+                          step.responseImage = parsed.images[0];
+                          step.responseHasMedia = parsed.hasMedia || undefined;
+                          step.responseButtons = parsed.buttons.length
+                            ? parsed.buttons
+                            : undefined;
+                        }
+
+                        // Success/fail text is judged by the caller: the success indicator
+                        // typically only appears after the whole sequence is clicked.
+                        responseText = [
+                          answer?.message ?? "",
+                          ...responses.map((r) => r.msg.message ?? ""),
+                        ]
+                          .filter(Boolean)
+                          .join("\n");
+
+                        clickedText = btnText;
+                        step.clickedButton = btnText;
+                        break;
+                      }
+                      if (clicked) break;
+                    }
+                  }
+
+                  if (!clicked)
+                    throw new Error(
+                      `Button "${targetText}" not found after ${action.maxRetries + 1} attempt(s)`,
+                    );
+                  return { clickedText, responseText };
+                };
+
+                // ── Click each selected button in order, gap between clicks ──
+                const clickedButtons: string[] = [];
+                step.clickedButtons = clickedButtons;
+                for (let k = 0; k < aiResult.buttons.length; k++) {
+                  if (k > 0 && action.gapMs > 0) {
+                    await new Promise<void>((res, rej) => {
+                      if (signal?.aborted) {
+                        rej(new Error("Job cancelled"));
+                        return;
+                      }
+                      const timer = setTimeout(res, action.gapMs);
+                      signal?.addEventListener(
+                        "abort",
+                        () => {
+                          clearTimeout(timer);
+                          rej(new Error("Job cancelled"));
+                        },
+                        { once: true },
+                      );
+                    });
+                  }
+                  const { clickedText, responseText } = await clickTarget(
+                    aiResult.buttons[k],
+                  );
+                  clickedButtons.push(clickedText);
+
+                  // failContains aborts as soon as any reply signals failure; successContains
+                  // is only required on the final reply, since bots usually confirm success
+                  // once the whole sequence is done.
+                  if (
+                    action.failContains &&
+                    responseText.includes(action.failContains)
+                  ) {
+                    throw new Error(
+                      `Reply indicates failure: "${action.failContains}" detected`,
+                    );
+                  }
+                  const isLast = k === aiResult.buttons.length - 1;
+                  if (
+                    isLast &&
+                    action.successContains &&
+                    !responseText.includes(action.successContains)
+                  ) {
+                    throw new Error(
+                      `Expected success indicator "${action.successContains}" not found in response`,
+                    );
+                  }
+                }
+
+                step.result = `Clicked ${clickedButtons.length} button(s): ${clickedButtons
+                  .map((b) => `"${b}"`)
+                  .join(", ")}`;
                 break;
               }
 

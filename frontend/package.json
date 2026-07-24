@@ -1,6 +1,6 @@
 {
   "name": "bemby-frontend",
-  "version": "0.9.34",
+  "version": "0.9.35",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

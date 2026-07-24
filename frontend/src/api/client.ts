@@ -121,6 +121,8 @@ export type BulkAddItemStatus =
   | "submitting_2fa"
   | "waiting"
   | "created"
+  | "skipped"
+  | "retrying"
   | "done"
   | "failed";
 
@@ -139,6 +141,8 @@ export type BulkAddOptions = {
   deviceIds?: string[];
   proxyIds?: string[];
   apiCredentials?: { apiId: number; apiHash: string }[];
+  maxRetries?: number;
+  retryDelaySeconds?: number;
 };
 
 export type BulkAddItem = {
@@ -147,6 +151,8 @@ export type BulkAddItem = {
   apiUrl: string;
   accountId: number | null;
   accountName: string | null;
+  existing: boolean;
+  attempts: number;
   status: BulkAddItemStatus;
   message: string;
   error: string | null;
@@ -277,6 +283,7 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       maxRetries?: number;
+      scope?: number;
     }
   | { type: "delay"; waitMs: number }
   | {
@@ -286,6 +293,7 @@ export type CustomAction =
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
+      scope?: number;
     }
   | {
       type: "click_message_button";
@@ -295,6 +303,18 @@ export type CustomAction =
       maxWaitMs: number;
       successContains?: string;
       failContains?: string;
+      scope?: number;
+    }
+  | {
+      type: "ai_multiple_btn";
+      contact?: string;
+      hint?: string;
+      gapMs: number;
+      maxRetries: number;
+      maxWaitMs: number;
+      successContains?: string;
+      failContains?: string;
+      scope?: number;
     }
   | {
       type: "enter_captcha";
