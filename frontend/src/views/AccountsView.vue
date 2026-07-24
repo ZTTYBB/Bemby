@@ -123,12 +123,20 @@
           <thead>
             <tr>
               <th style="width: 20px"></th>
-              <th>{{ t("common.name") }}</th>
-              <th>{{ t("accounts.colPhone") }}</th>
+              <th class="sortable" @click="sortBy('name')">
+                {{ t("common.name") }}<i :class="sortIcon('name')"></i>
+              </th>
+              <th class="sortable" @click="sortBy('phone')">
+                {{ t("accounts.colPhone") }}<i :class="sortIcon('phone')"></i>
+              </th>
               <th class="col-hide-mobile">{{ t("accounts.colTgName") }}</th>
-              <th>{{ t("accounts.colStatus") }}</th>
+              <th class="sortable" @click="sortBy('status')">
+                {{ t("accounts.colStatus") }}<i :class="sortIcon('status')"></i>
+              </th>
               <th :class="extraColClass">{{ t("accounts.colExtraInfo") }}</th>
-              <th class="col-hide-mobile">{{ t("accounts.colAdded") }}</th>
+              <th class="col-hide-mobile sortable" @click="sortBy('created')">
+                {{ t("accounts.colAdded") }}<i :class="sortIcon('created')"></i>
+              </th>
               <th>{{ t("common.actions") }}</th>
             </tr>
           </thead>
@@ -145,7 +153,7 @@
                 selectedIds.has(a.id) ? 'row-selected' : '',
               ]"
               style="cursor: pointer"
-              :draggable="!searchText.trim()"
+              :draggable="!searchText.trim() && !sortKey"
               @click="toggleSelect(a.id, idx, $event)"
               @dragstart="onDragStart(idx, $event)"
               @dragover.prevent="dragOverIdx = idx"
@@ -2636,6 +2644,29 @@ const total = ref(0);
 const pageSize = usePersistedRef<number>("bemby:accounts:pageSize", 25);
 const searchText = usePersistedRef<string>("bemby:accounts:search", "");
 
+// Column sort; empty key = manual drag order (backend default)
+const sortKey = usePersistedRef<string>("bemby:accounts:sortKey", "");
+const sortDir = usePersistedRef<"asc" | "desc">("bemby:accounts:sortDir", "asc");
+
+// Cycle a column through asc -> desc -> manual order
+function sortBy(key: string) {
+  if (sortKey.value !== key) {
+    sortKey.value = key;
+    sortDir.value = "asc";
+  } else if (sortDir.value === "asc") {
+    sortDir.value = "desc";
+  } else {
+    sortKey.value = "";
+  }
+}
+
+function sortIcon(key: string) {
+  if (sortKey.value !== key) return "fa-solid fa-sort sort-ind sort-ind-dim";
+  return sortDir.value === "asc"
+    ? "fa-solid fa-sort-up sort-ind"
+    : "fa-solid fa-sort-down sort-ind";
+}
+
 // Set while load() itself steps the page back, to avoid a duplicate fetch
 let skipPageWatch = false;
 watch([page, pageSize], () => {
@@ -2652,13 +2683,18 @@ const debouncedSearch = debounce(() => {
 }, 300);
 watch(searchText, () => debouncedSearch());
 
+watch([sortKey, sortDir], () => {
+  if (page.value !== 1) page.value = 1;
+  else load();
+});
+
 // ── Drag-and-drop reorder state ───────────────────────────────────────────────
 const dragSrcIdx = ref<number | null>(null);
 const dragOverIdx = ref<number | null>(null);
 
 function onDragStart(idx: number, e: DragEvent) {
-  // Reordering a filtered subset is misleading; disabled while searching
-  if (searchText.value.trim()) {
+  // Reordering a filtered/sorted subset is misleading; disabled in those modes
+  if (searchText.value.trim() || sortKey.value) {
     e.preventDefault();
     return;
   }
@@ -4047,6 +4083,8 @@ async function load() {
     page: page.value,
     pageSize: pageSize.value,
     search: searchText.value.trim() || undefined,
+    sortKey: sortKey.value || undefined,
+    sortDir: sortKey.value ? sortDir.value : undefined,
   });
   let [res, s] = await Promise.all([
     accountsApi.listPaged(params()),
@@ -4987,6 +5025,25 @@ tbody tr:nth-child(even):not(.row-selected) td {
   gap: 6px;
   padding: 6px 0;
   border-bottom: 1px solid #f5f5f5;
+}
+
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.sort-ind {
+  margin-left: 5px;
+  font-size: 11px;
+}
+
+.sort-ind-dim {
+  opacity: 0.3;
+}
+
+th.sortable:hover .sort-ind-dim {
+  opacity: 0.6;
 }
 
 .drag-handle {
