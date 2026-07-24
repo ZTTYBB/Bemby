@@ -122,6 +122,7 @@ export type BulkAddItemStatus =
   | "waiting"
   | "created"
   | "skipped"
+  | "retrying"
   | "done"
   | "failed";
 
@@ -140,6 +141,8 @@ export type BulkAddOptions = {
   deviceIds?: string[];
   proxyIds?: string[];
   apiCredentials?: { apiId: number; apiHash: string }[];
+  maxRetries?: number;
+  retryDelaySeconds?: number;
 };
 
 export type BulkAddItem = {
@@ -149,6 +152,7 @@ export type BulkAddItem = {
   accountId: number | null;
   accountName: string | null;
   existing: boolean;
+  attempts: number;
   status: BulkAddItemStatus;
   message: string;
   error: string | null;

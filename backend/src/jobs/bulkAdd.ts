@@ -23,6 +23,7 @@ export type BulkAddItemStatus =
   | "waiting"
   | "created"
   | "skipped"
+  | "retrying"
   | "done"
   | "failed";
 
@@ -34,6 +35,8 @@ export type BulkAddItem = {
   accountName: string | null;
   /** True when the account already existed and was reused, not created. */
   existing: boolean;
+  /** Number of authentication attempts made so far. */
+  attempts: number;
   status: BulkAddItemStatus;
   message: string;
   error: string | null;
@@ -153,6 +156,10 @@ export type BulkAddOptions = {
   proxyIds?: string[];
   /** Candidate API ID/hash pairs; one is picked at random per account. Empty = leave NULL (global default). */
   apiCredentials?: { apiId: number; apiHash: string }[];
+  /** How many times to retry an account after a failed authentication (default 2). */
+  maxRetries?: number;
+  /** Cooldown before a failed account is retried, in seconds (default 300). */
+  retryDelaySeconds?: number;
 };
 
 type BulkAddConfig = {
@@ -162,6 +169,10 @@ type BulkAddConfig = {
   rateLimitWaitMs: number;
   /** Pause after each account before moving to the next. */
   betweenAccountsMs: number;
+  /** Max retries after a failed authentication (0 disables retrying). */
+  maxRetries: number;
+  /** Cooldown before a failed account is re-queued for retry. */
+  retryDelayMs: number;
   /** Max attempts to read a code from the API page. */
   maxFetchAttempts: number;
   namePrefix: string;
@@ -178,11 +189,15 @@ type BulkAddConfig = {
 };
 
 const DEFAULT_GAP_SECONDS = 70;
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_RETRY_DELAY_SECONDS = 300;
 const DEFAULT_NAME_PREFIX = "A_";
 const DEFAULT_NOTES_TEMPLATE = "Automatically added via {apiUrl}";
 
 function resolveConfig(opts?: BulkAddOptions): BulkAddConfig {
   const gap = Number(opts?.gapSeconds);
+  const retries = Number(opts?.maxRetries);
+  const retryDelay = Number(opts?.retryDelaySeconds);
   return {
     initialWaitMs: 15_000,
     rateLimitWaitMs: 120_000,
@@ -190,6 +205,14 @@ function resolveConfig(opts?: BulkAddOptions): BulkAddConfig {
       Number.isFinite(gap) && gap >= 0
         ? gap * 1000
         : DEFAULT_GAP_SECONDS * 1000,
+    maxRetries:
+      Number.isFinite(retries) && retries >= 0
+        ? Math.floor(retries)
+        : DEFAULT_MAX_RETRIES,
+    retryDelayMs:
+      Number.isFinite(retryDelay) && retryDelay >= 0
+        ? retryDelay * 1000
+        : DEFAULT_RETRY_DELAY_SECONDS * 1000,
     maxFetchAttempts: 5,
     namePrefix: opts?.namePrefix ?? DEFAULT_NAME_PREFIX,
     nameIndexMode: opts?.nameIndexMode === "batch" ? "batch" : "total",
@@ -408,19 +431,20 @@ function isAccountAuthenticated(accountId: number): boolean {
   return row?.auth_status === "authenticated";
 }
 
+// A unit of work in the run queue: the account plus the earliest time it may
+// be (re)attempted. Failed accounts are re-queued with readyAt in the future.
+type QueueEntry = { item: BulkAddItem; readyAt: number };
+
 async function runBatch(
   batch: BulkAddBatch,
   config: BulkAddConfig,
 ): Promise<void> {
   try {
-    // The inter-account gap spaces Telegram sendCode calls, so it belongs
-    // between two authentications -- applied before every auth except the
-    // first. Accounts that are skipped (already authenticated) or only created
-    // never trigger a gap.
-    let authenticatedAny = false;
-    for (let i = 0; i < batch.items.length; i++) {
+    // Resolve everything that needs no authentication up front (no gap, no
+    // queue), and collect the rest into a FIFO work queue.
+    const queue: QueueEntry[] = [];
+    for (const item of batch.items) {
       if (batch.cancelled) break;
-      const item = batch.items[i];
 
       // A pre-existing account that is already authenticated needs nothing.
       if (
@@ -443,8 +467,28 @@ async function runBatch(
         continue;
       }
 
-      // Needs authentication -- respect the rate-limit gap before all but the
-      // first auth in this batch.
+      queue.push({ item, readyAt: 0 });
+    }
+
+    // The inter-account gap spaces Telegram sendCode calls, so it belongs
+    // between two authentications -- applied before every auth except the
+    // first. A failed account is re-queued (readyAt = now + retryDelay) and
+    // retried up to config.maxRetries times; retries sit behind still-pending
+    // accounts and only wait out their remaining cooldown once reached.
+    const totalAttempts = config.maxRetries + 1;
+    let authenticatedAny = false;
+    while (queue.length && !batch.cancelled) {
+      const entry = queue.shift()!;
+      const { item } = entry;
+
+      const cooldownMs = entry.readyAt - Date.now();
+      if (cooldownMs > 0) {
+        item.status = "retrying";
+        item.message = `Retrying in ${Math.round(cooldownMs / 1000)}s (attempt ${item.attempts + 1}/${totalAttempts})`;
+        await sleep(cooldownMs, batch);
+        if (batch.cancelled) break;
+      }
+
       if (authenticatedAny) {
         item.status = "waiting";
         item.message = `Waiting ${Math.round(config.betweenAccountsMs / 1000)}s before authenticating`;
@@ -452,15 +496,30 @@ async function runBatch(
         if (batch.cancelled) break;
       }
 
+      item.attempts++;
       try {
         await authenticateAccount(batch, item, config);
+        item.error = null;
       } catch (err: any) {
-        item.status = "failed";
-        item.error = err?.message ?? String(err);
-        item.message = "Failed";
+        const reason = err?.message ?? String(err);
         // requestCode may have parked a connected client before the failure;
         // drop it so abandoned accounts don't leak sessions.
         if (item.accountId != null) await cancelPendingAuth(item.accountId);
+        // Re-queue for a later retry, unless out of attempts or cancelled. While
+        // a retry is pending the reason goes in the (non-error) message so the
+        // row reads as "retrying", not a hard failure; error is only set once
+        // all attempts are exhausted.
+        if (item.attempts <= config.maxRetries && !batch.cancelled) {
+          entry.readyAt = Date.now() + config.retryDelayMs;
+          item.status = "retrying";
+          item.error = null;
+          item.message = `Attempt ${item.attempts}/${totalAttempts} failed (${reason}) -- retrying in ${Math.round(config.retryDelayMs / 1000)}s`;
+          queue.push(entry);
+        } else {
+          item.status = "failed";
+          item.error = reason;
+          item.message = `Failed after ${item.attempts} attempt(s)`;
+        }
       }
       authenticatedAny = true;
     }
@@ -531,6 +590,7 @@ function createAccounts(
         accountId: existing.id,
         accountName: existing.name,
         existing: true,
+        attempts: 0,
         status: "pending",
         message: "",
         error: null,
@@ -564,6 +624,7 @@ function createAccounts(
       accountId: Number(res.lastInsertRowid),
       accountName: name,
       existing: false,
+      attempts: 0,
       status: "pending",
       message: "",
       error: null,
