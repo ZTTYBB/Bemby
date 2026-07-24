@@ -273,11 +273,14 @@ async function fetchApiCredentials(
   url: string,
   config: BulkAddConfig,
 ): Promise<{ code: string; pass2fa: string }> {
+  // A page that accepts the connection but never responds would hang the whole
+  // sequential batch on this account -- bound it so the retry loop can proceed.
   const resp = await fetch(url, {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     },
+    signal: AbortSignal.timeout(60_000),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const html = await resp.text();
