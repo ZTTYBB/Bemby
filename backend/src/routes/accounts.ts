@@ -34,6 +34,13 @@ import {
   type BulkAddOptions,
 } from "../jobs/bulkAdd";
 import {
+  startBulkProfile,
+  getBulkProfileStatus,
+  cancelBulkProfile,
+  type BulkProfileEntry,
+  type BulkProfileOptions,
+} from "../jobs/bulkProfile";
+import {
   changeLoginEmailViaGmail,
   testGmailImap,
 } from "../jobs/bulkLoginEmail";
@@ -373,6 +380,34 @@ router.get("/bulk-add/status", bulkMgmtGuard, (_req, res) => {
 // POST /bulk-add/cancel -- stop the running batch after the current step
 router.post("/bulk-add/cancel", bulkMgmtGuard, (_req, res) => {
   res.json({ cancelled: cancelBulkAdd() });
+});
+
+// POST /bulk-profile -- update first/last name + bio on many accounts at once
+router.post("/bulk-profile", bulkMgmtGuard, (req, res) => {
+  const { items, options } = req.body as {
+    items?: BulkProfileEntry[];
+    options?: BulkProfileOptions;
+  };
+  if (!Array.isArray(items) || !items.length) {
+    res.status(400).json({ error: "items array required" });
+    return;
+  }
+  const result = startBulkProfile(items, options);
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.status(201).json(result.batch);
+});
+
+// GET /bulk-profile/status -- current batch progress (null if none has run)
+router.get("/bulk-profile/status", bulkMgmtGuard, (_req, res) => {
+  res.json(getBulkProfileStatus());
+});
+
+// POST /bulk-profile/cancel -- stop the running batch after the current step
+router.post("/bulk-profile/cancel", bulkMgmtGuard, (_req, res) => {
+  res.json({ cancelled: cancelBulkProfile() });
 });
 
 // POST /gmail/test -- check Gmail IMAP login works (for bulk login-email change)
