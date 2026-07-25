@@ -238,6 +238,19 @@ export type EmbywatchConfig = {
    * playback, so an offline file is never reported as watched. Defaults to true.
    */
   verifyPlayable?: boolean;
+  /**
+   * Real Watch: continuously stream the actual media bytes from Emby at real
+   * playback pace (direct play), so the server sees genuine streaming traffic
+   * like a real client instead of progress reports alone. Defaults to false.
+   */
+  realWatch?: boolean;
+  /**
+   * Sequence Play: resume from the user's last position (Emby "Continue
+   * Watching"), falling back to Next Up then a random item; when an episode
+   * finishes it plays the next one until the play duration is used up.
+   * Defaults to false.
+   */
+  sequencePlay?: boolean;
 };
 
 export type EmbywatchLog = {
@@ -251,6 +264,12 @@ export type EmbywatchLog = {
   endSeconds: number;
   watchedSeconds: number;
   markedWatched: boolean;
+  /** Bytes actually streamed from the server when Real Watch is enabled. */
+  streamedBytes?: number;
+  /** True when this run used Sequence Play (resume + next-episode chaining). */
+  sequencePlay?: boolean;
+  /** Episodes fully finished this run (Sequence Play chaining). */
+  episodesCompleted?: number;
 };
 
 export type TgProxy = {

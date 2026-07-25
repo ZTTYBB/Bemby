@@ -860,6 +860,33 @@
                             }}
                           </div>
                         </div>
+                        <div
+                          v-if="embywatchDetail.streamedBytes != null"
+                          class="emby-stat"
+                        >
+                          <div class="emby-stat-label">
+                            {{ t("logs.embyDetail.streamed") }}
+                          </div>
+                          <div class="emby-stat-value">
+                            {{
+                              (
+                                embywatchDetail.streamedBytes / 1048576
+                              ).toFixed(1)
+                            }}
+                            MB
+                          </div>
+                        </div>
+                        <div
+                          v-if="embywatchDetail.sequencePlay"
+                          class="emby-stat"
+                        >
+                          <div class="emby-stat-label">
+                            {{ t("logs.embyDetail.episodes") }}
+                          </div>
+                          <div class="emby-stat-value">
+                            {{ embywatchDetail.episodesCompleted ?? 0 }}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>

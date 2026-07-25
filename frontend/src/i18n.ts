@@ -536,6 +536,10 @@ const zh = {
     markWatchedHint: "播放完成后，将该剧集标记为已看",
     labelVerifyPlayable: "上报前校验可播放",
     verifyPlayableHint: "上报前先确认媒体文件可读取（磁盘在线），避免在文件离线时上报虚假观看",
+    labelRealWatch: "真实观看（拉取实际字节）",
+    realWatchHint: "以真实播放速率从 Emby 服务器直连拉取实际媒体字节，使服务器产生真实的串流流量，更接近真实客户端。注意：会消耗大量下行流量（可达数百 MB 至数 GB）。",
+    labelSequencePlay: "顺序播放（续播）",
+    sequencePlayHint: "从上次离开的位置继续观看（Emby「继续观看」），若无则播放下一集（Next Up），仍无则随机选择；当前集看完后自动播放同剧集的下一集，直到用尽播放时长。仅在实际看完整集时才标记为已看，未看完的会保留在「继续观看」列表中。",
     labelProxy: "代理",
     proxyNone: "不使用代理",
     playbackRulesHint:
@@ -787,6 +791,8 @@ const zh = {
       end: "结束位置",
       watched: "观看时长",
       markedWatched: "已标记已看",
+      streamed: "已串流",
+      episodes: "顺序播放集数",
       yes: "是",
       no: "否",
     },
@@ -1557,6 +1563,12 @@ const en: typeof zh = {
     labelVerifyPlayable: "Verify playable before reporting",
     verifyPlayableHint:
       "Confirm the media file is readable (disk online) before reporting, to avoid reporting a fake watch when the file is offline",
+    labelRealWatch: "Real Watch (stream actual bytes)",
+    realWatchHint:
+      "Continuously pull the actual media bytes from the Emby server at real playback pace (direct play), so the server sees genuine streaming traffic like a real client. Note: uses significant download bandwidth (can be hundreds of MB to GBs per run).",
+    labelSequencePlay: "Sequence Play (resume & continue)",
+    sequencePlayHint:
+      "Resume from where you left off (Emby Continue Watching), else the next unwatched episode (Next Up), else a random item; when an episode finishes it plays the next one in the show until the play duration is used up. An episode is only marked watched when it actually finishes, so a partly-watched item stays in Continue Watching.",
     labelProxy: "Proxy",
     proxyNone: "No proxy",
     playbackRulesHint:
@@ -1815,6 +1827,8 @@ const en: typeof zh = {
       end: "End",
       watched: "Watched",
       markedWatched: "Marked watched",
+      streamed: "Streamed",
+      episodes: "Episodes played",
       yes: "Yes",
       no: "No",
     },

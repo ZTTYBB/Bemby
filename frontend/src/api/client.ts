@@ -303,6 +303,8 @@ export type EmbywatchConfig = {
   userAgent?: string;
   markWatched?: boolean;
   verifyPlayable?: boolean;
+  realWatch?: boolean;
+  sequencePlay?: boolean;
   proxyId?: string;
 };
 
@@ -476,6 +478,9 @@ export type EmbywatchLog = {
   endSeconds: number;
   watchedSeconds: number;
   markedWatched: boolean;
+  streamedBytes?: number;
+  sequencePlay?: boolean;
+  episodesCompleted?: number;
 };
 
 export type CheckinAttemptLog = {

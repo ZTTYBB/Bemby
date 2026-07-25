@@ -217,3 +217,175 @@ describe('embywatch playability verification', () => {
     expect(probed).toBe(false);
   });
 });
+
+// Serves auth, item pick, a 1-byte size probe (Content-Range), and ranged data
+// reads (via a getReader stream) so Real Watch can pull and count real bytes.
+function routeRealWatch() {
+  const jsonRes = (body: unknown) => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+  });
+  mockUndiciFetch.mockImplementation((url: string, init: any) => {
+    if (url.includes('/Users/AuthenticateByName')) {
+      return Promise.resolve(jsonRes({ AccessToken: 'tok', User: { Id: 'u1', Name: 'Tester' } }));
+    }
+    if (url.includes('/Videos/') && url.includes('/stream')) {
+      const range: string = init?.headers?.Range ?? '';
+      if (range === 'bytes=0-0') {
+        return Promise.resolve({
+          status: 206,
+          headers: { get: (h: string) => (h.toLowerCase() === 'content-range' ? 'bytes 0-0/60000000' : null) },
+          body: { cancel: vi.fn() },
+        });
+      }
+      let read = 0;
+      const reader = {
+        read: vi.fn(() =>
+          read++ === 0
+            ? Promise.resolve({ done: false, value: new Uint8Array(4096) })
+            : Promise.resolve({ done: true, value: undefined }),
+        ),
+      };
+      return Promise.resolve({ status: 206, headers: { get: () => null }, body: { getReader: () => reader } });
+    }
+    if (url.includes('/Items')) {
+      return Promise.resolve(jsonRes({
+        Items: [{ Id: 'i1', Name: 'Ep', Type: 'Episode', RunTimeTicks: 6000_000_000, MediaSources: [{ Id: 's1', Size: 60_000_000, Bitrate: 800_000 }] }],
+      }));
+    }
+    return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
+  });
+}
+
+describe('embywatch Real Watch', () => {
+  it('streams actual media bytes with a position-following Range request', async () => {
+    routeRealWatch();
+
+    const result = await runEmbywatch('https://emby.example.com', { ...baseConfig, realWatch: true, verifyPlayable: false });
+    expect(result.streamedBytes).toBeGreaterThan(0);
+
+    // A ranged data read (not the 1-byte size probe) hit the static stream URL,
+    // carrying the play session so the transfer ties to the reported session.
+    const dataFetch = mockUndiciFetch.mock.calls.find(
+      c =>
+        typeof c[0] === 'string' &&
+        c[0].includes('/stream') &&
+        c[0].includes('PlaySessionId=') &&
+        (c[1] as any)?.headers?.Range &&
+        !(c[1] as any).headers.Range.includes('0-0'),
+    );
+    expect(dataFetch).toBeTruthy();
+  });
+
+  it('does not stream bytes when Real Watch is off', async () => {
+    routeRealWatch();
+
+    const result = await runEmbywatch('https://emby.example.com', { ...baseConfig, verifyPlayable: false });
+    expect(result.streamedBytes).toBeUndefined();
+
+    const streamed = mockUndiciFetch.mock.calls.some(
+      c => typeof c[0] === 'string' && c[0].includes('/stream'),
+    );
+    expect(streamed).toBe(false);
+  });
+});
+
+// Configurable Sequence Play backend: a resume list, a series episode list, and
+// generic session endpoints. Runtimes are short so segments finish in one tick.
+function routeSequence(opts: {
+  resume?: any[];
+  nextUp?: any[];
+  episodes?: any[];
+} = {}) {
+  const jsonRes = (body: unknown) => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+  });
+  mockUndiciFetch.mockImplementation((url: string) => {
+    if (url.includes('/Users/AuthenticateByName')) {
+      return Promise.resolve(jsonRes({ AccessToken: 'tok', User: { Id: 'u1', Name: 'Tester' } }));
+    }
+    if (url.includes('/Items/Resume')) return Promise.resolve(jsonRes({ Items: opts.resume ?? [] }));
+    if (url.includes('/Shows/NextUp')) return Promise.resolve(jsonRes({ Items: opts.nextUp ?? [] }));
+    if (url.includes('/Episodes')) return Promise.resolve(jsonRes({ Items: opts.episodes ?? [] }));
+    if (url.includes('/Items?SortBy=Random')) {
+      return Promise.resolve(jsonRes({ Items: [{ Id: 'rand', Name: 'Random', Type: 'Movie', RunTimeTicks: 20_000_000, MediaSources: [{ Id: 's' }] }] }));
+    }
+    // Playing / Progress / Stopped / PlayedItems
+    return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
+  });
+}
+
+const ep = (id: string, index: number, extra: Record<string, unknown> = {}) => ({
+  Id: id,
+  Name: `Ep ${index}`,
+  Type: 'Episode',
+  SeriesId: 'series1',
+  SeriesName: 'Show',
+  IndexNumber: index,
+  RunTimeTicks: 10_000_000, // 1s runtime so a segment finishes in one tick
+  MediaSources: [{ Id: `${id}-s` }],
+  ...extra,
+});
+
+describe('embywatch Sequence Play', () => {
+  const seqConfig = { ...baseConfig, sequencePlay: true, verifyPlayable: false, playDuration: 5 };
+
+  it('resumes from the last position and chains to the next episode', async () => {
+    // e1 resumes near its end; episode list lets it advance to e2, then e3.
+    routeSequence({
+      resume: [ep('e1', 1, { UserData: { PlaybackPositionTicks: 0 } })],
+      episodes: [ep('e1', 1), ep('e2', 2), ep('e3', 3)],
+    });
+
+    const result = await runEmbywatch('https://emby.example.com', seqConfig);
+
+    expect(result.sequencePlay).toBe(true);
+    // playDuration 5s over 1s episodes: e1, e2, e3 finish; budget runs out on e3/e4
+    expect(result.episodesCompleted).toBeGreaterThanOrEqual(2);
+
+    const marked = mockUndiciFetch.mock.calls.filter(
+      c => typeof c[0] === 'string' && c[0].includes('/PlayedItems/'),
+    );
+    // Each finished episode is marked watched
+    expect(marked.length).toBe(result.episodesCompleted);
+
+    const resumed = mockUndiciFetch.mock.calls.some(
+      c => typeof c[0] === 'string' && c[0].includes('/Items/Resume'),
+    );
+    expect(resumed).toBe(true);
+  });
+
+  it('falls back to Next Up when nothing is resuming', async () => {
+    routeSequence({
+      resume: [],
+      nextUp: [ep('n1', 4)],
+      episodes: [ep('n1', 4)], // last in series, no chaining
+    });
+
+    const result = await runEmbywatch('https://emby.example.com', seqConfig);
+    expect(result.title).toBe('Ep 4');
+    expect(result.episodesCompleted).toBe(1);
+
+    const usedNextUp = mockUndiciFetch.mock.calls.some(
+      c => typeof c[0] === 'string' && c[0].includes('/Shows/NextUp'),
+    );
+    expect(usedNextUp).toBe(true);
+  });
+
+  it('falls back to a random item when nothing is resuming or up next', async () => {
+    routeSequence({ resume: [], nextUp: [] });
+
+    const result = await runEmbywatch('https://emby.example.com', seqConfig);
+    expect(result.title).toBe('Random');
+
+    const usedRandom = mockUndiciFetch.mock.calls.some(
+      c => typeof c[0] === 'string' && c[0].includes('/Items?SortBy=Random'),
+    );
+    expect(usedRandom).toBe(true);
+  });
+});

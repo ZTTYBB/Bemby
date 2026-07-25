@@ -193,6 +193,20 @@
               </label>
               <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.verifyPlayableHint') }}</div>
             </div>
+            <div class="form-group" style="margin-top:4px">
+              <label class="form-check">
+                <input v-model="embyCfg.realWatch" type="checkbox" />
+                <span>{{ t('jobs.labelRealWatch') }}</span>
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.realWatchHint') }}</div>
+            </div>
+            <div class="form-group" style="margin-top:4px">
+              <label class="form-check">
+                <input v-model="embyCfg.sequencePlay" type="checkbox" />
+                <span>{{ t('jobs.labelSequencePlay') }}</span>
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.sequencePlayHint') }}</div>
+            </div>
             <div class="form-row">
               <div class="form-group">
                 <label class="form-label">{{ t('jobs.labelRunEveryDays') }}</label>
@@ -1070,13 +1084,15 @@ function defaultAutoregCfg(): AutoregCfgForm {
 }
 const autoregCfg = reactive<AutoregCfgForm>(defaultAutoregCfg());
 
-const embyCfg = reactive<{ username: string; password: string; playDuration: number | string; userAgent: string; markWatched: boolean; verifyPlayable: boolean }>({
+const embyCfg = reactive<{ username: string; password: string; playDuration: number | string; userAgent: string; markWatched: boolean; verifyPlayable: boolean; realWatch: boolean; sequencePlay: boolean }>({
   username: '',
   password: '',
   playDuration: '',
   userAgent: '',
   markWatched: true,
   verifyPlayable: true,
+  realWatch: false,
+  sequencePlay: false,
 });
 const tplProxyId = ref('');
 const embyUaDropdown = ref('');
@@ -1128,7 +1144,7 @@ function onUaDropdownChange() {
 }
 
 function onJobTypeChange() {
-  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false });
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
   tplProxyId.value = '';
@@ -1210,6 +1226,8 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
     if (embyCfg.userAgent) cfg.userAgent = embyCfg.userAgent;
     cfg.markWatched = embyCfg.markWatched;
     cfg.verifyPlayable = embyCfg.verifyPlayable;
+    cfg.realWatch = embyCfg.realWatch;
+    cfg.sequencePlay = embyCfg.sequencePlay;
     if (tplProxyId.value) cfg.proxyId = tplProxyId.value;
     return cfg as EmbywatchConfig;
   }
@@ -1352,7 +1370,7 @@ function openAdd() {
     replyTimeoutMs: 40000,
     retryMax: Number(settings.value?.default_max_retry ?? 5),
   });
-  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false });
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
   tplProxyId.value = '';
@@ -1399,19 +1417,21 @@ function openEdit(tpl: JobTemplate) {
           userAgent: c.userAgent ?? '',
           markWatched: c.markWatched !== false,
           verifyPlayable: c.verifyPlayable !== false,
+          realWatch: c.realWatch === true,
+          sequencePlay: c.sequencePlay === true,
         });
         tplProxyId.value = c.proxyId ?? '';
         setUaState(c.userAgent ?? '');
       } catch {
-        Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+        Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false });
         embyUaDropdown.value = '';
       }
     } else {
-      Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+      Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false });
       embyUaDropdown.value = '';
     }
   } else if (tpl.jobType === 'custom') {
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     if (tpl.config) {
       try {
@@ -1474,7 +1494,7 @@ function openEdit(tpl: JobTemplate) {
       customJobMaxRetries.value = 1;
     }
   } else if (tpl.jobType === 'autoreg') {
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     customActions.value = [];
     Object.assign(autoregCfg, defaultAutoregCfg());
@@ -1498,7 +1518,7 @@ function openEdit(tpl: JobTemplate) {
     }
   } else {
     // checkin
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     customActions.value = [];
     tplCheckinSuccessContains.value = '';
