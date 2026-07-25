@@ -345,8 +345,15 @@ describe('embywatch Sequence Play', () => {
     const result = await runEmbywatch('https://emby.example.com', seqConfig);
 
     expect(result.sequencePlay).toBe(true);
-    // playDuration 5s over 1s episodes: e1, e2, e3 finish; budget runs out on e3/e4
-    expect(result.episodesCompleted).toBeGreaterThanOrEqual(2);
+    // playDuration 5s over 1s episodes: e1, e2, e3 all finish (series ends at e3)
+    expect(result.episodesCompleted).toBe(3);
+
+    // Every played episode is recalled, in order, with its own watch window.
+    expect(result.episodes?.map(e => e.title)).toEqual(['Ep 1', 'Ep 2', 'Ep 3']);
+    expect(result.episodes?.every(e => e.watchedSeconds === 1)).toBe(true);
+    expect(result.episodes?.every(e => e.markedWatched)).toBe(true);
+    const total = result.episodes!.reduce((s, e) => s + e.watchedSeconds, 0);
+    expect(result.watchedSeconds).toBe(total);
 
     const marked = mockUndiciFetch.mock.calls.filter(
       c => typeof c[0] === 'string' && c[0].includes('/PlayedItems/'),

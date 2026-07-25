@@ -1,7 +1,7 @@
 import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
 import { lookup } from 'node:dns';
 import { db } from '../db/database';
-import type { EmbywatchConfig, EmbywatchLog } from '../types';
+import type { EmbywatchConfig, EmbywatchEpisode, EmbywatchLog } from '../types';
 import { expandCommand } from './checkin';
 
 // Per-username cache of the expanded device name. Persisting it keeps random
@@ -646,52 +646,78 @@ async function runSequencePlay(
   let budget = Math.floor(playDuration * (1 + Math.random() * 0.1));
   let totalStreamed = 0;
   let episodesCompleted = 0;
-  let last: { seg: Segment; start: number; end: number; finished: boolean } = { seg: cur, start: curStart, end: curStart, finished: false };
+  const episodes: EmbywatchEpisode[] = [];
 
   for (let i = 0; i < MAX_SEQUENCE_SEGMENTS && cur && budget > 0; i++) {
     const rt = cur.runtimeSeconds;
     const episodeRemaining = rt > 0 ? Math.max(0, rt - curStart) : budget;
     const watchSeconds = Math.min(budget, episodeRemaining);
 
+    let segStreamed = 0;
     if (watchSeconds > 0) {
       console.log(`[embywatch] Watching "${cur.item.Name}" (${cur.item.Type}) from ${curStart}s for ${watchSeconds}s`);
-      const { streamedBytes } = await playSegment(serverUrl, ctx, cur, curStart, watchSeconds);
-      totalStreamed += streamedBytes;
+      const played = await playSegment(serverUrl, ctx, cur, curStart, watchSeconds);
+      segStreamed = played.streamedBytes;
+      totalStreamed += segStreamed;
     }
 
     const end = curStart + watchSeconds;
     const finished = rt > 0 && end >= Math.floor(rt * 0.99);
-    last = { seg: cur, start: curStart, end, finished };
     budget -= watchSeconds;
 
-    if (!finished) break; // budget exhausted mid-item; leave the partial in resume
+    // Mark watched only when the episode actually reached its end.
+    let marked = false;
+    if (finished && config.markWatched !== false) marked = await markPlayed(serverUrl, ctx, cur.itemId);
+    if (finished) episodesCompleted++;
 
-    if (config.markWatched !== false) await markPlayed(serverUrl, ctx, cur.itemId);
-    episodesCompleted++;
+    // Record every segment that actually played (skip zero-length resume-at-end hops).
+    if (watchSeconds > 0) {
+      episodes.push({
+        itemType: cur.item.Type ?? 'Unknown',
+        title: cur.item.Name ?? 'Unknown',
+        seriesName: cur.item.SeriesName,
+        seasonNumber: cur.item.ParentIndexNumber,
+        episodeNumber: cur.item.IndexNumber,
+        runtimeSeconds: rt,
+        startSeconds: curStart,
+        endSeconds: end,
+        watchedSeconds: watchSeconds,
+        markedWatched: marked,
+        streamedBytes: ctx.realWatch ? segStreamed : undefined,
+      });
+    }
+
+    if (!finished) break; // budget exhausted mid-item; leave the partial in resume
     cur = await getNextEpisode(serverUrl, ctx, cur.item, verifyPlayable);
     curStart = 0;
   }
 
-  const seg = last.seg;
+  // Fall back to a placeholder entry if nothing ever played (e.g. runtime unknown
+  // and budget 0), so the log always has a top-level item.
+  const totalWatched = episodes.reduce((s, e) => s + e.watchedSeconds, 0);
+  const head = episodes[episodes.length - 1] ?? {
+    itemType: 'Unknown',
+    title: 'Unknown',
+    runtimeSeconds: 0,
+    startSeconds: 0,
+    endSeconds: 0,
+    watchedSeconds: 0,
+    markedWatched: false,
+  };
+
   if (ctx.realWatch) {
-    console.log(`[embywatch] Real Watch streamed ${(totalStreamed / 1_048_576).toFixed(1)} MB across ${episodesCompleted} completed episode(s)`);
+    console.log(`[embywatch] Real Watch streamed ${(totalStreamed / 1_048_576).toFixed(1)} MB across ${episodes.length} segment(s)`);
   }
-  console.log(`[embywatch] Sequence Play complete — ${episodesCompleted} episode(s) finished, last "${seg.item.Name}"`);
+  console.log(`[embywatch] Sequence Play complete — ${episodes.length} segment(s), ${episodesCompleted} finished, ${totalWatched}s total`);
 
   return {
-    itemType: seg.item.Type ?? 'Unknown',
-    title: seg.item.Name ?? 'Unknown',
-    seriesName: seg.item.SeriesName,
-    seasonNumber: seg.item.ParentIndexNumber,
-    episodeNumber: seg.item.IndexNumber,
-    runtimeSeconds: seg.runtimeSeconds,
-    startSeconds: last.start,
-    endSeconds: last.end,
-    watchedSeconds: last.end - last.start,
-    markedWatched: last.finished && config.markWatched !== false,
+    ...head,
+    // watchedSeconds reflects the whole sequence so the total matches playDuration
+    watchedSeconds: totalWatched,
     streamedBytes: ctx.realWatch ? totalStreamed : undefined,
     sequencePlay: true,
     episodesCompleted,
+    episodes,
   };
 }
 

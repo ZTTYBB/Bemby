@@ -253,7 +253,8 @@ export type EmbywatchConfig = {
   sequencePlay?: boolean;
 };
 
-export type EmbywatchLog = {
+// One played item within a run (a single episode/movie segment).
+export type EmbywatchEpisode = {
   itemType: string;
   title: string;
   seriesName?: string;
@@ -264,12 +265,19 @@ export type EmbywatchLog = {
   endSeconds: number;
   watchedSeconds: number;
   markedWatched: boolean;
-  /** Bytes actually streamed from the server when Real Watch is enabled. */
   streamedBytes?: number;
+};
+
+export type EmbywatchLog = EmbywatchEpisode & {
   /** True when this run used Sequence Play (resume + next-episode chaining). */
   sequencePlay?: boolean;
   /** Episodes fully finished this run (Sequence Play chaining). */
   episodesCompleted?: number;
+  /**
+   * Every item played this run, in order. Present for Sequence Play so the log
+   * can recall each episode; the top-level fields mirror the last entry.
+   */
+  episodes?: EmbywatchEpisode[];
 };
 
 export type TgProxy = {

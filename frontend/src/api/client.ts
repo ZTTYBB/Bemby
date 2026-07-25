@@ -467,7 +467,7 @@ export type JobTemplate = {
   runEveryDays: number;
 };
 
-export type EmbywatchLog = {
+export type EmbywatchEpisode = {
   itemType: string;
   title: string;
   seriesName?: string;
@@ -479,8 +479,12 @@ export type EmbywatchLog = {
   watchedSeconds: number;
   markedWatched: boolean;
   streamedBytes?: number;
+};
+
+export type EmbywatchLog = EmbywatchEpisode & {
   sequencePlay?: boolean;
   episodesCompleted?: number;
+  episodes?: EmbywatchEpisode[];
 };
 
 export type CheckinAttemptLog = {
