@@ -448,6 +448,7 @@ export type Job = {
   checkinButton: string;
   templateId?: number | null;
   runEveryDays: number;
+  runEveryDaysMax?: number | null;
   retired?: string | null;
 };
 
@@ -466,6 +467,7 @@ export type JobTemplate = {
   createdAt: string;
   linkedJobCount?: number;
   runEveryDays: number;
+  runEveryDaysMax?: number | null;
 };
 
 export type EmbywatchEpisode = {

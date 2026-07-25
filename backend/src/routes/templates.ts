@@ -20,7 +20,17 @@ type TemplateRow = {
   checkin_button: string;
   created_at: string;
   run_every_days: number;
+  run_every_days_max: number | null;
 };
+
+// Normalise a run-every-days range: min >= 1; max kept only when a valid integer
+// strictly greater than min, else null (fixed interval).
+function normalizeRunEvery(min: unknown, max: unknown): { min: number; max: number | null } {
+  const lo = Math.max(1, Math.floor(Number(min ?? 1)) || 1);
+  const hiNum = max == null || max === '' ? NaN : Math.floor(Number(max));
+  const hi = Number.isFinite(hiNum) && hiNum > lo ? hiNum : null;
+  return { min: lo, max: hi };
+}
 
 function rowToTemplate(row: TemplateRow): JobTemplate {
   return {
@@ -37,6 +47,7 @@ function rowToTemplate(row: TemplateRow): JobTemplate {
     checkinButton: row.checkin_button || '签到',
     createdAt: row.created_at,
     runEveryDays: row.run_every_days ?? 1,
+    runEveryDaysMax: row.run_every_days_max ?? null,
   };
 }
 
@@ -54,7 +65,8 @@ function syncLinkedJobs(templateId: number, t: TemplateRow) {
         retry_max = ?,
         start_command = ?,
         checkin_button = ?,
-        run_every_days = ?
+        run_every_days = ?,
+        run_every_days_max = ?
       WHERE template_id = ?
     `).run(
       t.job_type,
@@ -65,6 +77,7 @@ function syncLinkedJobs(templateId: number, t: TemplateRow) {
       t.start_command,
       t.checkin_button,
       t.run_every_days ?? 7,
+      t.run_every_days_max ?? null,
       templateId,
     );
 
@@ -87,7 +100,8 @@ function syncLinkedJobs(templateId: number, t: TemplateRow) {
         config = ?,
         start_command = ?,
         checkin_button = ?,
-        run_every_days = ?
+        run_every_days = ?,
+        run_every_days_max = ?
       WHERE template_id = ?
     `).run(
       t.job_type,
@@ -99,6 +113,7 @@ function syncLinkedJobs(templateId: number, t: TemplateRow) {
       t.start_command,
       t.checkin_button,
       t.run_every_days ?? 7,
+      t.run_every_days_max ?? null,
       templateId,
     );
   }
@@ -198,6 +213,7 @@ router.post('/', (req, res) => {
     startCommand,
     checkinButton,
     runEveryDays,
+    runEveryDaysMax,
   } = req.body as Record<string, any>;
 
   if (!name) {
@@ -205,10 +221,11 @@ router.post('/', (req, res) => {
     return;
   }
 
+  const runEvery = normalizeRunEvery(runEveryDays, runEveryDaysMax);
   const result = db.prepare(`
     INSERT INTO job_templates
-      (name, job_type, bot_username, timezone, reply_timeout_ms, retry_max, config, start_command, checkin_button, run_every_days)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (name, job_type, bot_username, timezone, reply_timeout_ms, retry_max, config, start_command, checkin_button, run_every_days, run_every_days_max)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name,
     jobType ?? 'checkin',
@@ -219,7 +236,8 @@ router.post('/', (req, res) => {
     config != null ? JSON.stringify(config) : null,
     (startCommand as string | undefined)?.trim() || '/start',
     (checkinButton as string | undefined)?.trim() || '签到',
-    Math.max(1, Number(runEveryDays ?? 1)),
+    runEvery.min,
+    runEvery.max,
   );
 
   const row = db.prepare('SELECT * FROM job_templates WHERE id = ?').get(result.lastInsertRowid) as TemplateRow;
@@ -245,8 +263,13 @@ router.put('/:id', (req, res) => {
     startCommand,
     checkinButton,
     runEveryDays,
+    runEveryDaysMax,
   } = req.body as Record<string, any>;
 
+  const runEvery = normalizeRunEvery(
+    runEveryDays !== undefined ? runEveryDays : existing.run_every_days,
+    runEveryDaysMax !== undefined ? runEveryDaysMax : existing.run_every_days_max,
+  );
   const updated: TemplateRow = {
     ...existing,
     name: name ?? existing.name,
@@ -265,14 +288,15 @@ router.put('/:id', (req, res) => {
     checkin_button: checkinButton !== undefined
       ? ((checkinButton as string).trim() || '签到')
       : existing.checkin_button,
-    run_every_days: Math.max(1, Number(runEveryDays ?? existing.run_every_days ?? 1)),
+    run_every_days: runEvery.min,
+    run_every_days_max: runEvery.max,
   };
 
   db.prepare(`
     UPDATE job_templates SET
       name = ?, job_type = ?, bot_username = ?, timezone = ?,
       reply_timeout_ms = ?, retry_max = ?, enabled = ?,
-      config = ?, start_command = ?, checkin_button = ?, run_every_days = ?
+      config = ?, start_command = ?, checkin_button = ?, run_every_days = ?, run_every_days_max = ?
     WHERE id = ?
   `).run(
     updated.name,
@@ -286,6 +310,7 @@ router.put('/:id', (req, res) => {
     updated.start_command,
     updated.checkin_button,
     updated.run_every_days,
+    updated.run_every_days_max,
     req.params.id,
   );
 

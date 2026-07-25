@@ -790,7 +790,8 @@
         <div v-if="form.jobType === 'embywatch' && !form.templateId" class="form-row">
           <div class="form-group">
             <label class="form-label">{{ t('jobs.labelRunEveryDays') }}</label>
-            <input v-model.number="form.runEveryDays" class="form-input" type="number" min="1" max="365" style="max-width:120px" />
+            <input v-model.trim="runEveryDaysText" class="form-input" type="text" :placeholder="t('jobs.runEveryDaysPlaceholder')" style="max-width:120px" />
+            <div style="font-size:11px;margin-top:4px" :style="runEveryDaysValid ? 'color:#aaa' : 'color:#991b1b'">{{ t('jobs.runEveryDaysHint') }}</div>
           </div>
           <div class="form-group">
             <label class="form-label">{{ t('jobs.labelMaxRetries') }}</label>
@@ -1119,9 +1120,26 @@ const form = reactive({
   enabled: true,
   templateId: null as number | null,
   runEveryDays: 1,
+  runEveryDaysMax: null as number | null,
 });
 
 const linkedTemplate = computed(() => templates.value.find(t => t.id === form.templateId) ?? null);
+
+// "Run every days" accepts a single number (7) or a range (7-15). The range is
+// stored as runEveryDays (min) + runEveryDaysMax; the scheduler picks a random
+// value in the range each cycle.
+const runEveryDaysText = ref('1');
+function parseRunEvery(text: string): { min: number; max: number | null } {
+  const m = String(text).trim().match(/^(\d+)\s*(?:-\s*(\d+))?$/);
+  if (!m) return { min: 1, max: null };
+  const min = Math.max(1, parseInt(m[1], 10) || 1);
+  const hi = m[2] != null ? parseInt(m[2], 10) : NaN;
+  return { min, max: Number.isFinite(hi) && hi > min ? hi : null };
+}
+function formatRunEvery(min: number, max: number | null | undefined): string {
+  return max != null && max > min ? `${min}-${max}` : String(min ?? 1);
+}
+const runEveryDaysValid = computed(() => /^\s*\d+\s*(-\s*\d+\s*)?$/.test(runEveryDaysText.value));
 
 const extractSource = ref<Job | null>(null);
 const extractName = ref('');
@@ -1221,6 +1239,8 @@ function onJobTypeChange() {
     ? (accounts.value[0]?.id ?? null)
     : null;
   form.runEveryDays = 1;
+  form.runEveryDaysMax = null;
+  runEveryDaysText.value = '1';
   customActions.value = [];
   Object.assign(autoregCfg, defaultAutoregCfg());
   customJobMaxRetries.value = 1;
@@ -1448,7 +1468,9 @@ function openAdd() {
     enabled: true,
     templateId: null,
     runEveryDays: 1,
+    runEveryDaysMax: null,
   });
+  runEveryDaysText.value = '1';
   Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
@@ -1470,7 +1492,9 @@ function openEdit(j: Job) {
     replyTimeoutMs: j.replyTimeoutMs, retryMax: j.retryMax, enabled: j.enabled,
     templateId: j.templateId ?? null,
     runEveryDays: j.runEveryDays ?? 1,
+    runEveryDaysMax: j.runEveryDaysMax ?? null,
   });
+  runEveryDaysText.value = formatRunEvery(j.runEveryDays ?? 1, j.runEveryDaysMax);
   setCmdState(j.startCommand === '/start' ? '' : (j.startCommand ?? ''));
   setBtnState(j.checkinButton === '签到' ? '' : (j.checkinButton ?? ''));
   checkinSuccessContains.value = '';
@@ -1797,6 +1821,9 @@ async function saveJob() {
     const checkinButton = btnDropdown.value === '{aiBtn}'
       ? resolvedAiBtn
       : (btnDropdown.value === 'custom' ? btnCustom.value : btnDropdown.value) || undefined;
+    const re = parseRunEvery(runEveryDaysText.value);
+    form.runEveryDays = re.min;
+    form.runEveryDaysMax = re.max;
     const payload = {
       ...form,
       // config is serialised by the backend; pass as-is

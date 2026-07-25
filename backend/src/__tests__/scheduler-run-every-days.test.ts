@@ -17,7 +17,7 @@ vi.mock('../jobs/notify', () => ({
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { daysUntilNextRun, refreshScheduler, getSchedulerStatus } from '../scheduler';
+import { daysUntilNextRun, resolveRunEveryDays, refreshScheduler, getSchedulerStatus } from '../scheduler';
 
 // Fixed reference day; window 10:00-12:00 UTC; tests run at 08:00 (before window).
 const BASE_DATE = '2024-06-15';
@@ -61,6 +61,7 @@ const SCHEMA = `
     checkin_button        TEXT    NOT NULL DEFAULT '签到',
     template_id           INTEGER REFERENCES job_templates(id) ON DELETE SET NULL,
     run_every_days        INTEGER NOT NULL DEFAULT 1,
+    run_every_days_max    INTEGER,
     retired               TEXT
   );
   CREATE TABLE IF NOT EXISTS job_logs (
@@ -81,6 +82,7 @@ const SCHEMA = `
 
 function insertJob(fields: Partial<{
   runEveryDays: number;
+  runEveryDaysMax: number | null;
   scheduleWindowStart: number;
   scheduleWindowEnd: number;
   timezone: string;
@@ -88,10 +90,11 @@ function insertJob(fields: Partial<{
 }> = {}): number {
   const { lastInsertRowid } = testDb.prepare(`
     INSERT INTO jobs
-      (job_type, account_id, run_every_days, schedule_window_start, schedule_window_end, timezone, template_id)
-    VALUES ('embywatch', NULL, ?, ?, ?, ?, ?)
+      (job_type, account_id, run_every_days, run_every_days_max, schedule_window_start, schedule_window_end, timezone, template_id)
+    VALUES ('embywatch', NULL, ?, ?, ?, ?, ?, ?)
   `).run(
     fields.runEveryDays ?? 1,
+    fields.runEveryDaysMax ?? null,
     fields.scheduleWindowStart ?? 1000,
     fields.scheduleWindowEnd ?? 1200,
     fields.timezone ?? TZ,
@@ -167,6 +170,56 @@ describe('daysUntilNextRun', () => {
     testDb.prepare("INSERT INTO job_logs (job_id, ran_at, status) VALUES (?, ?, 'failed')")
       .run(id, new Date().toISOString());
     expect(daysUntilNextRun(id, TZ, 1)).toBe(0);
+  });
+});
+
+// ─── run-every-days range ────────────────────────────────────────────────────
+
+describe('run-every-days range', () => {
+  it('resolves an interval within [min, max]', () => {
+    const id = insertJob({ runEveryDays: 7, runEveryDaysMax: 15 });
+    logSuccess(id, 0);
+    const interval = resolveRunEveryDays(id, 7, 15);
+    expect(interval).toBeGreaterThanOrEqual(7);
+    expect(interval).toBeLessThanOrEqual(15);
+  });
+
+  it('is deterministic within a cycle (stable across calls, not re-rolled)', () => {
+    const id = insertJob({ runEveryDays: 7, runEveryDaysMax: 15 });
+    logSuccess(id, 0);
+    const a = resolveRunEveryDays(id, 7, 15);
+    const b = resolveRunEveryDays(id, 7, 15);
+    const c = daysUntilNextRun(id, TZ, 7, 15); // ran today -> full interval
+    expect(a).toBe(b);
+    expect(c).toBe(a);
+  });
+
+  it('defers by the resolved interval minus days elapsed', () => {
+    const id = insertJob({ runEveryDays: 7, runEveryDaysMax: 15 });
+    logSuccess(id, 3);
+    const interval = resolveRunEveryDays(id, 7, 15); // same seed (latest success)
+    const expected = interval > 3 ? interval - 3 : 0;
+    expect(daysUntilNextRun(id, TZ, 7, 15)).toBe(expected);
+  });
+
+  it('re-rolls once a new successful run is recorded', () => {
+    const id = insertJob({ runEveryDays: 1, runEveryDaysMax: 60 });
+    // A wide range makes an accidental collision between two seeds unlikely.
+    testDb.prepare("INSERT INTO job_logs (job_id, ran_at, status) VALUES (?, ?, 'success')")
+      .run(id, new Date(Date.now() - 5 * 86_400_000).toISOString());
+    const first = resolveRunEveryDays(id, 1, 60);
+    testDb.prepare("INSERT INTO job_logs (job_id, ran_at, status) VALUES (?, ?, 'success')")
+      .run(id, new Date(Date.now() - 1 * 86_400_000).toISOString());
+    const second = resolveRunEveryDays(id, 1, 60);
+    expect(first).not.toBe(second);
+  });
+
+  it('behaves as a fixed interval when max is null or <= min', () => {
+    const id = insertJob({ runEveryDays: 7, runEveryDaysMax: null });
+    logSuccess(id, 0);
+    expect(daysUntilNextRun(id, TZ, 7, null)).toBe(7);
+    expect(daysUntilNextRun(id, TZ, 7, 5)).toBe(7); // max <= min -> fixed
+    expect(resolveRunEveryDays(id, 7, null)).toBe(7);
   });
 });
 

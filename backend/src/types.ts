@@ -55,6 +55,8 @@ export type Job = {
   checkinButton: string;
   templateId?: number | null;
   runEveryDays: number;
+  /** Upper bound of the run-every-days range; null means a fixed interval. */
+  runEveryDaysMax?: number | null;
   retired?: string | null;
 };
 
@@ -74,6 +76,8 @@ export type JobTemplate = {
   createdAt: string;
   linkedJobCount?: number;
   runEveryDays: number;
+  /** Upper bound of the run-every-days range; null means a fixed interval. */
+  runEveryDaysMax?: number | null;
 };
 
 export type CustomAction =

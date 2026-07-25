@@ -114,10 +114,58 @@ function checkDailyRunEnabled(): boolean {
   return row?.value !== "false";
 }
 
+// Small deterministic PRNG (FNV-1a hash seed -> mulberry32 step) so a run-every
+// range resolves to a value that is stable for a given seed, not re-rolled on
+// every scheduler refresh.
+function seededRandom(seed: string): number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  let a = (h + 0x6d2b79f5) | 0;
+  let t = Math.imul(a ^ (a >>> 15), 1 | a);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+// Resolve the effective interval from a [min, max] range for a given seed. A
+// null/absent max (or max <= min) yields the fixed min, preserving the old
+// single-value behaviour exactly.
+function intervalFromSeed(
+  min: number,
+  max: number | null | undefined,
+  seed: string,
+): number {
+  const lo = Math.max(1, Math.floor(min));
+  const hi = max != null ? Math.floor(max) : lo;
+  if (hi <= lo) return lo;
+  return lo + Math.floor(seededRandom(seed) * (hi - lo + 1));
+}
+
+/**
+ * The interval to defer by after a run, resolved from the range. Seeded by the
+ * job's last successful run so the value stays stable across refreshes/restarts
+ * within a cycle and re-rolls only once a new successful run is recorded.
+ */
+export function resolveRunEveryDays(
+  jobId: number,
+  min: number,
+  max?: number | null,
+): number {
+  const row = db
+    .prepare(
+      "SELECT ran_at FROM job_logs WHERE job_id = ? AND status = 'success' ORDER BY ran_at DESC LIMIT 1",
+    )
+    .get(jobId) as { ran_at: string } | undefined;
+  return intervalFromSeed(min, max, `${jobId}:${row?.ran_at ?? "first"}`);
+}
+
 export function daysUntilNextRun(
   jobId: number,
   tz: string,
   runEveryDays: number,
+  runEveryDaysMax?: number | null,
 ): number {
   const row = db
     .prepare(
@@ -125,12 +173,19 @@ export function daysUntilNextRun(
     )
     .get(jobId) as { ran_at: string } | undefined;
   if (!row) return 0;
+  // Same seed as resolveRunEveryDays so the scheduled date is consistent whether
+  // it was set after a run or recomputed on restart.
+  const runEvery = intervalFromSeed(
+    runEveryDays,
+    runEveryDaysMax,
+    `${jobId}:${row.ran_at}`,
+  );
   const lastRun = DateTime.fromISO(row.ran_at, { zone: "utc" })
     .setZone(tz)
     .startOf("day");
   const today = DateTime.now().setZone(tz).startOf("day");
   const daysSince = Math.floor(today.diff(lastRun, "days").days);
-  return daysSince >= runEveryDays ? 0 : runEveryDays - daysSince;
+  return daysSince >= runEvery ? 0 : runEvery - daysSince;
 }
 
 export function loadEligibleJobs(): Array<{
@@ -175,6 +230,7 @@ export function loadEligibleJobs(): Array<{
       startCommand: row.start_command || "/start",
       checkinButton: row.checkin_button || "签到",
       runEveryDays: row.run_every_days ?? 1,
+      runEveryDaysMax: row.run_every_days_max ?? null,
     } as Job,
     account:
       row.account_id != null
@@ -235,6 +291,7 @@ export async function executeJob(
         checkinButton: freshJob.checkin_button || "签到",
         templateId: freshJob.template_id ?? null,
         runEveryDays: freshJob.run_every_days ?? 1,
+        runEveryDaysMax: freshJob.run_every_days_max ?? null,
       };
     }
 
@@ -307,7 +364,7 @@ export async function executeJob(
       .prepare("SELECT enabled FROM jobs WHERE id = ?")
       .get(job.id) as { enabled: number } | undefined;
     if (current?.enabled) {
-      scheduleOne(job, account, job.runEveryDays ?? 1);
+      scheduleOne(job, account, resolveRunEveryDays(job.id, job.runEveryDays ?? 1, job.runEveryDaysMax));
     }
   }
 }
@@ -376,7 +433,7 @@ function refreshJobs(): void {
     const resolvedTz = resolveJobTimezone(job.timezone);
     if (!existing) {
       const daysAhead = dailyCheckOn
-        ? daysUntilNextRun(job.id, resolvedTz, job.runEveryDays ?? 1)
+        ? daysUntilNextRun(job.id, resolvedTz, job.runEveryDays ?? 1, job.runEveryDaysMax)
         : 0;
       scheduleOne(job, account, daysAhead);
     } else {
@@ -388,10 +445,11 @@ function refreshJobs(): void {
         existing.timezone !== resolvedTz ||
         existing.job.botUsername !== job.botUsername ||
         existing.job.accountId !== job.accountId ||
-        existing.job.runEveryDays !== job.runEveryDays;
+        existing.job.runEveryDays !== job.runEveryDays ||
+        existing.job.runEveryDaysMax !== job.runEveryDaysMax;
       if (scheduleChanged) {
         const daysAhead = dailyCheckOn
-          ? daysUntilNextRun(job.id, resolvedTz, job.runEveryDays ?? 1)
+          ? daysUntilNextRun(job.id, resolvedTz, job.runEveryDays ?? 1, job.runEveryDaysMax)
           : 0;
         scheduleOne(job, account, daysAhead);
       } else {
