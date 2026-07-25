@@ -540,6 +540,9 @@ const zh = {
     realWatchHint: "以真实播放速率从 Emby 服务器直连拉取实际媒体字节，使服务器产生真实的串流流量，更接近真实客户端。注意：会消耗大量下行流量（可达数百 MB 至数 GB）。",
     labelSequencePlay: "顺序播放（续播）",
     sequencePlayHint: "从上次离开的位置继续观看（Emby「继续观看」），若无则播放下一集（Next Up），仍无则随机选择；当前集看完后自动播放同剧集的下一集，直到用尽播放时长。仅在实际看完整集时才标记为已看，未看完的会保留在「继续观看」列表中。",
+    labelLibrary: "限定媒体库（可选）",
+    libraryPlaceholder: "媒体库名称或序号（从 1 开始）",
+    libraryHint: "优先仅从指定媒体库中挑选内容（含续播/顺序播放），可填写媒体库名称或其序号（从 1 开始）。若找不到该媒体库，或库内没有可播放内容，则回退到整个服务器。",
     labelProxy: "代理",
     proxyNone: "不使用代理",
     playbackRulesHint:
@@ -1571,6 +1574,10 @@ const en: typeof zh = {
     labelSequencePlay: "Sequence Play (resume & continue)",
     sequencePlayHint:
       "Resume from where you left off (Emby Continue Watching), else the next unwatched episode (Next Up), else a random item; when an episode finishes it plays the next one in the show until the play duration is used up. An episode is only marked watched when it actually finishes, so a partly-watched item stays in Continue Watching.",
+    labelLibrary: "Limit to library (optional)",
+    libraryPlaceholder: "Library name or index (from 1)",
+    libraryHint:
+      "Prefer content only from this library (including resume / Sequence Play). Enter the library name or its index (starting from 1). If it can't be matched, or the library has nothing to play, it falls back to the whole server.",
     labelProxy: "Proxy",
     proxyNone: "No proxy",
     playbackRulesHint:

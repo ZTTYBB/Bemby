@@ -396,3 +396,189 @@ describe('embywatch Sequence Play', () => {
     expect(usedRandom).toBe(true);
   });
 });
+
+// Serves the user's library views plus a random item, so we can check the
+// ParentId scoping applied to the item query.
+function routeLibrary(views: any[]) {
+  const jsonRes = (body: unknown) => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+  });
+  mockUndiciFetch.mockImplementation((url: string) => {
+    if (url.includes('/Users/AuthenticateByName')) {
+      return Promise.resolve(jsonRes({ AccessToken: 'tok', User: { Id: 'u1', Name: 'Tester' } }));
+    }
+    if (url.includes('/Views')) return Promise.resolve(jsonRes({ Items: views }));
+    if (url.includes('/Items?SortBy=Random')) {
+      return Promise.resolve(jsonRes({ Items: [{ Id: 'i1', Name: 'Ep', Type: 'Episode', RunTimeTicks: 20_000_000, MediaSources: [{ Id: 's1' }] }] }));
+    }
+    return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
+  });
+}
+
+describe('embywatch library scoping', () => {
+  const libConfig = { ...baseConfig, verifyPlayable: false, playDuration: 1 };
+  const views = [{ Id: 'lib-movies', Name: 'Movies' }, { Id: 'lib-tv', Name: 'TV Shows' }];
+  const randomUrl = () =>
+    mockUndiciFetch.mock.calls.find(c => typeof c[0] === 'string' && c[0].includes('/Items?SortBy=Random'))?.[0] as string | undefined;
+
+  it('scopes the random pick to a library matched by name (case-insensitive)', async () => {
+    routeLibrary(views);
+    await runEmbywatch('https://emby.example.com', { ...libConfig, library: 'tv shows' });
+    expect(randomUrl()).toContain('ParentId=lib-tv');
+  });
+
+  it('scopes to a library by its 1-based index', async () => {
+    routeLibrary(views);
+    await runEmbywatch('https://emby.example.com', { ...libConfig, library: '1' });
+    expect(randomUrl()).toContain('ParentId=lib-movies');
+  });
+
+  it('ignores an unknown library and uses the whole server', async () => {
+    routeLibrary(views);
+    await runEmbywatch('https://emby.example.com', { ...libConfig, library: 'Nope' });
+    expect(randomUrl()).not.toContain('ParentId=');
+  });
+
+  it('falls back to the whole server when the library has nothing to play', async () => {
+    const jsonRes = (body: unknown) => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+    });
+    // The scoped query returns nothing; the unscoped (whole-server) one has an item.
+    mockUndiciFetch.mockImplementation((url: string) => {
+      if (url.includes('/Users/AuthenticateByName')) {
+        return Promise.resolve(jsonRes({ AccessToken: 'tok', User: { Id: 'u1', Name: 'Tester' } }));
+      }
+      if (url.includes('/Views')) return Promise.resolve(jsonRes({ Items: views }));
+      if (url.includes('/Items?SortBy=Random')) {
+        const empty = url.includes('ParentId=');
+        return Promise.resolve(jsonRes({ Items: empty ? [] : [{ Id: 'i1', Name: 'Whole', Type: 'Movie', RunTimeTicks: 20_000_000, MediaSources: [{ Id: 's1' }] }] }));
+      }
+      return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
+    });
+
+    const result = await runEmbywatch('https://emby.example.com', { ...libConfig, library: 'TV Shows' });
+    expect(result.title).toBe('Whole');
+
+    const calls = mockUndiciFetch.mock.calls
+      .map(c => c[0] as string)
+      .filter(u => typeof u === 'string' && u.includes('/Items?SortBy=Random'));
+    // It tried the library first, then retried unscoped.
+    expect(calls.some(u => u.includes('ParentId=lib-tv'))).toBe(true);
+    expect(calls.some(u => !u.includes('ParentId='))).toBe(true);
+  });
+
+  it('runs Sequence Play scoped to the library (both settings apply together)', async () => {
+    const jsonRes = (body: unknown) => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+    });
+    mockUndiciFetch.mockImplementation((url: string) => {
+      if (url.includes('/Users/AuthenticateByName')) {
+        return Promise.resolve(jsonRes({ AccessToken: 'tok', User: { Id: 'u1', Name: 'Tester' } }));
+      }
+      if (url.includes('/Views')) return Promise.resolve(jsonRes({ Items: views }));
+      if (url.includes('/Items/Resume')) return Promise.resolve(jsonRes({ Items: [ep('e1', 1, { UserData: { PlaybackPositionTicks: 0 } })] }));
+      if (url.includes('/Episodes')) return Promise.resolve(jsonRes({ Items: [ep('e1', 1), ep('e2', 2)] }));
+      return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
+    });
+
+    const result = await runEmbywatch('https://emby.example.com', {
+      ...baseConfig,
+      sequencePlay: true,
+      verifyPlayable: false,
+      playDuration: 3,
+      library: 'TV Shows',
+    });
+
+    // Sequence Play still ran (resumed + chained) and was not overridden by the library limit.
+    expect(result.sequencePlay).toBe(true);
+    expect(result.episodes?.map(e => e.title)).toEqual(['Ep 1', 'Ep 2']);
+
+    // The resume lookup was scoped to the library, and no whole-server random was needed.
+    const resumeCall = mockUndiciFetch.mock.calls.find(c => typeof c[0] === 'string' && c[0].includes('/Items/Resume'))?.[0] as string;
+    expect(resumeCall).toContain('ParentId=lib-tv');
+    const usedRandom = mockUndiciFetch.mock.calls.some(c => typeof c[0] === 'string' && c[0].includes('/Items?SortBy=Random'));
+    expect(usedRandom).toBe(false);
+  });
+
+  it('plays the one item in the library rather than falling back, when nothing is resuming', async () => {
+    const jsonRes = (body: unknown) => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+    });
+    // Resume and Next Up are empty, but the library still has one item via random.
+    mockUndiciFetch.mockImplementation((url: string) => {
+      if (url.includes('/Users/AuthenticateByName')) {
+        return Promise.resolve(jsonRes({ AccessToken: 'tok', User: { Id: 'u1', Name: 'Tester' } }));
+      }
+      if (url.includes('/Views')) return Promise.resolve(jsonRes({ Items: views }));
+      if (url.includes('/Items/Resume')) return Promise.resolve(jsonRes({ Items: [] }));
+      if (url.includes('/Shows/NextUp')) return Promise.resolve(jsonRes({ Items: [] }));
+      if (url.includes('/Items?SortBy=Random')) {
+        const scoped = url.includes('ParentId=lib-tv');
+        return Promise.resolve(jsonRes({ Items: [{ Id: scoped ? 'only' : 'whole', Name: scoped ? 'OnlyInLib' : 'WholeServer', Type: 'Movie', RunTimeTicks: 20_000_000, MediaSources: [{ Id: 's' }] }] }));
+      }
+      if (url.includes('/Episodes')) return Promise.resolve(jsonRes({ Items: [] }));
+      return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
+    });
+
+    const result = await runEmbywatch('https://emby.example.com', {
+      ...baseConfig,
+      sequencePlay: true,
+      verifyPlayable: false,
+      playDuration: 1,
+      library: 'TV Shows',
+    });
+
+    // Played the single library item; never fell back to the whole server.
+    expect(result.title).toBe('OnlyInLib');
+    const unscopedRandom = mockUndiciFetch.mock.calls.filter(
+      c => typeof c[0] === 'string' && c[0].includes('/Items?SortBy=Random') && !c[0].includes('ParentId='),
+    );
+    expect(unscopedRandom.length).toBe(0);
+  });
+
+  it('falls back to the whole server when the library items are all offline', async () => {
+    const jsonRes = (body: unknown) => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+    });
+    const probeRes = (status: number) => ({
+      status,
+      body: { cancel: vi.fn() },
+      arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(status === 206 ? 1024 : 0)),
+    });
+    // Library item exists but its stream probe fails (disk down); the whole
+    // server has a playable one. verifyPlayable is on, so the library item is
+    // rejected and we must still try the server rather than report nothing.
+    mockUndiciFetch.mockImplementation((url: string) => {
+      if (url.includes('/Users/AuthenticateByName')) {
+        return Promise.resolve(jsonRes({ AccessToken: 'tok', User: { Id: 'u1', Name: 'Tester' } }));
+      }
+      if (url.includes('/Views')) return Promise.resolve(jsonRes({ Items: views }));
+      if (url.includes('/PlaybackInfo')) return Promise.resolve(jsonRes({ MediaSources: [{ Id: 's' }] }));
+      if (url.includes('/Videos/offline/')) return Promise.resolve(probeRes(404));
+      if (url.includes('/Videos/good/')) return Promise.resolve(probeRes(206));
+      if (url.includes('/Items?SortBy=Random')) {
+        const scoped = url.includes('ParentId=lib-tv');
+        return Promise.resolve(jsonRes({ Items: [{ Id: scoped ? 'offline' : 'good', Name: scoped ? 'Offline' : 'GoodOnServer', Type: 'Movie', RunTimeTicks: 20_000_000, MediaSources: [{ Id: 's' }] }] }));
+      }
+      return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
+    });
+
+    const result = await runEmbywatch('https://emby.example.com', { ...baseConfig, verifyPlayable: true, playDuration: 1, library: 'TV Shows' });
+    expect(result.title).toBe('GoodOnServer');
+  });
+});

@@ -305,6 +305,7 @@ export type EmbywatchConfig = {
   verifyPlayable?: boolean;
   realWatch?: boolean;
   sequencePlay?: boolean;
+  library?: string;
   proxyId?: string;
 };
 

@@ -251,6 +251,11 @@ export type EmbywatchConfig = {
    * Defaults to false.
    */
   sequencePlay?: boolean;
+  /**
+   * Restrict watching to one Emby library, by its name or its 1-based index in
+   * the user's library list. If it doesn't resolve, the whole server is used.
+   */
+  library?: string;
 };
 
 // One played item within a run (a single episode/movie segment).
