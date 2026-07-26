@@ -62,6 +62,33 @@ function getSetting(key: string): string | undefined {
   return row?.value;
 }
 
+// Job cancellation. The runner reports a job as "Cancelled" only when the error
+// message is exactly this, so every abort path must surface it.
+const CANCELLED = 'Job cancelled';
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error(CANCELLED);
+}
+
+/** setTimeout that rejects immediately when the job is cancelled. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error(CANCELLED));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error(CANCELLED));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 // Emby's dashboard shows the session's app name/version from the Client and
 // Version fields of X-Emby-Authorization, not the HTTP User-Agent. Derive them
 // from the chosen UA so a custom preset (e.g. "CapyPlayer/1.0") is reflected in
@@ -92,7 +119,19 @@ function buildAuthHeader(deviceName: string, ua: string, token?: string): string
 async function embyRequest<T = any>(
   baseUrl: string,
   path: string,
-  opts: { method?: string; token?: string; ua: string; deviceName: string; body?: unknown; proxyUrl?: string; signal?: AbortSignal }
+  // `signal` aborts the request itself (e.g. a timeout); `cancelSignal` is the
+  // job's cancellation signal and additionally maps the abort to a Job cancelled
+  // error so the runner records the run as Cancelled rather than unreachable.
+  opts: {
+    method?: string;
+    token?: string;
+    ua: string;
+    deviceName: string;
+    body?: unknown;
+    proxyUrl?: string;
+    signal?: AbortSignal;
+    cancelSignal?: AbortSignal;
+  }
 ): Promise<T> {
   const url = `${baseUrl.replace(/\/$/, '')}${path}`;
   const method = opts.method ?? 'GET';
@@ -104,16 +143,19 @@ async function embyRequest<T = any>(
   };
   const body = opts.body != null ? JSON.stringify(opts.body) : undefined;
 
+  throwIfAborted(opts.cancelSignal);
+
   let res: Response;
   try {
     res = await undiciFetch(url, {
       method,
       headers,
       body,
-      signal: opts.signal,
+      signal: opts.signal ?? opts.cancelSignal,
       dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
     } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
   } catch (err: any) {
+    throwIfAborted(opts.cancelSignal);
     // Network-level failure (ECONNREFUSED, ENOTFOUND, timeout, etc.)
     const cause = err?.cause?.message ?? err?.cause?.code ?? '';
     throw new Error(`Cannot reach Emby server at ${url}${cause ? ` — ${cause}` : ''}`);
@@ -176,6 +218,16 @@ export async function testEmbyConnection(
   }
 }
 
+// Everything needed to reach the Emby media endpoints as the logged-in user.
+type MediaOpts = {
+  token: string;
+  ua: string;
+  userId: string;
+  deviceName: string;
+  proxyUrl?: string;
+  signal?: AbortSignal;
+};
+
 // Number of random items to try before giving up when verifying playability.
 const MAX_PICK_ATTEMPTS = 5;
 // Byte range fetched to confirm the media file is actually readable.
@@ -185,7 +237,7 @@ const PROBE_RANGE_BYTES = 65_535;
  * Fetch the first bytes of a stream URL, as a real player would.
  * A readable file yields 206 (partial) or 200 with body bytes.
  */
-async function probeStream(url: string, opts: { ua: string; proxyUrl?: string }): Promise<boolean> {
+async function probeStream(url: string, opts: { ua: string; proxyUrl?: string; signal?: AbortSignal }): Promise<boolean> {
   try {
     const res = (await undiciFetch(url, {
       method: 'GET',
@@ -193,6 +245,7 @@ async function probeStream(url: string, opts: { ua: string; proxyUrl?: string })
         'User-Agent': opts.ua,
         Range: `bytes=0-${PROBE_RANGE_BYTES}`,
       },
+      signal: opts.signal,
       dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
     } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
 
@@ -203,6 +256,8 @@ async function probeStream(url: string, opts: { ua: string; proxyUrl?: string })
     const buf = await res.arrayBuffer();
     return buf.byteLength > 0;
   } catch {
+    // A cancelled job must abort, not be read as an unplayable item
+    throwIfAborted(opts.signal);
     // Network-level failure reaching the stream, treat as unavailable
     return false;
   }
@@ -218,7 +273,7 @@ async function getClientStreamUrl(
   baseUrl: string,
   itemId: string,
   mediaSourceId: string,
-  opts: { token: string; ua: string; userId: string; deviceName: string; proxyUrl?: string; directOnly?: boolean }
+  opts: MediaOpts & { directOnly?: boolean }
 ): Promise<string | undefined> {
   try {
     const info = await embyRequest<any>(baseUrl, `/Items/${itemId}/PlaybackInfo?UserId=${opts.userId}`, {
@@ -227,6 +282,7 @@ async function getClientStreamUrl(
       token: opts.token,
       deviceName: opts.deviceName,
       proxyUrl: opts.proxyUrl,
+      cancelSignal: opts.signal,
       body: { DeviceProfile: { MaxStreamingBitrate: 140_000_000 } },
     });
     const sources: any[] = info?.MediaSources ?? [];
@@ -239,6 +295,7 @@ async function getClientStreamUrl(
     if (/^https?:\/\//i.test(path)) return path;
     return `${baseUrl.replace(/\/$/, '')}${path.startsWith('/') ? '' : '/'}${path}`;
   } catch {
+    throwIfAborted(opts.signal);
     // PlaybackInfo unsupported or failed, caller falls back to the static URL
     return undefined;
   }
@@ -254,7 +311,7 @@ async function isMediaAvailable(
   baseUrl: string,
   itemId: string,
   mediaSourceId: string,
-  opts: { token: string; ua: string; userId: string; deviceName: string; proxyUrl?: string }
+  opts: MediaOpts
 ): Promise<boolean> {
   // Prefer the URL a real client would play; proxies that offload streaming
   // to another host often only route this form
@@ -295,11 +352,12 @@ function buildStaticStreamUrl(
 
 // Learn the total file size from a 1-byte ranged request, so we can map a
 // playback position to a byte offset when the item metadata lacks Size/Bitrate.
-async function probeStreamSize(url: string, opts: { ua: string; proxyUrl?: string }): Promise<number> {
+async function probeStreamSize(url: string, opts: { ua: string; proxyUrl?: string; signal?: AbortSignal }): Promise<number> {
   try {
     const res = (await undiciFetch(url, {
       method: 'GET',
       headers: { 'User-Agent': opts.ua, Range: 'bytes=0-0' },
+      signal: opts.signal,
       dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
     } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
     const contentRange = res.headers.get('content-range');
@@ -312,6 +370,7 @@ async function probeStreamSize(url: string, opts: { ua: string; proxyUrl?: strin
     if (res.status === 200 && contentLength) return Number(contentLength);
     return 0;
   } catch {
+    throwIfAborted(opts.signal);
     return 0;
   }
 }
@@ -323,7 +382,7 @@ async function resolveRealStreamUrl(
   baseUrl: string,
   itemId: string,
   mediaSourceId: string,
-  opts: { token: string; ua: string; userId: string; deviceName: string; proxyUrl?: string; playSessionId: string; deviceId: string }
+  opts: MediaOpts & { playSessionId: string; deviceId: string }
 ): Promise<{ url: string; size: number } | undefined> {
   const staticUrl = buildStaticStreamUrl(baseUrl, itemId, mediaSourceId, opts);
   const staticSize = await probeStreamSize(staticUrl, opts);
@@ -342,11 +401,12 @@ async function drainRange(
   url: string,
   start: number,
   end: number,
-  opts: { ua: string; proxyUrl?: string }
+  opts: { ua: string; proxyUrl?: string; signal?: AbortSignal }
 ): Promise<number> {
   const res = (await undiciFetch(url, {
     method: 'GET',
     headers: { 'User-Agent': opts.ua, Range: `bytes=${start}-${end}` },
+    signal: opts.signal,
     dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
   } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
 
@@ -377,6 +437,7 @@ type PlayCtx = {
   proxyUrl?: string;
   playSessionId: string;
   realWatch: boolean;
+  signal?: AbortSignal;
 };
 
 function toSegment(candidate: any): Segment {
@@ -390,7 +451,11 @@ function toSegment(candidate: any): Segment {
 }
 
 function reqOpts(ctx: PlayCtx) {
-  return { ua: ctx.ua, token: ctx.token, deviceName: ctx.deviceName, proxyUrl: ctx.proxyUrl };
+  return { ua: ctx.ua, token: ctx.token, deviceName: ctx.deviceName, proxyUrl: ctx.proxyUrl, cancelSignal: ctx.signal };
+}
+
+function mediaOpts(ctx: PlayCtx): MediaOpts {
+  return { token: ctx.token, ua: ctx.ua, userId: ctx.userId, deviceName: ctx.deviceName, proxyUrl: ctx.proxyUrl, signal: ctx.signal };
 }
 
 /** POST /Sessions/Playing → progress loop (+ Real Watch byte streaming) → /Sessions/Playing/Stopped. */
@@ -435,11 +500,7 @@ async function playSegment(
     fileSize = Number(source?.Size) || 0;
     const deviceId = ctx.deviceName.replace(/\s+/g, '-');
     const resolved = await resolveRealStreamUrl(serverUrl, itemId, mediaSourceId, {
-      token: ctx.token,
-      ua: ctx.ua,
-      userId: ctx.userId,
-      deviceName: ctx.deviceName,
-      proxyUrl: ctx.proxyUrl,
+      ...mediaOpts(ctx),
       playSessionId: ctx.playSessionId,
       deviceId,
     });
@@ -460,54 +521,74 @@ async function playSegment(
     fileSize > 0 && bytesPerSecond > 0 ? Math.min(fileSize - 1, Math.max(0, Math.floor(sec * bytesPerSecond))) : 0;
 
   let elapsed = 0;
-  while (elapsed < watchSeconds) {
-    const wait = Math.min(PROGRESS_INTERVAL_S, watchSeconds - elapsed);
+  try {
+    while (elapsed < watchSeconds) {
+      const wait = Math.min(PROGRESS_INTERVAL_S, watchSeconds - elapsed);
 
-    if (streamUrl) {
-      // Pull this interval's byte window while waiting, so real streaming
-      // traffic tracks the reported position like an actual player.
-      const rangeStart = offsetAt(startSeconds + elapsed);
-      const rangeEnd = Math.max(rangeStart, offsetAt(startSeconds + elapsed + wait) - 1);
-      await Promise.all([
-        new Promise(r => setTimeout(r, wait * 1000)),
-        drainRange(streamUrl, rangeStart, rangeEnd, { ua: ctx.ua, proxyUrl: ctx.proxyUrl })
-          .then(b => {
-            streamedBytes += b;
-          })
-          .catch(e => {
-            console.warn('[embywatch] Real Watch stream chunk failed:', e?.message ?? e);
-          }),
-      ]);
-    } else {
-      await new Promise(r => setTimeout(r, wait * 1000));
+      if (streamUrl) {
+        // Pull this interval's byte window while waiting, so real streaming
+        // traffic tracks the reported position like an actual player.
+        const rangeStart = offsetAt(startSeconds + elapsed);
+        const rangeEnd = Math.max(rangeStart, offsetAt(startSeconds + elapsed + wait) - 1);
+        await Promise.all([
+          sleep(wait * 1000, ctx.signal),
+          drainRange(streamUrl, rangeStart, rangeEnd, { ua: ctx.ua, proxyUrl: ctx.proxyUrl, signal: ctx.signal })
+            .then(b => {
+              streamedBytes += b;
+            })
+            .catch(e => {
+              if (ctx.signal?.aborted) return; // cancellation surfaces via sleep
+              console.warn('[embywatch] Real Watch stream chunk failed:', e?.message ?? e);
+            }),
+        ]);
+      } else {
+        await sleep(wait * 1000, ctx.signal);
+      }
+      elapsed += wait;
+
+      await embyRequest(serverUrl, '/Sessions/Playing/Progress', {
+        method: 'POST',
+        ...reqOpts(ctx),
+        body: {
+          ItemId: itemId,
+          MediaSourceId: mediaSourceId,
+          PlaySessionId: ctx.playSessionId,
+          PositionTicks: startTicks + elapsed * TICKS_PER_SECOND,
+          IsPaused: false,
+        },
+      });
     }
-    elapsed += wait;
-
-    await embyRequest(serverUrl, '/Sessions/Playing/Progress', {
-      method: 'POST',
-      ...reqOpts(ctx),
-      body: {
-        ItemId: itemId,
-        MediaSourceId: mediaSourceId,
-        PlaySessionId: ctx.playSessionId,
-        PositionTicks: startTicks + elapsed * TICKS_PER_SECOND,
-        IsPaused: false,
-      },
-    });
+  } catch (err) {
+    // Cancelled (or failed) mid-playback: still tell Emby we stopped, otherwise
+    // the session lingers in Now Playing until the server times it out.
+    await reportStopped(serverUrl, ctx, seg, startSeconds + elapsed).catch(() => {});
+    throw err;
   }
 
-  await embyRequest(serverUrl, '/Sessions/Playing/Stopped', {
-    method: 'POST',
-    ...reqOpts(ctx),
-    body: {
-      ItemId: itemId,
-      MediaSourceId: mediaSourceId,
-      PlaySessionId: ctx.playSessionId,
-      PositionTicks: (startSeconds + watchSeconds) * TICKS_PER_SECOND,
-    },
-  });
+  await reportStopped(serverUrl, ctx, seg, startSeconds + watchSeconds);
 
   return { streamedBytes };
+}
+
+// The Stopped report deliberately ignores the job's cancel signal — it is the
+// cleanup for a cancelled run, so it gets its own timeout instead.
+const STOP_REPORT_TIMEOUT_MS = 10_000;
+
+async function reportStopped(serverUrl: string, ctx: PlayCtx, seg: Segment, positionSeconds: number): Promise<void> {
+  await embyRequest(serverUrl, '/Sessions/Playing/Stopped', {
+    method: 'POST',
+    ua: ctx.ua,
+    token: ctx.token,
+    deviceName: ctx.deviceName,
+    proxyUrl: ctx.proxyUrl,
+    signal: AbortSignal.timeout(STOP_REPORT_TIMEOUT_MS),
+    body: {
+      ItemId: seg.itemId,
+      MediaSourceId: seg.mediaSourceId,
+      PlaySessionId: ctx.playSessionId,
+      PositionTicks: positionSeconds * TICKS_PER_SECOND,
+    },
+  });
 }
 
 async function markPlayed(serverUrl: string, ctx: PlayCtx, itemId: string): Promise<boolean> {
@@ -515,6 +596,7 @@ async function markPlayed(serverUrl: string, ctx: PlayCtx, itemId: string): Prom
     await embyRequest(serverUrl, `/Users/${ctx.userId}/PlayedItems/${itemId}`, { method: 'POST', ...reqOpts(ctx) });
     return true;
   } catch (e) {
+    throwIfAborted(ctx.signal);
     console.warn('[embywatch] Failed to mark item as watched:', e);
     return false;
   }
@@ -528,17 +610,9 @@ async function firstPlayable(
   verifyPlayable: boolean,
 ): Promise<Segment | undefined> {
   for (const candidate of candidates) {
+    throwIfAborted(ctx.signal);
     const seg = toSegment(candidate);
-    if (
-      !verifyPlayable ||
-      (await isMediaAvailable(serverUrl, seg.itemId, seg.mediaSourceId, {
-        token: ctx.token,
-        ua: ctx.ua,
-        userId: ctx.userId,
-        deviceName: ctx.deviceName,
-        proxyUrl: ctx.proxyUrl,
-      }))
-    ) {
+    if (!verifyPlayable || (await isMediaAvailable(serverUrl, seg.itemId, seg.mediaSourceId, mediaOpts(ctx)))) {
       return seg;
     }
     console.warn(`[embywatch] "${candidate.Name}" is not streamable — trying another item`);
@@ -566,6 +640,7 @@ async function resolveLibraryId(serverUrl: string, ctx: PlayCtx, library?: strin
     console.warn(`[embywatch] Library "${raw}" not found — using the whole server`);
     return undefined;
   } catch (e) {
+    throwIfAborted(ctx.signal);
     console.warn('[embywatch] Failed to list libraries, using the whole server:', e);
     return undefined;
   }
@@ -581,13 +656,7 @@ async function resolveLibraryId(serverUrl: string, ctx: PlayCtx, library?: strin
 const LIBRARY_SAMPLE_SIZE = 12;
 
 async function available(serverUrl: string, ctx: PlayCtx, seg: Segment): Promise<boolean> {
-  return isMediaAvailable(serverUrl, seg.itemId, seg.mediaSourceId, {
-    token: ctx.token,
-    ua: ctx.ua,
-    userId: ctx.userId,
-    deviceName: ctx.deviceName,
-    proxyUrl: ctx.proxyUrl,
-  });
+  return isMediaAvailable(serverUrl, seg.itemId, seg.mediaSourceId, mediaOpts(ctx));
 }
 
 /** A bounded random sample of a library's Series/Movies (no full enumeration). */
@@ -600,6 +669,7 @@ async function librarySample(serverUrl: string, ctx: PlayCtx, parentId: string, 
     );
     return page.Items ?? [];
   } catch {
+    throwIfAborted(ctx.signal);
     return [];
   }
 }
@@ -619,6 +689,7 @@ async function pickRandomFromLibrary(serverUrl: string, ctx: PlayCtx, parentId: 
   const maxAttempts = Math.min(sample.length, verifyPlayable ? MAX_PICK_ATTEMPTS : 1);
   const tried = new Set<number>();
   for (let attempt = 0; attempt < maxAttempts && tried.size < sample.length; attempt++) {
+    throwIfAborted(ctx.signal);
     let idx = Math.floor(Math.random() * sample.length);
     while (tried.has(idx)) idx = (idx + 1) % sample.length;
     tried.add(idx);
@@ -643,6 +714,7 @@ async function libraryOfSeries(serverUrl: string, ctx: PlayCtx, seriesId: string
     const s = await embyRequest<any>(serverUrl, `/Users/${ctx.userId}/Items/${seriesId}?Fields=ParentId`, reqOpts(ctx));
     parent = s?.ParentId;
   } catch {
+    throwIfAborted(ctx.signal);
     parent = undefined;
   }
   cache.set(seriesId, parent);
@@ -669,10 +741,12 @@ async function libraryResumeSegment(serverUrl: string, ctx: PlayCtx, parentId: s
       reqOpts(ctx),
     );
   } catch {
+    throwIfAborted(ctx.signal);
     return undefined;
   }
   const cache = new Map<string, string | undefined>();
   for (const cand of res.Items ?? []) {
+    throwIfAborted(ctx.signal);
     if (Number(cand.UserData?.PlaybackPositionTicks) <= 0) continue;
     if (!(await itemInLibrary(serverUrl, ctx, cand, parentId, cache))) continue;
     const seg = toSegment(cand);
@@ -693,16 +767,7 @@ async function pickRandomSegment(serverUrl: string, ctx: PlayCtx, verifyPlayable
     );
     if (!items.Items?.length) return undefined;
     const seg = toSegment(items.Items[0]);
-    if (
-      !verifyPlayable ||
-      (await isMediaAvailable(serverUrl, seg.itemId, seg.mediaSourceId, {
-        token: ctx.token,
-        ua: ctx.ua,
-        userId: ctx.userId,
-        deviceName: ctx.deviceName,
-        proxyUrl: ctx.proxyUrl,
-      }))
-    ) {
+    if (!verifyPlayable || (await isMediaAvailable(serverUrl, seg.itemId, seg.mediaSourceId, mediaOpts(ctx)))) {
       return seg;
     }
     console.warn(`[embywatch] "${seg.item.Name}" is not streamable (attempt ${attempt}/${attempts}) — trying another item`);
@@ -718,16 +783,7 @@ async function getNextEpisode(serverUrl: string, ctx: PlayCtx, item: any, verify
   const idx = list.findIndex(e => e.Id === item.Id);
   if (idx < 0 || idx + 1 >= list.length) return undefined;
   const next = toSegment(list[idx + 1]);
-  if (
-    verifyPlayable &&
-    !(await isMediaAvailable(serverUrl, next.itemId, next.mediaSourceId, {
-      token: ctx.token,
-      ua: ctx.ua,
-      userId: ctx.userId,
-      deviceName: ctx.deviceName,
-      proxyUrl: ctx.proxyUrl,
-    }))
-  ) {
+  if (verifyPlayable && !(await isMediaAvailable(serverUrl, next.itemId, next.mediaSourceId, mediaOpts(ctx)))) {
     return undefined;
   }
   return next;
@@ -809,6 +865,7 @@ async function runSequencePlay(
   const episodes: EmbywatchEpisode[] = [];
 
   for (let i = 0; i < MAX_SEQUENCE_SEGMENTS && cur && budget > 0; i++) {
+    throwIfAborted(ctx.signal);
     const rt = cur.runtimeSeconds;
     const episodeRemaining = rt > 0 ? Math.max(0, rt - curStart) : budget;
     const watchSeconds = Math.min(budget, episodeRemaining);
@@ -881,7 +938,12 @@ async function runSequencePlay(
   };
 }
 
-export async function runEmbywatch(serverUrl: string, config: EmbywatchConfig): Promise<EmbywatchLog> {
+export async function runEmbywatch(
+  serverUrl: string,
+  config: EmbywatchConfig,
+  signal?: AbortSignal,
+): Promise<EmbywatchLog> {
+  throwIfAborted(signal);
   const ua = config.userAgent ?? getSetting('default_ua') ?? DEFAULT_UA;
   const playDuration = config.playDuration ?? Number(getSetting('default_play_duration') ?? 300);
   const deviceName = resolveDeviceName(getSetting('default_device_name') ?? 'Yamby', config.username);
@@ -894,6 +956,7 @@ export async function runEmbywatch(serverUrl: string, config: EmbywatchConfig): 
     ua,
     deviceName,
     proxyUrl,
+    cancelSignal: signal,
     body: { Username: config.username, Pw: config.password },
   });
 
@@ -911,6 +974,7 @@ export async function runEmbywatch(serverUrl: string, config: EmbywatchConfig): 
     proxyUrl,
     playSessionId: `bemby-${Date.now()}`,
     realWatch: config.realWatch === true,
+    signal,
   };
 
   // Optionally scope everything to one library (name or 1-based index).

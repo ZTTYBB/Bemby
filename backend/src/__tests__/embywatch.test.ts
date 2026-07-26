@@ -532,3 +532,30 @@ describe('embywatch library scoping', () => {
     expect(result.title).toBe('GoodOnServer');
   });
 });
+
+describe('embywatch cancellation', () => {
+  it('aborts before contacting the server when already cancelled', async () => {
+    routeFetch(206);
+    const ctrl = new AbortController();
+    ctrl.abort();
+
+    await expect(runEmbywatch('https://emby.example.com', baseConfig, ctrl.signal))
+      .rejects.toThrow('Job cancelled');
+    expect(mockUndiciFetch).not.toHaveBeenCalled();
+  });
+
+  it('stops mid-playback and still reports Stopped so Emby clears the session', async () => {
+    routeFetch(206);
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 50);
+
+    await expect(
+      runEmbywatch('https://emby.example.com', { ...baseConfig, playDuration: 60 }, ctrl.signal),
+    ).rejects.toThrow('Job cancelled');
+
+    const stopped = mockUndiciFetch.mock.calls.some(
+      c => typeof c[0] === 'string' && c[0].endsWith('/Sessions/Playing/Stopped'),
+    );
+    expect(stopped).toBe(true);
+  });
+});
