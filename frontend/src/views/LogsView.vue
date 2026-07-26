@@ -98,12 +98,18 @@
                   <div style="display: flex; align-items: center; gap: 8px">
                     <span
                       :title="l.message ?? undefined"
+                      :class="{ 'msg-warning': hasWarning(l) }"
                       style="
                         overflow: hidden;
                         text-overflow: ellipsis;
                         white-space: nowrap;
                         flex: 1;
                       "
+                      ><i
+                        v-if="hasWarning(l)"
+                        class="fa-solid fa-triangle-exclamation"
+                        style="margin-right: 4px"
+                      ></i
                       >{{ l.message ?? "—" }}</span
                     >
                     <button
@@ -810,7 +816,18 @@
                             (embywatchDetail.streamedBytes / 1048576).toFixed(1)
                           }}
                           MB
+                          <template v-if="embywatchDetail.realWatchTranscoded"
+                            >&nbsp;({{
+                              t("logs.embyDetail.transcoded")
+                            }})</template
+                          >
                         </template>
+                      </div>
+                      <div
+                        v-if="embywatchDetail.realWatchNote"
+                        class="emby-note"
+                      >
+                        {{ realWatchNoteText(embywatchDetail.realWatchNote) }}
                       </div>
                       <div class="emby-seq-list">
                         <div
@@ -857,7 +874,15 @@
                                 (epi.streamedBytes / 1048576).toFixed(1)
                               }}
                               MB
+                              <template v-if="epi.realWatchTranscoded"
+                                >&nbsp;({{
+                                  t("logs.embyDetail.transcoded")
+                                }})</template
+                              >
                             </template>
+                          </div>
+                          <div v-if="epi.realWatchNote" class="emby-note">
+                            {{ realWatchNoteText(epi.realWatchNote) }}
                           </div>
                         </div>
                       </div>
@@ -942,6 +967,11 @@
                         >
                           <div class="emby-stat-label">
                             {{ t("logs.embyDetail.streamed") }}
+                            <template v-if="embywatchDetail.realWatchTranscoded"
+                              >&nbsp;({{
+                                t("logs.embyDetail.transcoded")
+                              }})</template
+                            >
                           </div>
                           <div class="emby-stat-value">
                             {{
@@ -963,6 +993,12 @@
                             {{ embywatchDetail.episodesCompleted ?? 0 }}
                           </div>
                         </div>
+                      </div>
+                      <div
+                        v-if="embywatchDetail.realWatchNote"
+                        class="emby-note"
+                      >
+                        {{ realWatchNoteText(embywatchDetail.realWatchNote) }}
                       </div>
                     </div>
                   </div>
@@ -990,6 +1026,7 @@ import {
   type Job,
   type CheckinAttemptLog,
   type EmbywatchLog,
+  type RealWatchNote,
   type CustomStepLog,
   type AiSupplier,
 } from "../api/client";
@@ -1322,6 +1359,15 @@ function fmtSeconds(s: number): string {
     return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
+
+function realWatchNoteText(note: RealWatchNote): string {
+  return t(`logs.embyDetail.realWatchNote.${note}`);
+}
+
+// A run that completed but flagged something (see runWarnings.ts on the backend).
+function hasWarning(l: Log): boolean {
+  return l.status === "success" && (l.message ?? "").includes("Warning:");
+}
 </script>
 
 <style scoped>
@@ -1353,6 +1399,16 @@ function fmtSeconds(s: number): string {
   font-size: 12px;
   color: #888;
   margin-bottom: 14px;
+}
+
+.msg-warning {
+  color: #b45309;
+}
+
+.emby-note {
+  font-size: 12px;
+  color: #b45309;
+  margin: 6px 0 10px;
 }
 
 .emby-stats {

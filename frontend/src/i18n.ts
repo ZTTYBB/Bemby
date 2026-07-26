@@ -802,6 +802,11 @@ const zh = {
       totalWatched: "总观看时长",
       yes: "是",
       no: "否",
+      transcoded: "转码",
+      realWatchNote: {
+        "no-stream-url": "真实观看不可用：服务器未提供可拉取的直连或转码地址",
+        "stream-failed": "真实观看失败：拉流请求全部被服务器拒绝",
+      },
     },
     dev: {
       timing: "计时",
@@ -1846,6 +1851,13 @@ const en: typeof zh = {
       totalWatched: "Total watched",
       yes: "Yes",
       no: "No",
+      transcoded: "transcoded",
+      realWatchNote: {
+        "no-stream-url":
+          "Real Watch unavailable: the server serves no direct-play or transcode stream",
+        "stream-failed":
+          "Real Watch failed: every stream request was rejected by the server",
+      },
     },
     dev: {
       timing: "Timing",

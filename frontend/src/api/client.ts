@@ -470,6 +470,9 @@ export type JobTemplate = {
   runEveryDaysMax?: number | null;
 };
 
+// Why Real Watch pulled no bytes, when the toggle was on.
+export type RealWatchNote = "no-stream-url" | "stream-failed";
+
 export type EmbywatchEpisode = {
   itemType: string;
   title: string;
@@ -482,6 +485,8 @@ export type EmbywatchEpisode = {
   watchedSeconds: number;
   markedWatched: boolean;
   streamedBytes?: number;
+  realWatchNote?: RealWatchNote;
+  realWatchTranscoded?: boolean;
 };
 
 export type EmbywatchLog = EmbywatchEpisode & {

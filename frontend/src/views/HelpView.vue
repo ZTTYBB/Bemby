@@ -1035,8 +1035,9 @@
                   <td>真实观看（拉取实际字节）</td>
                   <td>
                     除进度上报外，以真实播放速率从 Emby
-                    服务器直连拉取实际媒体字节，使服务器产生与真实客户端一致的串流流量，日志中会记录本次<strong>已串流</strong>的数据量。注意：单次运行可能消耗数百
-                    MB 至数 GB 下行流量。
+                    服务器直连拉取实际媒体字节，使服务器产生与真实客户端一致的串流流量，日志中会记录本次<strong>已串流</strong>的数据量。服务器不提供直连播放时会退回转码地址（含
+                    HLS），并在日志中标注<strong>转码</strong>；完全无法拉流时，日志会写明原因而不是只显示
+                    0 MB。注意：单次运行可能消耗数百 MB 至数 GB 下行流量。
                   </td>
                 </tr>
                 <tr>
@@ -1403,8 +1404,12 @@
                     pulled from the Emby server at real playback pace (direct
                     play), so the server records genuine streaming traffic like a
                     real client; the log stores how much was
-                    <strong>Streamed</strong>. Note: a single run can use
-                    hundreds of MB to several GB of download bandwidth.
+                    <strong>Streamed</strong>. When the server offers no direct
+                    play it falls back to the transcode stream (including HLS)
+                    and the log marks it <strong>transcoded</strong>; when no
+                    bytes can be pulled at all, the log states why instead of
+                    just showing 0 MB. Note: a single run can use hundreds of MB
+                    to several GB of download bandwidth.
                   </td>
                 </tr>
                 <tr>

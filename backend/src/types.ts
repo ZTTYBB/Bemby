@@ -262,6 +262,16 @@ export type EmbywatchConfig = {
   library?: string;
 };
 
+/**
+ * Why Real Watch pulled no bytes, when the toggle was on. Recorded so a run that
+ * streamed nothing explains itself instead of just showing 0 MB.
+ */
+export type RealWatchNote =
+  /** No direct-play, direct-stream or transcode URL the server would serve. */
+  | 'no-stream-url'
+  /** A stream URL resolved, but every ranged read failed. */
+  | 'stream-failed';
+
 // One played item within a run (a single episode/movie segment).
 export type EmbywatchEpisode = {
   itemType: string;
@@ -275,6 +285,9 @@ export type EmbywatchEpisode = {
   watchedSeconds: number;
   markedWatched: boolean;
   streamedBytes?: number;
+  realWatchNote?: RealWatchNote;
+  /** True when the bytes came from the transcode fallback, not direct play. */
+  realWatchTranscoded?: boolean;
 };
 
 export type EmbywatchLog = EmbywatchEpisode & {
