@@ -1,7 +1,7 @@
 import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
 import { lookup } from 'node:dns';
 import { db } from '../db/database';
-import type { EmbywatchConfig, EmbywatchLog } from '../types';
+import type { EmbywatchConfig, EmbywatchEpisode, EmbywatchLog } from '../types';
 import { expandCommand } from './checkin';
 
 // Per-username cache of the expanded device name. Persisting it keeps random
@@ -62,6 +62,33 @@ function getSetting(key: string): string | undefined {
   return row?.value;
 }
 
+// Job cancellation. The runner reports a job as "Cancelled" only when the error
+// message is exactly this, so every abort path must surface it.
+const CANCELLED = 'Job cancelled';
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error(CANCELLED);
+}
+
+/** setTimeout that rejects immediately when the job is cancelled. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error(CANCELLED));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error(CANCELLED));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 // Emby's dashboard shows the session's app name/version from the Client and
 // Version fields of X-Emby-Authorization, not the HTTP User-Agent. Derive them
 // from the chosen UA so a custom preset (e.g. "CapyPlayer/1.0") is reflected in
@@ -92,7 +119,19 @@ function buildAuthHeader(deviceName: string, ua: string, token?: string): string
 async function embyRequest<T = any>(
   baseUrl: string,
   path: string,
-  opts: { method?: string; token?: string; ua: string; deviceName: string; body?: unknown; proxyUrl?: string; signal?: AbortSignal }
+  // `signal` aborts the request itself (e.g. a timeout); `cancelSignal` is the
+  // job's cancellation signal and additionally maps the abort to a Job cancelled
+  // error so the runner records the run as Cancelled rather than unreachable.
+  opts: {
+    method?: string;
+    token?: string;
+    ua: string;
+    deviceName: string;
+    body?: unknown;
+    proxyUrl?: string;
+    signal?: AbortSignal;
+    cancelSignal?: AbortSignal;
+  }
 ): Promise<T> {
   const url = `${baseUrl.replace(/\/$/, '')}${path}`;
   const method = opts.method ?? 'GET';
@@ -104,16 +143,19 @@ async function embyRequest<T = any>(
   };
   const body = opts.body != null ? JSON.stringify(opts.body) : undefined;
 
+  throwIfAborted(opts.cancelSignal);
+
   let res: Response;
   try {
     res = await undiciFetch(url, {
       method,
       headers,
       body,
-      signal: opts.signal,
+      signal: opts.signal ?? opts.cancelSignal,
       dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
     } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
   } catch (err: any) {
+    throwIfAborted(opts.cancelSignal);
     // Network-level failure (ECONNREFUSED, ENOTFOUND, timeout, etc.)
     const cause = err?.cause?.message ?? err?.cause?.code ?? '';
     throw new Error(`Cannot reach Emby server at ${url}${cause ? ` — ${cause}` : ''}`);
@@ -176,6 +218,16 @@ export async function testEmbyConnection(
   }
 }
 
+// Everything needed to reach the Emby media endpoints as the logged-in user.
+type MediaOpts = {
+  token: string;
+  ua: string;
+  userId: string;
+  deviceName: string;
+  proxyUrl?: string;
+  signal?: AbortSignal;
+};
+
 // Number of random items to try before giving up when verifying playability.
 const MAX_PICK_ATTEMPTS = 5;
 // Byte range fetched to confirm the media file is actually readable.
@@ -185,7 +237,7 @@ const PROBE_RANGE_BYTES = 65_535;
  * Fetch the first bytes of a stream URL, as a real player would.
  * A readable file yields 206 (partial) or 200 with body bytes.
  */
-async function probeStream(url: string, opts: { ua: string; proxyUrl?: string }): Promise<boolean> {
+async function probeStream(url: string, opts: { ua: string; proxyUrl?: string; signal?: AbortSignal }): Promise<boolean> {
   try {
     const res = (await undiciFetch(url, {
       method: 'GET',
@@ -193,6 +245,7 @@ async function probeStream(url: string, opts: { ua: string; proxyUrl?: string })
         'User-Agent': opts.ua,
         Range: `bytes=0-${PROBE_RANGE_BYTES}`,
       },
+      signal: opts.signal,
       dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
     } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
 
@@ -203,6 +256,8 @@ async function probeStream(url: string, opts: { ua: string; proxyUrl?: string })
     const buf = await res.arrayBuffer();
     return buf.byteLength > 0;
   } catch {
+    // A cancelled job must abort, not be read as an unplayable item
+    throwIfAborted(opts.signal);
     // Network-level failure reaching the stream, treat as unavailable
     return false;
   }
@@ -218,7 +273,7 @@ async function getClientStreamUrl(
   baseUrl: string,
   itemId: string,
   mediaSourceId: string,
-  opts: { token: string; ua: string; userId: string; deviceName: string; proxyUrl?: string }
+  opts: MediaOpts & { directOnly?: boolean }
 ): Promise<string | undefined> {
   try {
     const info = await embyRequest<any>(baseUrl, `/Items/${itemId}/PlaybackInfo?UserId=${opts.userId}`, {
@@ -227,15 +282,20 @@ async function getClientStreamUrl(
       token: opts.token,
       deviceName: opts.deviceName,
       proxyUrl: opts.proxyUrl,
+      cancelSignal: opts.signal,
       body: { DeviceProfile: { MaxStreamingBitrate: 140_000_000 } },
     });
     const sources: any[] = info?.MediaSources ?? [];
     const source = sources.find(s => s.Id === mediaSourceId) ?? sources[0];
-    const path: string | undefined = source?.DirectStreamUrl ?? source?.TranscodingUrl ?? undefined;
+    // directOnly avoids the TranscodingUrl fallback so Real Watch stays direct play
+    const path: string | undefined = opts.directOnly
+      ? source?.DirectStreamUrl
+      : (source?.DirectStreamUrl ?? source?.TranscodingUrl ?? undefined);
     if (!path) return undefined;
     if (/^https?:\/\//i.test(path)) return path;
     return `${baseUrl.replace(/\/$/, '')}${path.startsWith('/') ? '' : '/'}${path}`;
   } catch {
+    throwIfAborted(opts.signal);
     // PlaybackInfo unsupported or failed, caller falls back to the static URL
     return undefined;
   }
@@ -251,7 +311,7 @@ async function isMediaAvailable(
   baseUrl: string,
   itemId: string,
   mediaSourceId: string,
-  opts: { token: string; ua: string; userId: string; deviceName: string; proxyUrl?: string }
+  opts: MediaOpts
 ): Promise<boolean> {
   // Prefer the URL a real client would play; proxies that offload streaming
   // to another host often only route this form
@@ -268,7 +328,635 @@ async function isMediaAvailable(
   return probeStream(staticUrl, opts);
 }
 
-export async function runEmbywatch(serverUrl: string, config: EmbywatchConfig): Promise<EmbywatchLog> {
+function appendParam(url: string, key: string, value: string): string {
+  return `${url}${url.includes('?') ? '&' : '?'}${key}=${encodeURIComponent(value)}`;
+}
+
+// Static direct-play stream URL, tied to the play session so the byte transfer
+// registers against the reported Now Playing session on the Emby dashboard.
+function buildStaticStreamUrl(
+  baseUrl: string,
+  itemId: string,
+  mediaSourceId: string,
+  opts: { token: string; playSessionId: string; deviceId: string }
+): string {
+  const params = new URLSearchParams({
+    static: 'true',
+    mediaSourceId,
+    api_key: opts.token,
+    PlaySessionId: opts.playSessionId,
+    DeviceId: opts.deviceId,
+  });
+  return `${baseUrl.replace(/\/$/, '')}/Videos/${itemId}/stream?${params.toString()}`;
+}
+
+// Learn the total file size from a 1-byte ranged request, so we can map a
+// playback position to a byte offset when the item metadata lacks Size/Bitrate.
+async function probeStreamSize(url: string, opts: { ua: string; proxyUrl?: string; signal?: AbortSignal }): Promise<number> {
+  try {
+    const res = (await undiciFetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': opts.ua, Range: 'bytes=0-0' },
+      signal: opts.signal,
+      dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+    } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
+    const contentRange = res.headers.get('content-range');
+    const contentLength = res.headers.get('content-length');
+    await res.body?.cancel?.();
+    if (contentRange) {
+      const m = /\/(\d+)\s*$/.exec(contentRange);
+      if (m) return Number(m[1]);
+    }
+    if (res.status === 200 && contentLength) return Number(contentLength);
+    return 0;
+  } catch {
+    throwIfAborted(opts.signal);
+    return 0;
+  }
+}
+
+// Resolve the URL Real Watch streams from. Prefer the static direct-play route;
+// fall back to the direct-stream URL PlaybackInfo advertises for setups where a
+// proxy only routes that form.
+async function resolveRealStreamUrl(
+  baseUrl: string,
+  itemId: string,
+  mediaSourceId: string,
+  opts: MediaOpts & { playSessionId: string; deviceId: string }
+): Promise<{ url: string; size: number } | undefined> {
+  const staticUrl = buildStaticStreamUrl(baseUrl, itemId, mediaSourceId, opts);
+  const staticSize = await probeStreamSize(staticUrl, opts);
+  if (staticSize > 0) return { url: staticUrl, size: staticSize };
+
+  const direct = await getClientStreamUrl(baseUrl, itemId, mediaSourceId, { ...opts, directOnly: true });
+  if (!direct) return undefined;
+  const url = /PlaySessionId=/.test(direct) ? direct : appendParam(direct, 'PlaySessionId', opts.playSessionId);
+  return { url, size: await probeStreamSize(url, opts) };
+}
+
+// Download a byte range at real playback pace and discard it. Reading the body
+// generates the same streaming traffic a real player would, without buffering
+// the whole chunk in memory.
+async function drainRange(
+  url: string,
+  start: number,
+  end: number,
+  opts: { ua: string; proxyUrl?: string; signal?: AbortSignal }
+): Promise<number> {
+  const res = (await undiciFetch(url, {
+    method: 'GET',
+    headers: { 'User-Agent': opts.ua, Range: `bytes=${start}-${end}` },
+    signal: opts.signal,
+    dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+  } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
+
+  if (res.status !== 200 && res.status !== 206) {
+    await res.body?.cancel?.();
+    throw new Error(`stream returned ${res.status}`);
+  }
+  let bytes = 0;
+  const reader = res.body?.getReader?.();
+  if (reader) {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) bytes += value.byteLength;
+    }
+  }
+  return bytes;
+}
+
+// A single playable unit: the raw Emby item plus the ids/runtime we need.
+type Segment = { item: any; itemId: string; mediaSourceId: string; runtimeSeconds: number };
+
+type PlayCtx = {
+  token: string;
+  ua: string;
+  userId: string;
+  deviceName: string;
+  proxyUrl?: string;
+  playSessionId: string;
+  realWatch: boolean;
+  signal?: AbortSignal;
+};
+
+function toSegment(candidate: any): Segment {
+  const itemId: string = candidate.Id;
+  return {
+    item: candidate,
+    itemId,
+    mediaSourceId: candidate.MediaSources?.[0]?.Id ?? itemId,
+    runtimeSeconds: candidate.RunTimeTicks ? Math.floor(candidate.RunTimeTicks / TICKS_PER_SECOND) : 0,
+  };
+}
+
+function reqOpts(ctx: PlayCtx) {
+  return { ua: ctx.ua, token: ctx.token, deviceName: ctx.deviceName, proxyUrl: ctx.proxyUrl, cancelSignal: ctx.signal };
+}
+
+function mediaOpts(ctx: PlayCtx): MediaOpts {
+  return { token: ctx.token, ua: ctx.ua, userId: ctx.userId, deviceName: ctx.deviceName, proxyUrl: ctx.proxyUrl, signal: ctx.signal };
+}
+
+/** POST /Sessions/Playing → progress loop (+ Real Watch byte streaming) → /Sessions/Playing/Stopped. */
+async function playSegment(
+  serverUrl: string,
+  ctx: PlayCtx,
+  seg: Segment,
+  startSeconds: number,
+  watchSeconds: number,
+): Promise<{ streamedBytes: number }> {
+  const { itemId, mediaSourceId, item, runtimeSeconds } = seg;
+  const startTicks = startSeconds * TICKS_PER_SECOND;
+
+  await embyRequest(serverUrl, '/Sessions/Playing', {
+    method: 'POST',
+    ...reqOpts(ctx),
+    body: {
+      ItemId: itemId,
+      MediaSourceId: mediaSourceId,
+      PlaySessionId: ctx.playSessionId,
+      PositionTicks: startTicks,
+      IsPaused: false,
+      CanSeek: true,
+    },
+  });
+
+  // Real Watch: resolve a direct-play stream and the byte-per-second rate so each
+  // interval can pull the media bytes a real client would, in step with the
+  // reported position. Disabled gracefully if the rate can't be determined.
+  let streamedBytes = 0;
+  let streamUrl: string | undefined;
+  let bytesPerSecond = 0;
+  let fileSize = 0;
+  if (ctx.realWatch) {
+    const source = item.MediaSources?.[0];
+    bytesPerSecond =
+      Number(source?.Size) > 0 && runtimeSeconds > 0
+        ? Number(source.Size) / runtimeSeconds
+        : Number(source?.Bitrate) > 0
+          ? Number(source.Bitrate) / 8
+          : 0;
+    fileSize = Number(source?.Size) || 0;
+    const deviceId = ctx.deviceName.replace(/\s+/g, '-');
+    const resolved = await resolveRealStreamUrl(serverUrl, itemId, mediaSourceId, {
+      ...mediaOpts(ctx),
+      playSessionId: ctx.playSessionId,
+      deviceId,
+    });
+    if (resolved) {
+      streamUrl = resolved.url;
+      if (resolved.size > 0) fileSize = resolved.size;
+      if (bytesPerSecond === 0 && fileSize > 0 && runtimeSeconds > 0) bytesPerSecond = fileSize / runtimeSeconds;
+    }
+    if (!streamUrl || bytesPerSecond === 0 || fileSize === 0) {
+      console.warn('[embywatch] Real Watch: could not resolve a streamable direct-play URL/bitrate, streaming disabled for this segment');
+      streamUrl = undefined;
+    } else {
+      console.log(`[embywatch] Real Watch — ~${Math.round((bytesPerSecond * 8) / 1000)} kbps direct stream for "${item.Name}"`);
+    }
+  }
+
+  const offsetAt = (sec: number): number =>
+    fileSize > 0 && bytesPerSecond > 0 ? Math.min(fileSize - 1, Math.max(0, Math.floor(sec * bytesPerSecond))) : 0;
+
+  let elapsed = 0;
+  try {
+    while (elapsed < watchSeconds) {
+      const wait = Math.min(PROGRESS_INTERVAL_S, watchSeconds - elapsed);
+
+      if (streamUrl) {
+        // Pull this interval's byte window while waiting, so real streaming
+        // traffic tracks the reported position like an actual player.
+        const rangeStart = offsetAt(startSeconds + elapsed);
+        const rangeEnd = Math.max(rangeStart, offsetAt(startSeconds + elapsed + wait) - 1);
+        await Promise.all([
+          sleep(wait * 1000, ctx.signal),
+          drainRange(streamUrl, rangeStart, rangeEnd, { ua: ctx.ua, proxyUrl: ctx.proxyUrl, signal: ctx.signal })
+            .then(b => {
+              streamedBytes += b;
+            })
+            .catch(e => {
+              if (ctx.signal?.aborted) return; // cancellation surfaces via sleep
+              console.warn('[embywatch] Real Watch stream chunk failed:', e?.message ?? e);
+            }),
+        ]);
+      } else {
+        await sleep(wait * 1000, ctx.signal);
+      }
+      elapsed += wait;
+
+      await embyRequest(serverUrl, '/Sessions/Playing/Progress', {
+        method: 'POST',
+        ...reqOpts(ctx),
+        body: {
+          ItemId: itemId,
+          MediaSourceId: mediaSourceId,
+          PlaySessionId: ctx.playSessionId,
+          PositionTicks: startTicks + elapsed * TICKS_PER_SECOND,
+          IsPaused: false,
+        },
+      });
+    }
+  } catch (err) {
+    // Cancelled (or failed) mid-playback: still tell Emby we stopped, otherwise
+    // the session lingers in Now Playing until the server times it out.
+    await reportStopped(serverUrl, ctx, seg, startSeconds + elapsed).catch(() => {});
+    throw err;
+  }
+
+  await reportStopped(serverUrl, ctx, seg, startSeconds + watchSeconds);
+
+  return { streamedBytes };
+}
+
+// The Stopped report deliberately ignores the job's cancel signal — it is the
+// cleanup for a cancelled run, so it gets its own timeout instead.
+const STOP_REPORT_TIMEOUT_MS = 10_000;
+
+async function reportStopped(serverUrl: string, ctx: PlayCtx, seg: Segment, positionSeconds: number): Promise<void> {
+  await embyRequest(serverUrl, '/Sessions/Playing/Stopped', {
+    method: 'POST',
+    ua: ctx.ua,
+    token: ctx.token,
+    deviceName: ctx.deviceName,
+    proxyUrl: ctx.proxyUrl,
+    signal: AbortSignal.timeout(STOP_REPORT_TIMEOUT_MS),
+    body: {
+      ItemId: seg.itemId,
+      MediaSourceId: seg.mediaSourceId,
+      PlaySessionId: ctx.playSessionId,
+      PositionTicks: positionSeconds * TICKS_PER_SECOND,
+    },
+  });
+}
+
+async function markPlayed(serverUrl: string, ctx: PlayCtx, itemId: string): Promise<boolean> {
+  try {
+    await embyRequest(serverUrl, `/Users/${ctx.userId}/PlayedItems/${itemId}`, { method: 'POST', ...reqOpts(ctx) });
+    return true;
+  } catch (e) {
+    throwIfAborted(ctx.signal);
+    console.warn('[embywatch] Failed to mark item as watched:', e);
+    return false;
+  }
+}
+
+/** First streamable segment from a candidate list, honouring verifyPlayable. */
+async function firstPlayable(
+  serverUrl: string,
+  ctx: PlayCtx,
+  candidates: any[],
+  verifyPlayable: boolean,
+): Promise<Segment | undefined> {
+  for (const candidate of candidates) {
+    throwIfAborted(ctx.signal);
+    const seg = toSegment(candidate);
+    if (!verifyPlayable || (await isMediaAvailable(serverUrl, seg.itemId, seg.mediaSourceId, mediaOpts(ctx)))) {
+      return seg;
+    }
+    console.warn(`[embywatch] "${candidate.Name}" is not streamable — trying another item`);
+  }
+  return undefined;
+}
+
+/**
+ * Resolve a configured library (name or 1-based index) to its Emby id. Returns
+ * undefined when blank or unmatched, so callers fall back to the whole server.
+ */
+async function resolveLibraryId(serverUrl: string, ctx: PlayCtx, library?: string): Promise<string | undefined> {
+  const raw = (library ?? '').trim();
+  if (!raw) return undefined;
+  try {
+    const views = await embyRequest<any>(serverUrl, `/Users/${ctx.userId}/Views`, reqOpts(ctx));
+    const items: any[] = views.Items ?? [];
+    // Name match first, so a library literally named "4" wins over index 4.
+    const byName = items.find(v => (v.Name ?? '').trim().toLowerCase() === raw.toLowerCase());
+    if (byName) return byName.Id;
+    if (/^\d+$/.test(raw)) {
+      const idx = Number(raw) - 1; // 1-based
+      if (idx >= 0 && idx < items.length) return items[idx].Id;
+    }
+    console.warn(`[embywatch] Library "${raw}" not found — using the whole server`);
+    return undefined;
+  } catch (e) {
+    throwIfAborted(ctx.signal);
+    console.warn('[embywatch] Failed to list libraries, using the whole server:', e);
+    return undefined;
+  }
+}
+
+// Library scoping notes: some servers (and ID-aliasing proxies) ignore ParentId
+// on Resume/NextUp and on any item-selector query (Ids, SearchTerm, Filters), and
+// won't recurse to Episodes under a library. Only plain ParentId *browsing* of a
+// library's Series/Movies is reliable. So we never enumerate the whole library
+// (that reads like scraping) — we take a small random sample to pick from, and
+// scoped resume returns only in-library resumables (or nothing), never the global
+// Continue Watching list.
+const LIBRARY_SAMPLE_SIZE = 12;
+
+async function available(serverUrl: string, ctx: PlayCtx, seg: Segment): Promise<boolean> {
+  return isMediaAvailable(serverUrl, seg.itemId, seg.mediaSourceId, mediaOpts(ctx));
+}
+
+/** A bounded random sample of a library's Series/Movies (no full enumeration). */
+async function librarySample(serverUrl: string, ctx: PlayCtx, parentId: string, limit: number): Promise<any[]> {
+  try {
+    const page = await embyRequest<any>(
+      serverUrl,
+      `/Users/${ctx.userId}/Items?ParentId=${parentId}&Recursive=true&IncludeItemTypes=Series,Movie&SortBy=Random&Limit=${limit}&Fields=MediaSources,RunTimeTicks`,
+      reqOpts(ctx),
+    );
+    return page.Items ?? [];
+  } catch {
+    throwIfAborted(ctx.signal);
+    return [];
+  }
+}
+
+/** Expand a library member to a segment: a Series → a random episode; a Movie as-is. */
+async function memberToSegment(serverUrl: string, ctx: PlayCtx, member: any): Promise<Segment | undefined> {
+  if (member.Type !== 'Series') return toSegment(member);
+  const eps = await embyRequest<any>(serverUrl, `/Shows/${member.Id}/Episodes?UserId=${ctx.userId}&Fields=MediaSources,RunTimeTicks`, reqOpts(ctx));
+  const list: any[] = eps.Items ?? [];
+  if (!list.length) return undefined;
+  return toSegment(list[Math.floor(Math.random() * list.length)]);
+}
+
+// Pick a random streamable segment from within a library, using a bounded sample.
+async function pickRandomFromLibrary(serverUrl: string, ctx: PlayCtx, parentId: string, verifyPlayable: boolean): Promise<Segment | undefined> {
+  const sample = await librarySample(serverUrl, ctx, parentId, LIBRARY_SAMPLE_SIZE);
+  const maxAttempts = Math.min(sample.length, verifyPlayable ? MAX_PICK_ATTEMPTS : 1);
+  const tried = new Set<number>();
+  for (let attempt = 0; attempt < maxAttempts && tried.size < sample.length; attempt++) {
+    throwIfAborted(ctx.signal);
+    let idx = Math.floor(Math.random() * sample.length);
+    while (tried.has(idx)) idx = (idx + 1) % sample.length;
+    tried.add(idx);
+    const seg = await memberToSegment(serverUrl, ctx, sample[idx]);
+    if (!seg) continue;
+    if (!verifyPlayable || (await available(serverUrl, ctx, seg))) return seg;
+    console.warn(`[embywatch] "${seg.item.Name}" is not streamable — trying another library item`);
+  }
+  return undefined;
+}
+
+// Library membership for a resume candidate. The primary signal is the item's
+// Ancestors chain: real Emby servers return it with the library's CollectionFolder
+// (view) id, even though the physical ParentId chain runs through separate folders
+// (Series -> letter folder -> disk folder -> root), so "series ParentId == view id"
+// never matches there. Falls back to the series' ParentId for aliasing proxies that
+// flatten the hierarchy and 404 on Ancestors. Bounded: at most one lookup per series
+// (episodes of a series share the same ancestors), cached across the resume list.
+async function ancestorsIncludeLibrary(serverUrl: string, ctx: PlayCtx, itemId: string, libraryId: string): Promise<boolean> {
+  try {
+    const anc = await embyRequest<any>(serverUrl, `/Items/${itemId}/Ancestors?UserId=${ctx.userId}`, reqOpts(ctx));
+    return Array.isArray(anc) && anc.some((a: any) => a?.Id === libraryId);
+  } catch {
+    throwIfAborted(ctx.signal);
+    return false;
+  }
+}
+
+async function seriesParentId(serverUrl: string, ctx: PlayCtx, seriesId: string): Promise<string | undefined> {
+  try {
+    const s = await embyRequest<any>(serverUrl, `/Users/${ctx.userId}/Items/${seriesId}?Fields=ParentId`, reqOpts(ctx));
+    return s?.ParentId;
+  } catch {
+    throwIfAborted(ctx.signal);
+    return undefined;
+  }
+}
+
+async function itemInLibrary(serverUrl: string, ctx: PlayCtx, item: any, libraryId: string, cache: Map<string, boolean>): Promise<boolean> {
+  if (!item) return false;
+  if (item.ParentId === libraryId) return true; // movie/series directly under the view
+  const key = item.Type === 'Episode' ? (item.SeriesId ?? item.Id) : item.Id;
+  if (cache.has(key)) return cache.get(key) as boolean;
+  let inLib = await ancestorsIncludeLibrary(serverUrl, ctx, item.Id, libraryId);
+  if (!inLib) {
+    const seriesId = item.Type === 'Episode' ? item.SeriesId : item.Id;
+    if (seriesId) inLib = (await seriesParentId(serverUrl, ctx, seriesId)) === libraryId;
+  }
+  cache.set(key, inLib);
+  return inLib;
+}
+
+// In-library resume: the global Continue Watching list (which the proxy returns
+// unscoped) filtered to the target library by each item's series ParentId. This
+// is what lets us resume the right in-library show without scanning the library.
+async function libraryResumeSegment(serverUrl: string, ctx: PlayCtx, parentId: string, verifyPlayable: boolean): Promise<Segment | undefined> {
+  let res: any;
+  try {
+    res = await embyRequest<any>(
+      serverUrl,
+      `/Users/${ctx.userId}/Items/Resume?Limit=25&MediaTypes=Video&Recursive=true&Fields=MediaSources,RunTimeTicks,UserData,ParentId,SeriesId`,
+      reqOpts(ctx),
+    );
+  } catch {
+    throwIfAborted(ctx.signal);
+    return undefined;
+  }
+  const cache = new Map<string, boolean>();
+  for (const cand of res.Items ?? []) {
+    throwIfAborted(ctx.signal);
+    if (Number(cand.UserData?.PlaybackPositionTicks) <= 0) continue;
+    if (!(await itemInLibrary(serverUrl, ctx, cand, parentId, cache))) continue;
+    const seg = toSegment(cand);
+    if (!verifyPlayable || (await available(serverUrl, ctx, seg))) return seg;
+  }
+  return undefined;
+}
+
+/** Random streamable item (existing behaviour), retried up to MAX_PICK_ATTEMPTS. */
+async function pickRandomSegment(serverUrl: string, ctx: PlayCtx, verifyPlayable: boolean, parentId?: string): Promise<Segment | undefined> {
+  const attempts = verifyPlayable ? MAX_PICK_ATTEMPTS : 1;
+  const scope = parentId ? `&ParentId=${parentId}` : '';
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const items = await embyRequest<any>(
+      serverUrl,
+      `/Users/${ctx.userId}/Items?SortBy=Random&Limit=1&IncludeItemTypes=Episode,Movie&Recursive=true&Fields=MediaSources,RunTimeTicks${scope}`,
+      reqOpts(ctx),
+    );
+    if (!items.Items?.length) return undefined;
+    const seg = toSegment(items.Items[0]);
+    if (!verifyPlayable || (await isMediaAvailable(serverUrl, seg.itemId, seg.mediaSourceId, mediaOpts(ctx)))) {
+      return seg;
+    }
+    console.warn(`[embywatch] "${seg.item.Name}" is not streamable (attempt ${attempt}/${attempts}) — trying another item`);
+  }
+  return undefined;
+}
+
+/** The next episode in the series after `item`, or undefined at the series end. */
+async function getNextEpisode(serverUrl: string, ctx: PlayCtx, item: any, verifyPlayable: boolean): Promise<Segment | undefined> {
+  if (item.Type !== 'Episode' || !item.SeriesId) return undefined;
+  const eps = await embyRequest<any>(serverUrl, `/Shows/${item.SeriesId}/Episodes?UserId=${ctx.userId}&Fields=MediaSources,RunTimeTicks`, reqOpts(ctx));
+  const list: any[] = eps.Items ?? [];
+  const idx = list.findIndex(e => e.Id === item.Id);
+  if (idx < 0 || idx + 1 >= list.length) return undefined;
+  const next = toSegment(list[idx + 1]);
+  if (verifyPlayable && !(await isMediaAvailable(serverUrl, next.itemId, next.mediaSourceId, mediaOpts(ctx)))) {
+    return undefined;
+  }
+  return next;
+}
+
+// Bound the chain so a bad runtime/position can never loop forever.
+const MAX_SEQUENCE_SEGMENTS = 30;
+
+/**
+ * Sequence Play: resume where the user left off (Emby "Continue Watching"),
+ * else the next unwatched episode (Next Up), else a random item; then keep
+ * playing the next episode each time one finishes until the play duration is
+ * used up. An episode is marked watched only when it actually reaches the end,
+ * so a partially-watched item stays in the resume list for next time.
+ */
+async function runSequencePlay(
+  serverUrl: string,
+  ctx: PlayCtx,
+  config: EmbywatchConfig,
+  opts: { playDuration: number; verifyPlayable: boolean; parentId?: string },
+): Promise<EmbywatchLog> {
+  const { playDuration, verifyPlayable, parentId } = opts;
+
+  const asResume = (seg: Segment): { seg: Segment; start: number } => {
+    const posTicks = Number(seg.item.UserData?.PlaybackPositionTicks) || 0;
+    const start = posTicks > 0 ? Math.floor(posTicks / TICKS_PER_SECOND) : 0;
+    console.log(`[embywatch] Sequence Play: resuming "${seg.item.Name}" at ${start}s`);
+    return { seg, start };
+  };
+  const asRandom = (seg: Segment, label: string): { seg: Segment; start: number } => {
+    const start = seg.runtimeSeconds > 0 ? Math.floor(seg.runtimeSeconds * (0.05 + Math.random() * 0.05)) : 0;
+    console.log(`[embywatch] Sequence Play: ${label} "${seg.item.Name}" from ${start}s`);
+    return { seg, start };
+  };
+
+  // Pick within the library (bounded, no full scan). Resume is scoped and only
+  // kept when it has a real playback position; otherwise start a random title.
+  const pickInLibrary = async (lib: string): Promise<{ seg: Segment; start: number } | undefined> => {
+    const resumeSeg = await libraryResumeSegment(serverUrl, ctx, lib, verifyPlayable);
+    if (resumeSeg) return asResume(resumeSeg);
+    const seg = await pickRandomFromLibrary(serverUrl, ctx, lib, verifyPlayable);
+    return seg ? asRandom(seg, 'nothing to resume, random from library') : undefined;
+  };
+
+  // Whole-server selection (no library scope): resume → next up → random.
+  const pickWholeServer = async (): Promise<{ seg: Segment; start: number } | undefined> => {
+    const resume = await embyRequest<any>(
+      serverUrl,
+      `/Users/${ctx.userId}/Items/Resume?Limit=10&MediaTypes=Video&Recursive=true&Fields=MediaSources,RunTimeTicks`,
+      reqOpts(ctx),
+    );
+    let seg = await firstPlayable(serverUrl, ctx, resume.Items ?? [], verifyPlayable);
+    if (seg) return asResume(seg);
+    const nextUp = await embyRequest<any>(serverUrl, `/Shows/NextUp?UserId=${ctx.userId}&Limit=10&Fields=MediaSources,RunTimeTicks`, reqOpts(ctx));
+    seg = await firstPlayable(serverUrl, ctx, nextUp.Items ?? [], verifyPlayable);
+    if (seg) {
+      console.log(`[embywatch] Sequence Play: starting Next Up "${seg.item.Name}"`);
+      return { seg, start: 0 };
+    }
+    seg = await pickRandomSegment(serverUrl, ctx, verifyPlayable);
+    return seg ? asRandom(seg, 'nothing to resume, random') : undefined;
+  };
+
+  let started = parentId ? await pickInLibrary(parentId) : await pickWholeServer();
+  // If the chosen library has nothing to play, fall back to the whole server.
+  if (!started && parentId) {
+    console.warn('[embywatch] Sequence Play: library has nothing to play — falling back to the whole server');
+    started = await pickWholeServer();
+  }
+  if (!started) {
+    throw new Error('No streamable items found on Emby server — media may be offline (disk down); skipped reporting');
+  }
+  let cur: Segment | undefined = started.seg;
+  let curStart = started.start;
+
+  let budget = Math.floor(playDuration * (1 + Math.random() * 0.1));
+  let totalStreamed = 0;
+  let episodesCompleted = 0;
+  const episodes: EmbywatchEpisode[] = [];
+
+  for (let i = 0; i < MAX_SEQUENCE_SEGMENTS && cur && budget > 0; i++) {
+    throwIfAborted(ctx.signal);
+    const rt = cur.runtimeSeconds;
+    const episodeRemaining = rt > 0 ? Math.max(0, rt - curStart) : budget;
+    const watchSeconds = Math.min(budget, episodeRemaining);
+
+    let segStreamed = 0;
+    if (watchSeconds > 0) {
+      console.log(`[embywatch] Watching "${cur.item.Name}" (${cur.item.Type}) from ${curStart}s for ${watchSeconds}s`);
+      const played = await playSegment(serverUrl, ctx, cur, curStart, watchSeconds);
+      segStreamed = played.streamedBytes;
+      totalStreamed += segStreamed;
+    }
+
+    const end = curStart + watchSeconds;
+    const finished = rt > 0 && end >= Math.floor(rt * 0.99);
+    budget -= watchSeconds;
+
+    // Mark watched only when the episode actually reached its end.
+    let marked = false;
+    if (finished && config.markWatched !== false) marked = await markPlayed(serverUrl, ctx, cur.itemId);
+    if (finished) episodesCompleted++;
+
+    // Record every segment that actually played (skip zero-length resume-at-end hops).
+    if (watchSeconds > 0) {
+      episodes.push({
+        itemType: cur.item.Type ?? 'Unknown',
+        title: cur.item.Name ?? 'Unknown',
+        seriesName: cur.item.SeriesName,
+        seasonNumber: cur.item.ParentIndexNumber,
+        episodeNumber: cur.item.IndexNumber,
+        runtimeSeconds: rt,
+        startSeconds: curStart,
+        endSeconds: end,
+        watchedSeconds: watchSeconds,
+        markedWatched: marked,
+        streamedBytes: ctx.realWatch ? segStreamed : undefined,
+      });
+    }
+
+    if (!finished) break; // budget exhausted mid-item; leave the partial in resume
+    cur = await getNextEpisode(serverUrl, ctx, cur.item, verifyPlayable);
+    curStart = 0;
+  }
+
+  // Fall back to a placeholder entry if nothing ever played (e.g. runtime unknown
+  // and budget 0), so the log always has a top-level item.
+  const totalWatched = episodes.reduce((s, e) => s + e.watchedSeconds, 0);
+  const head = episodes[episodes.length - 1] ?? {
+    itemType: 'Unknown',
+    title: 'Unknown',
+    runtimeSeconds: 0,
+    startSeconds: 0,
+    endSeconds: 0,
+    watchedSeconds: 0,
+    markedWatched: false,
+  };
+
+  if (ctx.realWatch) {
+    console.log(`[embywatch] Real Watch streamed ${(totalStreamed / 1_048_576).toFixed(1)} MB across ${episodes.length} segment(s)`);
+  }
+  console.log(`[embywatch] Sequence Play complete — ${episodes.length} segment(s), ${episodesCompleted} finished, ${totalWatched}s total`);
+
+  return {
+    ...head,
+    // watchedSeconds reflects the whole sequence so the total matches playDuration
+    watchedSeconds: totalWatched,
+    streamedBytes: ctx.realWatch ? totalStreamed : undefined,
+    sequencePlay: true,
+    episodesCompleted,
+    episodes,
+  };
+}
+
+export async function runEmbywatch(
+  serverUrl: string,
+  config: EmbywatchConfig,
+  signal?: AbortSignal,
+): Promise<EmbywatchLog> {
+  throwIfAborted(signal);
   const ua = config.userAgent ?? getSetting('default_ua') ?? DEFAULT_UA;
   const playDuration = config.playDuration ?? Number(getSetting('default_play_duration') ?? 300);
   const deviceName = resolveDeviceName(getSetting('default_device_name') ?? 'Yamby', config.username);
@@ -281,6 +969,7 @@ export async function runEmbywatch(serverUrl: string, config: EmbywatchConfig): 
     ua,
     deviceName,
     proxyUrl,
+    cancelSignal: signal,
     body: { Username: config.username, Pw: config.password },
   });
 
@@ -288,132 +977,63 @@ export async function runEmbywatch(serverUrl: string, config: EmbywatchConfig): 
   const userId: string = auth.User.Id;
   console.log(`[embywatch] Authenticated as "${auth.User.Name}" on ${serverUrl}`);
 
-  // 2. Pick a random video, verifying it's actually streamable before use.
-  // When the disk is down the metadata item still exists, so without this
-  // check we'd report a watch for a file no real client could play.
+  // 2. Build the play context (session id, device, streaming flag).
   const verifyPlayable = config.verifyPlayable !== false;
-  const attempts = verifyPlayable ? MAX_PICK_ATTEMPTS : 1;
+  const ctx: PlayCtx = {
+    token,
+    ua,
+    userId,
+    deviceName,
+    proxyUrl,
+    playSessionId: `bemby-${Date.now()}`,
+    realWatch: config.realWatch === true,
+    signal,
+  };
 
-  let item: any;
-  let itemId = '';
-  let mediaSourceId = '';
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    const items = await embyRequest<any>(
-      serverUrl,
-      `/Users/${userId}/Items?SortBy=Random&Limit=1&IncludeItemTypes=Episode,Movie&Recursive=true&Fields=MediaSources,RunTimeTicks`,
-      { ua, token, deviceName, proxyUrl }
-    );
+  // Optionally scope everything to one library (name or 1-based index).
+  const parentId = await resolveLibraryId(serverUrl, ctx, config.library);
+  if (parentId) console.log(`[embywatch] Scoped to library "${config.library}"`);
 
-    if (!items.Items?.length) throw new Error('No playable items found on Emby server');
-
-    const candidate = items.Items[0];
-    const candidateId: string = candidate.Id;
-    const candidateSourceId: string = candidate.MediaSources?.[0]?.Id ?? candidateId;
-
-    if (!verifyPlayable || (await isMediaAvailable(serverUrl, candidateId, candidateSourceId, { token, ua, userId, deviceName, proxyUrl }))) {
-      item = candidate;
-      itemId = candidateId;
-      mediaSourceId = candidateSourceId;
-      break;
-    }
-
-    console.warn(`[embywatch] "${candidate.Name}" is not streamable (attempt ${attempt}/${attempts}) — trying another item`);
+  // Sequence Play resumes and chains episodes; the default path plays one random item.
+  if (config.sequencePlay === true) {
+    return runSequencePlay(serverUrl, ctx, config, { playDuration, verifyPlayable, parentId });
   }
 
-  if (!item) {
+  // 3. Pick a random streamable item. When the disk is down the metadata item
+  // still exists, so verifying playability avoids reporting an unplayable file.
+  let picked = parentId
+    ? await pickRandomFromLibrary(serverUrl, ctx, parentId, verifyPlayable)
+    : await pickRandomSegment(serverUrl, ctx, verifyPlayable);
+  // If the chosen library has nothing to play, fall back to the whole server.
+  if (!picked && parentId) {
+    console.warn('[embywatch] Library has nothing to play — falling back to the whole server');
+    picked = await pickRandomSegment(serverUrl, ctx, verifyPlayable);
+  }
+  if (!picked) {
     throw new Error('No streamable items found on Emby server — media may be offline (disk down); skipped reporting');
   }
+  const { item, itemId, runtimeSeconds } = picked;
 
-  const playSessionId = `bemby-${Date.now()}`;
+  // 4. Start at a random 5-10% into the item
+  const startSeconds = runtimeSeconds > 0 ? Math.floor(runtimeSeconds * (0.05 + Math.random() * 0.05)) : 0;
 
-  // 3. Calculate start position: random 5-10% into the episode
-  const runtimeSeconds = item.RunTimeTicks ? Math.floor(item.RunTimeTicks / TICKS_PER_SECOND) : 0;
-  const startPct = 0.05 + Math.random() * 0.05;
-  const startSeconds = runtimeSeconds > 0 ? Math.floor(runtimeSeconds * startPct) : 0;
-  const startTicks = startSeconds * TICKS_PER_SECOND;
-
-  // 4. Actual watch duration: playDuration + 0-10% random extra
-  const actualDuration = Math.floor(playDuration * (1 + Math.random() * 0.10));
-  // Cap so we don't overshoot the end of the episode
+  // 5. Watch playDuration + 0-10% jitter, capped so we don't overshoot the end
+  const actualDuration = Math.floor(playDuration * (1 + Math.random() * 0.1));
   const maxWatchable = runtimeSeconds > 0 ? Math.max(0, Math.floor(runtimeSeconds * 0.97) - startSeconds) : Infinity;
   const watchDuration = maxWatchable < Infinity ? Math.min(actualDuration, maxWatchable) : actualDuration;
   const endSeconds = startSeconds + watchDuration;
-  const endTicks = endSeconds * TICKS_PER_SECOND;
 
   console.log(`[embywatch] Watching "${item.Name}" (${item.Type}) from ${startSeconds}s, duration ${watchDuration}s`);
 
-  // 5. Report playback started (from the calculated start position)
-  await embyRequest(serverUrl, '/Sessions/Playing', {
-    method: 'POST',
-    ua,
-    token,
-    deviceName,
-    proxyUrl,
-    body: {
-      ItemId: itemId,
-      MediaSourceId: mediaSourceId,
-      PlaySessionId: playSessionId,
-      PositionTicks: startTicks,
-      IsPaused: false,
-      CanSeek: true,
-    },
-  });
+  const { streamedBytes } = await playSegment(serverUrl, ctx, picked, startSeconds, watchDuration);
 
-  // 6. Send progress every PROGRESS_INTERVAL_S seconds, offset from start position
-  let elapsed = 0;
-  while (elapsed < watchDuration) {
-    const wait = Math.min(PROGRESS_INTERVAL_S, watchDuration - elapsed);
-    await new Promise(r => setTimeout(r, wait * 1000));
-    elapsed += wait;
-
-    await embyRequest(serverUrl, '/Sessions/Playing/Progress', {
-      method: 'POST',
-      ua,
-      token,
-      deviceName,
-      proxyUrl,
-      body: {
-        ItemId: itemId,
-        MediaSourceId: mediaSourceId,
-        PlaySessionId: playSessionId,
-        PositionTicks: startTicks + elapsed * TICKS_PER_SECOND,
-        IsPaused: false,
-      },
-    });
-  }
-
-  // 7. Report stopped at the final position
-  await embyRequest(serverUrl, '/Sessions/Playing/Stopped', {
-    method: 'POST',
-    ua,
-    token,
-    deviceName,
-    proxyUrl,
-    body: {
-      ItemId: itemId,
-      MediaSourceId: mediaSourceId,
-      PlaySessionId: playSessionId,
-      PositionTicks: endTicks,
-    },
-  });
-
-  // 8. Optionally mark the item as watched (enabled by default)
+  // 6. Optionally mark the item as watched (enabled by default)
   let markedWatched = false;
-  if (config.markWatched !== false) {
-    try {
-      await embyRequest(serverUrl, `/Users/${userId}/PlayedItems/${itemId}`, {
-        method: 'POST',
-        ua,
-        token,
-        deviceName,
-        proxyUrl,
-      });
-      markedWatched = true;
-    } catch (e) {
-      console.warn('[embywatch] Failed to mark item as watched:', e);
-    }
-  }
+  if (config.markWatched !== false) markedWatched = await markPlayed(serverUrl, ctx, itemId);
 
+  if (ctx.realWatch) {
+    console.log(`[embywatch] Real Watch streamed ${(streamedBytes / 1_048_576).toFixed(1)} MB for "${item.Name}"`);
+  }
   console.log(`[embywatch] Session complete for "${item.Name}" — marked watched: ${markedWatched}`);
 
   return {
@@ -427,5 +1047,6 @@ export async function runEmbywatch(serverUrl: string, config: EmbywatchConfig): 
     endSeconds,
     watchedSeconds: watchDuration,
     markedWatched,
+    streamedBytes: ctx.realWatch ? streamedBytes : undefined,
   };
 }

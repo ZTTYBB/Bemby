@@ -786,6 +786,82 @@
                     >
                       {{ t("logs.detail.noDetail") }}
                     </div>
+                    <div
+                      v-else-if="
+                        embywatchDetail.episodes &&
+                        embywatchDetail.episodes.length
+                      "
+                      class="emby-detail emby-detail-wide"
+                    >
+                      <!-- Sequence Play: recall every episode watched -->
+                      <div class="emby-title">
+                        {{ t("logs.embyDetail.sequence") }} ·
+                        {{ embywatchDetail.episodes.length }}
+                        <template v-if="embywatchDetail.seriesName">
+                          &nbsp;·&nbsp;{{ embywatchDetail.seriesName }}</template
+                        >
+                      </div>
+                      <div class="emby-episode-label">
+                        {{ t("logs.embyDetail.totalWatched") }}:
+                        {{ fmtSeconds(embywatchDetail.watchedSeconds) }}
+                        <template v-if="embywatchDetail.streamedBytes != null">
+                          &nbsp;·&nbsp;{{ t("logs.embyDetail.streamed") }}:
+                          {{
+                            (embywatchDetail.streamedBytes / 1048576).toFixed(1)
+                          }}
+                          MB
+                        </template>
+                      </div>
+                      <div class="emby-seq-list">
+                        <div
+                          v-for="(epi, idx) in embywatchDetail.episodes"
+                          :key="idx"
+                          class="emby-seq-item"
+                        >
+                          <div class="emby-seq-head">
+                            <span class="emby-seq-index">{{ idx + 1 }}</span>
+                            <span class="emby-seq-name">
+                              <template v-if="epi.seriesName"
+                                >{{ epi.seriesName }} — </template
+                              >{{ epi.title }}
+                              <template v-if="epi.seasonNumber != null">
+                                (S{{
+                                  String(epi.seasonNumber).padStart(2, "0")
+                                }}E{{
+                                  String(epi.episodeNumber ?? 0).padStart(2, "0")
+                                }})
+                              </template>
+                            </span>
+                            <span
+                              class="emby-seq-badge"
+                              :style="
+                                epi.markedWatched
+                                  ? 'color:#065f46'
+                                  : 'color:#991b1b'
+                              "
+                            >
+                              {{
+                                epi.markedWatched
+                                  ? t("logs.embyDetail.yes")
+                                  : t("logs.embyDetail.no")
+                              }}
+                            </span>
+                          </div>
+                          <div class="emby-seq-meta">
+                            {{ fmtSeconds(epi.startSeconds) }} →
+                            {{ fmtSeconds(epi.endSeconds) }}
+                            &nbsp;·&nbsp;{{ t("logs.embyDetail.watched") }}
+                            {{ fmtSeconds(epi.watchedSeconds) }}
+                            <template v-if="epi.streamedBytes != null">
+                              &nbsp;·&nbsp;{{
+                                (epi.streamedBytes / 1048576).toFixed(1)
+                              }}
+                              MB
+                            </template>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                     <div v-else class="emby-detail">
                       <div class="emby-title">
                         <template v-if="embywatchDetail.seriesName"
@@ -858,6 +934,33 @@
                                 ? t("logs.embyDetail.yes")
                                 : t("logs.embyDetail.no")
                             }}
+                          </div>
+                        </div>
+                        <div
+                          v-if="embywatchDetail.streamedBytes != null"
+                          class="emby-stat"
+                        >
+                          <div class="emby-stat-label">
+                            {{ t("logs.embyDetail.streamed") }}
+                          </div>
+                          <div class="emby-stat-value">
+                            {{
+                              (
+                                embywatchDetail.streamedBytes / 1048576
+                              ).toFixed(1)
+                            }}
+                            MB
+                          </div>
+                        </div>
+                        <div
+                          v-if="embywatchDetail.sequencePlay"
+                          class="emby-stat"
+                        >
+                          <div class="emby-stat-label">
+                            {{ t("logs.embyDetail.episodes") }}
+                          </div>
+                          <div class="emby-stat-value">
+                            {{ embywatchDetail.episodesCompleted ?? 0 }}
                           </div>
                         </div>
                       </div>
@@ -1279,6 +1382,64 @@ function fmtSeconds(s: number): string {
   font-size: 16px;
   font-weight: 600;
   color: #1a1a2e;
+  font-variant-numeric: tabular-nums;
+}
+
+.emby-detail-wide {
+  max-width: 640px;
+}
+
+.emby-seq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.emby-seq-item {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.emby-seq-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.emby-seq-index {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #eef1fb;
+  color: #556;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.emby-seq-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a1a2e;
+}
+
+.emby-seq-badge {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.emby-seq-meta {
+  font-size: 11px;
+  color: #888;
+  margin-top: 3px;
+  padding-left: 28px;
   font-variant-numeric: tabular-nums;
 }
 

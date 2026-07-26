@@ -398,6 +398,17 @@ try {
   console.error("[db] account_id migration failed:", e);
 }
 
+// Range support for "run every X days": a nullable upper bound. When set (and
+// greater than run_every_days), each scheduling picks a random interval in
+// [run_every_days, run_every_days_max]. Added after the jobs table rebuild above
+// so its positional `SELECT *` copy isn't broken by an extra column.
+try {
+  db.exec("ALTER TABLE jobs ADD COLUMN run_every_days_max INTEGER");
+} catch {}
+try {
+  db.exec("ALTER TABLE job_templates ADD COLUMN run_every_days_max INTEGER");
+} catch {}
+
 try {
   db.exec(`
     CREATE TABLE IF NOT EXISTS tg_message_cache (

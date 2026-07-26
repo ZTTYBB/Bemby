@@ -178,6 +178,11 @@
                 placeholder="Mozilla/5.0 ..."
               />
             </div>
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.labelLibrary') }}</label>
+              <input v-model.trim="embyCfg.library" class="form-input" type="text" :placeholder="t('jobs.libraryPlaceholder')" />
+              <div style="font-size:11px;color:#aaa;margin-top:4px">{{ t('jobs.libraryHint') }}</div>
+            </div>
             <div class="emby-rules-hint">{{ t('jobs.playbackRulesHint') }}</div>
             <div class="form-group" style="margin-top:4px">
               <label class="form-check">
@@ -193,10 +198,25 @@
               </label>
               <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.verifyPlayableHint') }}</div>
             </div>
+            <div class="form-group" style="margin-top:4px">
+              <label class="form-check">
+                <input v-model="embyCfg.realWatch" type="checkbox" />
+                <span>{{ t('jobs.labelRealWatch') }}</span>
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.realWatchHint') }}</div>
+            </div>
+            <div class="form-group" style="margin-top:4px">
+              <label class="form-check">
+                <input v-model="embyCfg.sequencePlay" type="checkbox" />
+                <span>{{ t('jobs.labelSequencePlay') }}</span>
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.sequencePlayHint') }}</div>
+            </div>
             <div class="form-row">
               <div class="form-group">
                 <label class="form-label">{{ t('jobs.labelRunEveryDays') }}</label>
-                <input v-model.number="form.runEveryDays" class="form-input" type="number" min="1" max="365" style="max-width:120px" />
+                <input v-model.trim="runEveryDaysText" class="form-input" type="text" :placeholder="t('jobs.runEveryDaysPlaceholder')" style="max-width:120px" />
+                <div style="font-size:11px;margin-top:4px" :style="runEveryDaysValid ? 'color:#aaa' : 'color:#991b1b'">{{ t('jobs.runEveryDaysHint') }}</div>
               </div>
               <div class="form-group">
                 <label class="form-label">{{ t('jobs.labelMaxRetries') }}</label>
@@ -1042,7 +1062,23 @@ const form = reactive({
   replyTimeoutMs: 40000,
   retryMax: 5,
   runEveryDays: 1,
+  runEveryDaysMax: null as number | null,
 });
+
+// "Run every days" accepts a single number (7) or a range (7-15). Stored as
+// runEveryDays (min) + runEveryDaysMax; the scheduler rolls a value in-range.
+const runEveryDaysText = ref('1');
+function parseRunEvery(text: string): { min: number; max: number | null } {
+  const m = String(text).trim().match(/^(\d+)\s*(?:-\s*(\d+))?$/);
+  if (!m) return { min: 1, max: null };
+  const min = Math.max(1, parseInt(m[1], 10) || 1);
+  const hi = m[2] != null ? parseInt(m[2], 10) : NaN;
+  return { min, max: Number.isFinite(hi) && hi > min ? hi : null };
+}
+function formatRunEvery(min: number, max: number | null | undefined): string {
+  return max != null && max > min ? `${min}-${max}` : String(min ?? 1);
+}
+const runEveryDaysValid = computed(() => /^\s*\d+\s*(-\s*\d+\s*)?$/.test(runEveryDaysText.value));
 
 type AutoregCfgForm = {
   groupId: string;
@@ -1070,13 +1106,16 @@ function defaultAutoregCfg(): AutoregCfgForm {
 }
 const autoregCfg = reactive<AutoregCfgForm>(defaultAutoregCfg());
 
-const embyCfg = reactive<{ username: string; password: string; playDuration: number | string; userAgent: string; markWatched: boolean; verifyPlayable: boolean }>({
+const embyCfg = reactive<{ username: string; password: string; playDuration: number | string; userAgent: string; markWatched: boolean; verifyPlayable: boolean; realWatch: boolean; sequencePlay: boolean; library: string }>({
   username: '',
   password: '',
   playDuration: '',
   userAgent: '',
   markWatched: true,
   verifyPlayable: true,
+  realWatch: false,
+  sequencePlay: false,
+  library: '',
 });
 const tplProxyId = ref('');
 const embyUaDropdown = ref('');
@@ -1128,7 +1167,7 @@ function onUaDropdownChange() {
 }
 
 function onJobTypeChange() {
-  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
   tplProxyId.value = '';
@@ -1210,6 +1249,9 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
     if (embyCfg.userAgent) cfg.userAgent = embyCfg.userAgent;
     cfg.markWatched = embyCfg.markWatched;
     cfg.verifyPlayable = embyCfg.verifyPlayable;
+    cfg.realWatch = embyCfg.realWatch;
+    cfg.sequencePlay = embyCfg.sequencePlay;
+    if (embyCfg.library) cfg.library = embyCfg.library;
     if (tplProxyId.value) cfg.proxyId = tplProxyId.value;
     return cfg as EmbywatchConfig;
   }
@@ -1351,8 +1393,11 @@ function openAdd() {
     timezone: '',
     replyTimeoutMs: 40000,
     retryMax: Number(settings.value?.default_max_retry ?? 5),
+    runEveryDays: 1,
+    runEveryDaysMax: null,
   });
-  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+  runEveryDaysText.value = '1';
+  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
   tplProxyId.value = '';
@@ -1376,7 +1421,9 @@ function openEdit(tpl: JobTemplate) {
     replyTimeoutMs: tpl.replyTimeoutMs,
     retryMax: tpl.retryMax,
     runEveryDays: tpl.runEveryDays ?? 1,
+    runEveryDaysMax: tpl.runEveryDaysMax ?? null,
   });
+  runEveryDaysText.value = formatRunEvery(tpl.runEveryDays ?? 1, tpl.runEveryDaysMax);
   setCmdState(tpl.startCommand === '/start' ? '' : (tpl.startCommand ?? ''));
   setBtnState(tpl.checkinButton === '签到' ? '' : (tpl.checkinButton ?? ''));
 
@@ -1399,19 +1446,22 @@ function openEdit(tpl: JobTemplate) {
           userAgent: c.userAgent ?? '',
           markWatched: c.markWatched !== false,
           verifyPlayable: c.verifyPlayable !== false,
+          realWatch: c.realWatch === true,
+          sequencePlay: c.sequencePlay === true,
+          library: c.library ?? '',
         });
         tplProxyId.value = c.proxyId ?? '';
         setUaState(c.userAgent ?? '');
       } catch {
-        Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+        Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
         embyUaDropdown.value = '';
       }
     } else {
-      Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+      Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
       embyUaDropdown.value = '';
     }
   } else if (tpl.jobType === 'custom') {
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     if (tpl.config) {
       try {
@@ -1474,7 +1524,7 @@ function openEdit(tpl: JobTemplate) {
       customJobMaxRetries.value = 1;
     }
   } else if (tpl.jobType === 'autoreg') {
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     customActions.value = [];
     Object.assign(autoregCfg, defaultAutoregCfg());
@@ -1498,7 +1548,7 @@ function openEdit(tpl: JobTemplate) {
     }
   } else {
     // checkin
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     customActions.value = [];
     tplCheckinSuccessContains.value = '';
@@ -1549,6 +1599,9 @@ async function saveTemplate() {
     const checkinButton = btnDropdown.value === '{aiBtn}'
       ? resolvedAiBtn
       : (btnDropdown.value === 'custom' ? btnCustom.value : btnDropdown.value) || undefined;
+    const re = parseRunEvery(runEveryDaysText.value);
+    form.runEveryDays = re.min;
+    form.runEveryDaysMax = re.max;
     const payload = {
       ...form,
       // config is serialised by the backend; pass as-is

@@ -59,6 +59,10 @@
             </button>
             <template v-if="bulkMgmtEnabled">
               <div class="bulk-menu-divider"></div>
+              <button class="bulk-menu-item" @click="runBulk(openBulkTgRename)">
+                <i class="fa-solid fa-address-card"></i>
+                {{ t("accounts.bulkTgRename.btn") }}
+              </button>
               <button class="bulk-menu-item" @click="runBulk(openBulkCred)">
                 <i class="fa-solid fa-user-lock"></i>
                 {{ t("accounts.bulkCred.btn") }}
@@ -123,12 +127,20 @@
           <thead>
             <tr>
               <th style="width: 20px"></th>
-              <th>{{ t("common.name") }}</th>
-              <th>{{ t("accounts.colPhone") }}</th>
+              <th class="sortable" @click="sortBy('name')">
+                {{ t("common.name") }}<i :class="sortIcon('name')"></i>
+              </th>
+              <th class="sortable" @click="sortBy('phone')">
+                {{ t("accounts.colPhone") }}<i :class="sortIcon('phone')"></i>
+              </th>
               <th class="col-hide-mobile">{{ t("accounts.colTgName") }}</th>
-              <th>{{ t("accounts.colStatus") }}</th>
+              <th class="sortable" @click="sortBy('status')">
+                {{ t("accounts.colStatus") }}<i :class="sortIcon('status')"></i>
+              </th>
               <th :class="extraColClass">{{ t("accounts.colExtraInfo") }}</th>
-              <th class="col-hide-mobile">{{ t("accounts.colAdded") }}</th>
+              <th class="col-hide-mobile sortable" @click="sortBy('created')">
+                {{ t("accounts.colAdded") }}<i :class="sortIcon('created')"></i>
+              </th>
               <th>{{ t("common.actions") }}</th>
             </tr>
           </thead>
@@ -145,7 +157,7 @@
                 selectedIds.has(a.id) ? 'row-selected' : '',
               ]"
               style="cursor: pointer"
-              :draggable="!searchText.trim()"
+              :draggable="!searchText.trim() && !sortKey"
               @click="toggleSelect(a.id, idx, $event)"
               @dragstart="onDragStart(idx, $event)"
               @dragover.prevent="dragOverIdx = idx"
@@ -1627,6 +1639,170 @@
       </div>
     </div>
 
+    <!-- Bulk rename Telegram profile modal -->
+    <div v-if="showBulkTgRename" class="modal-backdrop">
+      <div class="modal modal-lg">
+        <h3 class="modal-title">
+          <i class="fa-solid fa-address-card" style="margin-right: 8px"></i>
+          {{ t("accounts.bulkTgRename.title") }}
+        </h3>
+
+        <!-- Config step -->
+        <template v-if="!bulkTgRenameBatch">
+          <div v-if="!bulkTgRenameTargets.length" class="warn-box">
+            {{ t("accounts.bulkTgRename.noTargets") }}
+          </div>
+          <template v-else>
+            <p class="bulk-add-hint">
+              {{
+                t("accounts.bulkTgRename.intro").replace(
+                  "{n}",
+                  String(bulkTgRenameTargets.length),
+                )
+              }}
+            </p>
+            <div v-if="bulkTgRenameError" class="error-msg">
+              {{ bulkTgRenameError }}
+            </div>
+            <div class="form-group">
+              <div class="bulk-tgrename-toolbar">
+                <label class="form-label" style="margin: 0">{{
+                  t("accounts.bulkTgRename.valuesLabel")
+                }}</label>
+                <button
+                  class="btn btn-secondary btn-sm"
+                  @click="generateBulkTgRename"
+                >
+                  <i class="fa-solid fa-wand-magic-sparkles"></i>
+                  {{ t("accounts.bulkTgRename.generateBtn") }}
+                </button>
+              </div>
+              <textarea
+                v-model="bulkTgRenameText"
+                class="form-input bulk-add-mono"
+                rows="8"
+                :placeholder="bulkTgRenamePlaceholder"
+              ></textarea>
+              <div class="form-hint">{{ t("accounts.bulkTgRename.hint") }}</div>
+              <div class="bulk-email-preview">
+                {{ t("accounts.bulkTgRename.parsedLabel") }}:
+                <span
+                  :class="
+                    bulkTgRenameParsed.length === bulkTgRenameTargets.length
+                      ? 'bulk-email-test-ok'
+                      : 'bulk-email-test-fail'
+                  "
+                  >{{ bulkTgRenameParsed.length }} /
+                  {{ bulkTgRenameTargets.length }}</span
+                >
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{ t("accounts.bulkGap.label") }}</label>
+              <input
+                v-model.number="bulkTgRenameGap"
+                type="number"
+                min="0"
+                class="form-input"
+              />
+              <div class="form-hint">{{ t("accounts.bulkGap.hint") }}</div>
+            </div>
+            <div class="bulk-clean-accounts">
+              <div
+                v-for="(a, i) in bulkTgRenameTargets"
+                :key="a.id"
+                class="bulk-clean-account"
+              >
+                <strong>{{ a.name }}</strong>
+                <span class="bulk-add-phone">{{ a.phoneNumber }}</span>
+                <span v-if="bulkTgRenameParsed[i]" class="bulk-tgrename-arrow">
+                  <i class="fa-solid fa-arrow-right"></i>
+                  {{ bulkTgRenameParsed[i].firstName }}
+                  {{ bulkTgRenameParsed[i].lastName }}
+                </span>
+              </div>
+            </div>
+          </template>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="closeBulkTgRename">
+              <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+            </button>
+            <button
+              v-if="bulkTgRenameTargets.length"
+              class="btn btn-primary"
+              :disabled="bulkTgRenameBusy || !bulkTgRenameValid"
+              @click="startBulkTgRename"
+            >
+              <i class="fa-solid fa-address-card"></i>
+              {{ t("accounts.bulkTgRename.start") }}
+            </button>
+          </div>
+        </template>
+
+        <!-- Progress step -->
+        <template v-else>
+          <div class="bulk-add-progress-head">
+            <span>
+              {{ t("accounts.bulkTgRename.progressLabel") }}:
+              {{ bulkTgRenameDoneCount }} / {{ bulkTgRenameBatch.total }}
+            </span>
+            <span v-if="bulkTgRenameBatch.running" class="bulk-add-running">
+              <i class="fa-solid fa-spinner fa-spin"></i>
+              {{ t("accounts.bulkTgRename.running") }}
+            </span>
+            <span v-else class="bulk-add-finished">
+              <i class="fa-solid fa-circle-check"></i>
+              {{ t("accounts.bulkAdd.finished") }}
+            </span>
+          </div>
+          <div class="bulk-add-list">
+            <div
+              v-for="item in bulkTgRenameBatch.items"
+              :key="item.accountId"
+              class="bulk-add-item"
+            >
+              <span
+                class="bulk-add-status-dot"
+                :class="`status-${item.status}`"
+              ></span>
+              <div class="bulk-add-item-body">
+                <div class="bulk-add-item-top">
+                  <strong>{{ item.accountName }}</strong>
+                  <span class="bulk-add-item-status">
+                    {{ t(`accounts.bulkTgRename.status.${item.status}`) }}
+                  </span>
+                </div>
+                <div
+                  v-if="item.message"
+                  class="bulk-add-item-msg"
+                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
+                >
+                  {{ item.message }}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button
+              v-if="bulkTgRenameBatch.running"
+              class="btn btn-danger"
+              :disabled="bulkTgRenameBusy"
+              @click="cancelBulkTgRename"
+            >
+              <i class="fa-solid fa-ban"></i> {{ t("common.cancel") }}
+            </button>
+            <button
+              class="btn btn-primary"
+              :disabled="bulkTgRenameBatch.running"
+              @click="closeBulkTgRename"
+            >
+              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <!-- Bulk change login email modal -->
     <div v-if="showBulkEmail" class="modal-backdrop">
       <div class="modal modal-lg">
@@ -2621,6 +2797,8 @@ import {
   type Passkey,
   type BulkAddBatch,
   type BulkAddOptions,
+  type BulkProfileBatch,
+  type BulkProfileEntry,
 } from "../api/client";
 import { t, locale } from "../i18n";
 import { usePersistedRef } from "../composables/usePersistedRef";
@@ -2635,6 +2813,29 @@ const page = ref(1);
 const total = ref(0);
 const pageSize = usePersistedRef<number>("bemby:accounts:pageSize", 25);
 const searchText = usePersistedRef<string>("bemby:accounts:search", "");
+
+// Column sort; empty key = manual drag order (backend default)
+const sortKey = usePersistedRef<string>("bemby:accounts:sortKey", "");
+const sortDir = usePersistedRef<"asc" | "desc">("bemby:accounts:sortDir", "asc");
+
+// Cycle a column through asc -> desc -> manual order
+function sortBy(key: string) {
+  if (sortKey.value !== key) {
+    sortKey.value = key;
+    sortDir.value = "asc";
+  } else if (sortDir.value === "asc") {
+    sortDir.value = "desc";
+  } else {
+    sortKey.value = "";
+  }
+}
+
+function sortIcon(key: string) {
+  if (sortKey.value !== key) return "fa-solid fa-sort sort-ind sort-ind-dim";
+  return sortDir.value === "asc"
+    ? "fa-solid fa-sort-up sort-ind"
+    : "fa-solid fa-sort-down sort-ind";
+}
 
 // Set while load() itself steps the page back, to avoid a duplicate fetch
 let skipPageWatch = false;
@@ -2652,13 +2853,18 @@ const debouncedSearch = debounce(() => {
 }, 300);
 watch(searchText, () => debouncedSearch());
 
+watch([sortKey, sortDir], () => {
+  if (page.value !== 1) page.value = 1;
+  else load();
+});
+
 // ── Drag-and-drop reorder state ───────────────────────────────────────────────
 const dragSrcIdx = ref<number | null>(null);
 const dragOverIdx = ref<number | null>(null);
 
 function onDragStart(idx: number, e: DragEvent) {
-  // Reordering a filtered subset is misleading; disabled while searching
-  if (searchText.value.trim()) {
+  // Reordering a filtered/sorted subset is misleading; disabled in those modes
+  if (searchText.value.trim() || sortKey.value) {
     e.preventDefault();
     return;
   }
@@ -3494,6 +3700,160 @@ async function cancelBulk() {
   }
 }
 
+// ── Bulk rename Telegram profile state ────────────────────────────────────────
+// Common names used to pre-fill sensible defaults; the user can edit or paste
+// over them before running.
+const TG_FIRST_NAMES = [
+  "James", "John", "Robert", "Michael", "William", "David", "Richard",
+  "Joseph", "Thomas", "Charles", "Daniel", "Matthew", "Anthony", "Mark",
+  "Mary", "Patricia", "Jennifer", "Linda", "Elizabeth", "Barbara", "Susan",
+  "Jessica", "Sarah", "Karen", "Emily", "Emma", "Olivia", "Sophia", "Grace",
+  "Lucas", "Ethan", "Noah", "Liam", "Ava", "Mia", "Isla", "Leo", "Ryan",
+  "Chloe", "Hannah",
+];
+const TG_LAST_NAMES = [
+  "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller",
+  "Davis", "Wilson", "Anderson", "Taylor", "Thomas", "Moore", "Martin",
+  "Lee", "Walker", "Hall", "Allen", "Young", "King", "Wright", "Scott",
+  "Green", "Baker", "Adams", "Nelson", "Carter", "Mitchell", "Turner",
+  "Parker",
+];
+
+function randomOf<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+const showBulkTgRename = ref(false);
+const bulkTgRenameText = ref("");
+const bulkTgRenameError = ref("");
+const bulkTgRenameBusy = ref(false);
+const bulkTgRenameGap = ref(3);
+const bulkTgRenameBatch = ref<BulkProfileBatch | null>(null);
+let bulkTgRenamePollTimer: ReturnType<typeof setTimeout> | null = null;
+
+const bulkTgRenamePlaceholder =
+  "John\tSmith\tHey there\nMary\tJones\t\nDavid\tBrown";
+
+// Selected, authenticated accounts on the current page, in display order.
+const bulkTgRenameTargets = computed(() =>
+  accounts.value.filter(
+    (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
+  ),
+);
+
+// One line per account; fields split on tab (falling back to comma when a line
+// has no tab): firstName, lastName, intro. Blank lines are ignored.
+const bulkTgRenameParsed = computed(() =>
+  bulkTgRenameText.value
+    .split(/\r?\n/)
+    .filter((l) => l.trim().length)
+    .map((line) => {
+      const delim = line.includes("\t") ? "\t" : ",";
+      const parts = line.split(delim);
+      return {
+        firstName: (parts[0] ?? "").trim(),
+        lastName: (parts[1] ?? "").trim(),
+        about: parts.slice(2).join(delim).trim(),
+      };
+    }),
+);
+
+const bulkTgRenameValid = computed(
+  () =>
+    bulkTgRenameTargets.value.length > 0 &&
+    bulkTgRenameParsed.value.length === bulkTgRenameTargets.value.length &&
+    bulkTgRenameParsed.value.every((p) => p.firstName.length > 0),
+);
+
+const bulkTgRenameDoneCount = computed(
+  () =>
+    bulkTgRenameBatch.value?.items.filter((i) =>
+      ["done", "failed"].includes(i.status),
+    ).length ?? 0,
+);
+
+function generateBulkTgRename() {
+  bulkTgRenameText.value = bulkTgRenameTargets.value
+    .map(() => `${randomOf(TG_FIRST_NAMES)}\t${randomOf(TG_LAST_NAMES)}`)
+    .join("\n");
+}
+
+function openBulkTgRename() {
+  bulkTgRenameError.value = "";
+  // Keep showing a batch still running from a previous open
+  if (!bulkTgRenameBatch.value?.running) {
+    bulkTgRenameBatch.value = null;
+    bulkTgRenameText.value = "";
+  }
+  showBulkTgRename.value = true;
+  if (bulkTgRenameBatch.value?.running) pollBulkTgRename();
+}
+
+function closeBulkTgRename() {
+  showBulkTgRename.value = false;
+  stopBulkTgRenamePoll();
+  if (!bulkTgRenameBatch.value?.running) {
+    bulkTgRenameBatch.value = null;
+    load();
+  }
+}
+
+function stopBulkTgRenamePoll() {
+  if (bulkTgRenamePollTimer) {
+    clearTimeout(bulkTgRenamePollTimer);
+    bulkTgRenamePollTimer = null;
+  }
+}
+
+async function pollBulkTgRename() {
+  stopBulkTgRenamePoll();
+  try {
+    const batch = await accountsApi.bulkProfileStatus();
+    bulkTgRenameBatch.value = batch;
+    if (batch?.running) {
+      bulkTgRenamePollTimer = setTimeout(pollBulkTgRename, 1500);
+    } else {
+      await load();
+    }
+  } catch {
+    bulkTgRenamePollTimer = setTimeout(pollBulkTgRename, 3000);
+  }
+}
+
+async function startBulkTgRename() {
+  if (!bulkTgRenameValid.value) return;
+  bulkTgRenameError.value = "";
+  const parsed = bulkTgRenameParsed.value;
+  const entries: BulkProfileEntry[] = bulkTgRenameTargets.value.map((a, i) => ({
+    accountId: a.id,
+    firstName: parsed[i]?.firstName ?? "",
+    lastName: parsed[i]?.lastName ?? "",
+    about: parsed[i]?.about ?? "",
+  }));
+  bulkTgRenameBusy.value = true;
+  try {
+    bulkTgRenameBatch.value = await accountsApi.bulkProfile(entries, {
+      gapSeconds: bulkTgRenameGap.value,
+    });
+    pollBulkTgRename();
+  } catch (err: any) {
+    bulkTgRenameError.value =
+      err.response?.data?.error ?? t("accounts.bulkTgRename.startFailed");
+  } finally {
+    bulkTgRenameBusy.value = false;
+  }
+}
+
+async function cancelBulkTgRename() {
+  bulkTgRenameBusy.value = true;
+  try {
+    await accountsApi.bulkProfileCancel();
+    await pollBulkTgRename();
+  } finally {
+    bulkTgRenameBusy.value = false;
+  }
+}
+
 // ── Bulk change login email state ─────────────────────────────────────────────
 type BulkEmailStatus = "pending" | "working" | "done" | "failed";
 type BulkEmailItem = {
@@ -4039,6 +4399,16 @@ onMounted(async () => {
     } catch {
       // Non-critical
     }
+    // Resume a bulk-rename batch still running from a previous page load.
+    try {
+      const batch = await accountsApi.bulkProfileStatus();
+      if (batch?.running) {
+        bulkTgRenameBatch.value = batch;
+        pollBulkTgRename();
+      }
+    } catch {
+      // Non-critical
+    }
   }
 });
 
@@ -4047,6 +4417,8 @@ async function load() {
     page: page.value,
     pageSize: pageSize.value,
     search: searchText.value.trim() || undefined,
+    sortKey: sortKey.value || undefined,
+    sortDir: sortKey.value ? sortDir.value : undefined,
   });
   let [res, s] = await Promise.all([
     accountsApi.listPaged(params()),
@@ -4989,6 +5361,25 @@ tbody tr:nth-child(even):not(.row-selected) td {
   border-bottom: 1px solid #f5f5f5;
 }
 
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.sort-ind {
+  margin-left: 5px;
+  font-size: 11px;
+}
+
+.sort-ind-dim {
+  opacity: 0.3;
+}
+
+th.sortable:hover .sort-ind-dim {
+  opacity: 0.6;
+}
+
 .drag-handle {
   cursor: grab;
   color: #ccc;
@@ -5184,6 +5575,27 @@ tr.drag-over td {
   border-bottom: none;
 }
 
+.bulk-tgrename-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.bulk-tgrename-arrow {
+  color: #1296db;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bulk-tgrename-arrow i {
+  margin-right: 4px;
+  opacity: 0.6;
+}
+
 .bulk-add-options {
   margin-top: 16px;
   padding: 16px 18px;
@@ -5317,6 +5729,7 @@ tr.drag-over td {
 .bulk-add-status-dot.status-submitting_2fa,
 .bulk-add-status-dot.status-cleaning,
 .bulk-add-status-dot.status-fetching,
+.bulk-add-status-dot.status-updating,
 .bulk-add-status-dot.status-working {
   background: #1296db;
   animation: bulk-pulse 1s ease-in-out infinite;

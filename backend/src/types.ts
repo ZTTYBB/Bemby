@@ -55,6 +55,8 @@ export type Job = {
   checkinButton: string;
   templateId?: number | null;
   runEveryDays: number;
+  /** Upper bound of the run-every-days range; null means a fixed interval. */
+  runEveryDaysMax?: number | null;
   retired?: string | null;
 };
 
@@ -74,6 +76,8 @@ export type JobTemplate = {
   createdAt: string;
   linkedJobCount?: number;
   runEveryDays: number;
+  /** Upper bound of the run-every-days range; null means a fixed interval. */
+  runEveryDaysMax?: number | null;
 };
 
 export type CustomAction =
@@ -238,9 +242,28 @@ export type EmbywatchConfig = {
    * playback, so an offline file is never reported as watched. Defaults to true.
    */
   verifyPlayable?: boolean;
+  /**
+   * Real Watch: continuously stream the actual media bytes from Emby at real
+   * playback pace (direct play), so the server sees genuine streaming traffic
+   * like a real client instead of progress reports alone. Defaults to false.
+   */
+  realWatch?: boolean;
+  /**
+   * Sequence Play: resume from the user's last position (Emby "Continue
+   * Watching"), falling back to Next Up then a random item; when an episode
+   * finishes it plays the next one until the play duration is used up.
+   * Defaults to false.
+   */
+  sequencePlay?: boolean;
+  /**
+   * Restrict watching to one Emby library, by its name or its 1-based index in
+   * the user's library list. If it doesn't resolve, the whole server is used.
+   */
+  library?: string;
 };
 
-export type EmbywatchLog = {
+// One played item within a run (a single episode/movie segment).
+export type EmbywatchEpisode = {
   itemType: string;
   title: string;
   seriesName?: string;
@@ -251,6 +274,19 @@ export type EmbywatchLog = {
   endSeconds: number;
   watchedSeconds: number;
   markedWatched: boolean;
+  streamedBytes?: number;
+};
+
+export type EmbywatchLog = EmbywatchEpisode & {
+  /** True when this run used Sequence Play (resume + next-episode chaining). */
+  sequencePlay?: boolean;
+  /** Episodes fully finished this run (Sequence Play chaining). */
+  episodesCompleted?: number;
+  /**
+   * Every item played this run, in order. Present for Sequence Play so the log
+   * can recall each episode; the top-level fields mirror the last entry.
+   */
+  episodes?: EmbywatchEpisode[];
 };
 
 export type TgProxy = {

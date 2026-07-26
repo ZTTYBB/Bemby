@@ -283,6 +283,11 @@
               placeholder="Mozilla/5.0 ..."
             />
           </div>
+          <div class="form-group">
+            <label class="form-label">{{ t('jobs.labelLibrary') }}</label>
+            <input v-model.trim="embyCfg.library" class="form-input" type="text" :placeholder="t('jobs.libraryPlaceholder')" />
+            <div style="font-size:11px;color:#aaa;margin-top:4px">{{ t('jobs.libraryHint') }}</div>
+          </div>
           <div class="emby-rules-hint">{{ t('jobs.playbackRulesHint') }}</div>
           <div class="form-group" style="margin-top:4px">
             <label class="form-check">
@@ -297,6 +302,20 @@
               <span>{{ t('jobs.labelVerifyPlayable') }}</span>
             </label>
             <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.verifyPlayableHint') }}</div>
+          </div>
+          <div class="form-group" style="margin-top:4px">
+            <label class="form-check">
+              <input v-model="embyCfg.realWatch" type="checkbox" />
+              <span>{{ t('jobs.labelRealWatch') }}</span>
+            </label>
+            <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.realWatchHint') }}</div>
+          </div>
+          <div class="form-group" style="margin-top:4px">
+            <label class="form-check">
+              <input v-model="embyCfg.sequencePlay" type="checkbox" />
+              <span>{{ t('jobs.labelSequencePlay') }}</span>
+            </label>
+            <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.sequencePlayHint') }}</div>
           </div>
         </template>
         <!-- embywatch optional account (always shown, job-specific) -->
@@ -771,7 +790,8 @@
         <div v-if="form.jobType === 'embywatch' && !form.templateId" class="form-row">
           <div class="form-group">
             <label class="form-label">{{ t('jobs.labelRunEveryDays') }}</label>
-            <input v-model.number="form.runEveryDays" class="form-input" type="number" min="1" max="365" style="max-width:120px" />
+            <input v-model.trim="runEveryDaysText" class="form-input" type="text" :placeholder="t('jobs.runEveryDaysPlaceholder')" style="max-width:120px" />
+            <div style="font-size:11px;margin-top:4px" :style="runEveryDaysValid ? 'color:#aaa' : 'color:#991b1b'">{{ t('jobs.runEveryDaysHint') }}</div>
           </div>
           <div class="form-group">
             <label class="form-label">{{ t('jobs.labelMaxRetries') }}</label>
@@ -1100,21 +1120,41 @@ const form = reactive({
   enabled: true,
   templateId: null as number | null,
   runEveryDays: 1,
+  runEveryDaysMax: null as number | null,
 });
 
 const linkedTemplate = computed(() => templates.value.find(t => t.id === form.templateId) ?? null);
+
+// "Run every days" accepts a single number (7) or a range (7-15). The range is
+// stored as runEveryDays (min) + runEveryDaysMax; the scheduler picks a random
+// value in the range each cycle.
+const runEveryDaysText = ref('1');
+function parseRunEvery(text: string): { min: number; max: number | null } {
+  const m = String(text).trim().match(/^(\d+)\s*(?:-\s*(\d+))?$/);
+  if (!m) return { min: 1, max: null };
+  const min = Math.max(1, parseInt(m[1], 10) || 1);
+  const hi = m[2] != null ? parseInt(m[2], 10) : NaN;
+  return { min, max: Number.isFinite(hi) && hi > min ? hi : null };
+}
+function formatRunEvery(min: number, max: number | null | undefined): string {
+  return max != null && max > min ? `${min}-${max}` : String(min ?? 1);
+}
+const runEveryDaysValid = computed(() => /^\s*\d+\s*(-\s*\d+\s*)?$/.test(runEveryDaysText.value));
 
 const extractSource = ref<Job | null>(null);
 const extractName = ref('');
 const extractError = ref('');
 const extractSaving = ref(false);
-const embyCfg = reactive<{ username: string; password: string; playDuration: number | string; userAgent: string; markWatched: boolean; verifyPlayable: boolean }>({
+const embyCfg = reactive<{ username: string; password: string; playDuration: number | string; userAgent: string; markWatched: boolean; verifyPlayable: boolean; realWatch: boolean; sequencePlay: boolean; library: string }>({
   username: '',
   password: '',
   playDuration: '',
   userAgent: '',
   markWatched: true,
   verifyPlayable: true,
+  realWatch: false,
+  sequencePlay: false,
+  library: '',
 });
 const embyUaDropdown = ref('');
 const embyServer = reactive<{ protocol: 'https' | 'http'; host: string; port: number | '' }>({
@@ -1192,13 +1232,15 @@ function onUaDropdownChange() {
 }
 
 function onJobTypeChange() {
-  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
   form.accountId = (form.jobType === 'checkin' || form.jobType === 'custom' || form.jobType === 'autoreg')
     ? (accounts.value[0]?.id ?? null)
     : null;
   form.runEveryDays = 1;
+  form.runEveryDaysMax = null;
+  runEveryDaysText.value = '1';
   customActions.value = [];
   Object.assign(autoregCfg, defaultAutoregCfg());
   customJobMaxRetries.value = 1;
@@ -1268,7 +1310,7 @@ function applyTemplate(tpl: JobTemplate) {
         let c = JSON.parse(tpl.config) as EmbywatchConfig | string;
         if (typeof c === 'string') c = JSON.parse(c) as EmbywatchConfig;
         // username/password are job-specific; only apply playback settings from template
-        Object.assign(embyCfg, { playDuration: c.playDuration ?? '', userAgent: c.userAgent ?? '', markWatched: c.markWatched !== false, verifyPlayable: c.verifyPlayable !== false });
+        Object.assign(embyCfg, { playDuration: c.playDuration ?? '', userAgent: c.userAgent ?? '', markWatched: c.markWatched !== false, verifyPlayable: c.verifyPlayable !== false, realWatch: c.realWatch === true, sequencePlay: c.sequencePlay === true, library: c.library ?? '' });
         setUaState(c.userAgent ?? '');
       } catch { /* ignore */ }
     }
@@ -1319,7 +1361,7 @@ function applyTemplate(tpl: JobTemplate) {
     }
   } else if (tpl.jobType === 'autoreg') {
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
     customActions.value = [];
     Object.assign(autoregCfg, defaultAutoregCfg());
     if (tpl.config) {
@@ -1341,7 +1383,7 @@ function applyTemplate(tpl: JobTemplate) {
     }
   } else {
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
     customActions.value = [];
   }
 }
@@ -1426,8 +1468,10 @@ function openAdd() {
     enabled: true,
     templateId: null,
     runEveryDays: 1,
+    runEveryDaysMax: null,
   });
-  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+  runEveryDaysText.value = '1';
+  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
   customActions.value = [];
@@ -1448,7 +1492,9 @@ function openEdit(j: Job) {
     replyTimeoutMs: j.replyTimeoutMs, retryMax: j.retryMax, enabled: j.enabled,
     templateId: j.templateId ?? null,
     runEveryDays: j.runEveryDays ?? 1,
+    runEveryDaysMax: j.runEveryDaysMax ?? null,
   });
+  runEveryDaysText.value = formatRunEvery(j.runEveryDays ?? 1, j.runEveryDaysMax);
   setCmdState(j.startCommand === '/start' ? '' : (j.startCommand ?? ''));
   setBtnState(j.checkinButton === '签到' ? '' : (j.checkinButton ?? ''));
   checkinSuccessContains.value = '';
@@ -1481,18 +1527,21 @@ function openEdit(j: Job) {
           userAgent: c.userAgent ?? '',
           markWatched: c.markWatched !== false,
           verifyPlayable: c.verifyPlayable !== false,
+          realWatch: c.realWatch === true,
+          sequencePlay: c.sequencePlay === true,
+          library: c.library ?? '',
         });
         setUaState(c.userAgent ?? '');
       } catch {
-        Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+        Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
         embyUaDropdown.value = '';
       }
     } else {
-      Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+      Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
       embyUaDropdown.value = '';
     }
   } else if (j.jobType === 'custom') {
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     if (j.config) {
       try {
@@ -1553,7 +1602,7 @@ function openEdit(j: Job) {
       customJobMaxRetries.value = 1;
     }
   } else if (j.jobType === 'autoreg') {
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     customActions.value = [];
     Object.assign(autoregCfg, defaultAutoregCfg());
@@ -1575,7 +1624,7 @@ function openEdit(j: Job) {
       } catch { /* ignore */ }
     }
   } else {
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     customActions.value = [];
   }
@@ -1631,6 +1680,9 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Record<
     if (embyCfg.userAgent) cfg.userAgent = embyCfg.userAgent;
     cfg.markWatched = embyCfg.markWatched;
     cfg.verifyPlayable = embyCfg.verifyPlayable;
+    cfg.realWatch = embyCfg.realWatch;
+    cfg.sequencePlay = embyCfg.sequencePlay;
+    if (embyCfg.library) cfg.library = embyCfg.library;
     return cfg;
   }
   if (form.jobType === 'custom') {
@@ -1769,6 +1821,9 @@ async function saveJob() {
     const checkinButton = btnDropdown.value === '{aiBtn}'
       ? resolvedAiBtn
       : (btnDropdown.value === 'custom' ? btnCustom.value : btnDropdown.value) || undefined;
+    const re = parseRunEvery(runEveryDaysText.value);
+    form.runEveryDays = re.min;
+    form.runEveryDaysMax = re.max;
     const payload = {
       ...form,
       // config is serialised by the backend; pass as-is

@@ -188,7 +188,7 @@ export async function runJob(
           }
           if (!config.username || !config.password)
             throw new Error("Emby username and password are required");
-          const log = await runEmbywatch(job.botUsername, config);
+          const log = await runEmbywatch(job.botUsername, config, signal);
           detailLogs?.push(log);
           break;
         }
@@ -280,6 +280,9 @@ export async function runJob(
       if (err instanceof CustomJobError) detailLogs?.push(err.log);
       if (err instanceof AutoregJobError) detailLogs?.push(err.log);
       lastError = err;
+      // A cancelled job must not be retried, and must report as cancelled even
+      // if the underlying failure surfaced as something else.
+      if (signal?.aborted) throw new Error("Job cancelled");
       console.error(
         `[runner] Job "${job.name}" attempt ${attempt}/${job.retryMax} failed:`,
         err,

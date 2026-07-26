@@ -167,6 +167,49 @@ export type BulkAddBatch = {
   items: BulkAddItem[];
 };
 
+export type BulkProfileItemStatus =
+  | "pending"
+  | "updating"
+  | "waiting"
+  | "retrying"
+  | "done"
+  | "failed";
+
+export type BulkProfileEntry = {
+  accountId: number;
+  firstName: string;
+  lastName?: string;
+  about?: string;
+};
+
+export type BulkProfileOptions = {
+  gapSeconds?: number;
+  maxRetries?: number;
+  retryDelaySeconds?: number;
+};
+
+export type BulkProfileItem = {
+  index: number;
+  accountId: number;
+  accountName: string;
+  firstName: string;
+  lastName: string;
+  about: string;
+  attempts: number;
+  status: BulkProfileItemStatus;
+  message: string;
+  error: string | null;
+};
+
+export type BulkProfileBatch = {
+  id: string;
+  createdAt: string;
+  running: boolean;
+  cancelled: boolean;
+  total: number;
+  items: BulkProfileItem[];
+};
+
 // The account's own editable Telegram profile
 export type TgOwnProfile = {
   firstName: string;
@@ -260,6 +303,9 @@ export type EmbywatchConfig = {
   userAgent?: string;
   markWatched?: boolean;
   verifyPlayable?: boolean;
+  realWatch?: boolean;
+  sequencePlay?: boolean;
+  library?: string;
   proxyId?: string;
 };
 
@@ -402,6 +448,7 @@ export type Job = {
   checkinButton: string;
   templateId?: number | null;
   runEveryDays: number;
+  runEveryDaysMax?: number | null;
   retired?: string | null;
 };
 
@@ -420,9 +467,10 @@ export type JobTemplate = {
   createdAt: string;
   linkedJobCount?: number;
   runEveryDays: number;
+  runEveryDaysMax?: number | null;
 };
 
-export type EmbywatchLog = {
+export type EmbywatchEpisode = {
   itemType: string;
   title: string;
   seriesName?: string;
@@ -433,6 +481,13 @@ export type EmbywatchLog = {
   endSeconds: number;
   watchedSeconds: number;
   markedWatched: boolean;
+  streamedBytes?: number;
+};
+
+export type EmbywatchLog = EmbywatchEpisode & {
+  sequencePlay?: boolean;
+  episodesCompleted?: number;
+  episodes?: EmbywatchEpisode[];
 };
 
 export type CheckinAttemptLog = {
@@ -646,6 +701,18 @@ export const accountsApi = {
   bulkAddCancel: () =>
     api
       .post<{ cancelled: boolean }>("/accounts/bulk-add/cancel")
+      .then((r) => r.data),
+  bulkProfile: (items: BulkProfileEntry[], options?: BulkProfileOptions) =>
+    api
+      .post<BulkProfileBatch>("/accounts/bulk-profile", { items, options })
+      .then((r) => r.data),
+  bulkProfileStatus: () =>
+    api
+      .get<BulkProfileBatch | null>("/accounts/bulk-profile/status")
+      .then((r) => r.data),
+  bulkProfileCancel: () =>
+    api
+      .post<{ cancelled: boolean }>("/accounts/bulk-profile/cancel")
       .then((r) => r.data),
   forceReauth: (id: number) =>
     api.post<Account>(`/accounts/${id}/force-reauth`).then((r) => r.data),
