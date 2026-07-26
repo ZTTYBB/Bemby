@@ -571,6 +571,85 @@ async function resolveLibraryId(serverUrl: string, ctx: PlayCtx, library?: strin
   }
 }
 
+// Library scoping notes: some servers (and ID-aliasing proxies) ignore ParentId
+// on Resume/NextUp and on any item-selector query (Ids, SearchTerm, Filters), and
+// won't recurse to Episodes under a library. Only plain ParentId *browsing* of a
+// library's Series/Movies is reliable. So we never enumerate the whole library
+// (that reads like scraping) — we take a small random sample to pick from, and
+// scoped resume returns only in-library resumables (or nothing), never the global
+// Continue Watching list.
+const LIBRARY_SAMPLE_SIZE = 12;
+
+async function available(serverUrl: string, ctx: PlayCtx, seg: Segment): Promise<boolean> {
+  return isMediaAvailable(serverUrl, seg.itemId, seg.mediaSourceId, {
+    token: ctx.token,
+    ua: ctx.ua,
+    userId: ctx.userId,
+    deviceName: ctx.deviceName,
+    proxyUrl: ctx.proxyUrl,
+  });
+}
+
+/** A bounded random sample of a library's Series/Movies (no full enumeration). */
+async function librarySample(serverUrl: string, ctx: PlayCtx, parentId: string, limit: number): Promise<any[]> {
+  try {
+    const page = await embyRequest<any>(
+      serverUrl,
+      `/Users/${ctx.userId}/Items?ParentId=${parentId}&Recursive=true&IncludeItemTypes=Series,Movie&SortBy=Random&Limit=${limit}&Fields=MediaSources,RunTimeTicks`,
+      reqOpts(ctx),
+    );
+    return page.Items ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Expand a library member to a segment: a Series → a random episode; a Movie as-is. */
+async function memberToSegment(serverUrl: string, ctx: PlayCtx, member: any): Promise<Segment | undefined> {
+  if (member.Type !== 'Series') return toSegment(member);
+  const eps = await embyRequest<any>(serverUrl, `/Shows/${member.Id}/Episodes?UserId=${ctx.userId}&Fields=MediaSources,RunTimeTicks`, reqOpts(ctx));
+  const list: any[] = eps.Items ?? [];
+  if (!list.length) return undefined;
+  return toSegment(list[Math.floor(Math.random() * list.length)]);
+}
+
+// Pick a random streamable segment from within a library, using a bounded sample.
+async function pickRandomFromLibrary(serverUrl: string, ctx: PlayCtx, parentId: string, verifyPlayable: boolean): Promise<Segment | undefined> {
+  const sample = await librarySample(serverUrl, ctx, parentId, LIBRARY_SAMPLE_SIZE);
+  const maxAttempts = Math.min(sample.length, verifyPlayable ? MAX_PICK_ATTEMPTS : 1);
+  const tried = new Set<number>();
+  for (let attempt = 0; attempt < maxAttempts && tried.size < sample.length; attempt++) {
+    let idx = Math.floor(Math.random() * sample.length);
+    while (tried.has(idx)) idx = (idx + 1) % sample.length;
+    tried.add(idx);
+    const seg = await memberToSegment(serverUrl, ctx, sample[idx]);
+    if (!seg) continue;
+    if (!verifyPlayable || (await available(serverUrl, ctx, seg))) return seg;
+    console.warn(`[embywatch] "${seg.item.Name}" is not streamable — trying another library item`);
+  }
+  return undefined;
+}
+
+// In-library resume: scoped resumable items with a real playback position. Works
+// on servers that honour ParentId; returns nothing on proxies that don't expose
+// episodes under a library — so we never resume an out-of-library item.
+async function libraryResumeSegment(serverUrl: string, ctx: PlayCtx, parentId: string, verifyPlayable: boolean): Promise<Segment | undefined> {
+  let res: any;
+  try {
+    res = await embyRequest<any>(
+      serverUrl,
+      `/Users/${ctx.userId}/Items?ParentId=${parentId}&Recursive=true&Filters=IsResumable&IncludeItemTypes=Episode,Movie&SortBy=DatePlayed&SortOrder=Descending&Limit=10&Fields=MediaSources,RunTimeTicks,UserData`,
+      reqOpts(ctx),
+    );
+  } catch {
+    return undefined;
+  }
+  // Guard against servers that ignore Filters=IsResumable and return non-resumable
+  // rows: keep only items with an actual playback position.
+  const resumable = (res.Items ?? []).filter((i: any) => Number(i.UserData?.PlaybackPositionTicks) > 0);
+  return firstPlayable(serverUrl, ctx, resumable, verifyPlayable);
+}
+
 /** Random streamable item (existing behaviour), retried up to MAX_PICK_ATTEMPTS. */
 async function pickRandomSegment(serverUrl: string, ctx: PlayCtx, verifyPlayable: boolean, parentId?: string): Promise<Segment | undefined> {
   const attempts = verifyPlayable ? MAX_PICK_ATTEMPTS : 1;
@@ -641,41 +720,51 @@ async function runSequencePlay(
 ): Promise<EmbywatchLog> {
   const { playDuration, verifyPlayable, parentId } = opts;
 
-  // Pick the starting segment/position within a scope: resume → next up → random.
-  const pickStart = async (scopeId?: string): Promise<{ seg: Segment; start: number } | undefined> => {
-    const scope = scopeId ? `&ParentId=${scopeId}` : '';
+  const asResume = (seg: Segment): { seg: Segment; start: number } => {
+    const posTicks = Number(seg.item.UserData?.PlaybackPositionTicks) || 0;
+    const start = posTicks > 0 ? Math.floor(posTicks / TICKS_PER_SECOND) : 0;
+    console.log(`[embywatch] Sequence Play: resuming "${seg.item.Name}" at ${start}s`);
+    return { seg, start };
+  };
+  const asRandom = (seg: Segment, label: string): { seg: Segment; start: number } => {
+    const start = seg.runtimeSeconds > 0 ? Math.floor(seg.runtimeSeconds * (0.05 + Math.random() * 0.05)) : 0;
+    console.log(`[embywatch] Sequence Play: ${label} "${seg.item.Name}" from ${start}s`);
+    return { seg, start };
+  };
+
+  // Pick within the library (bounded, no full scan). Resume is scoped and only
+  // kept when it has a real playback position; otherwise start a random title.
+  const pickInLibrary = async (lib: string): Promise<{ seg: Segment; start: number } | undefined> => {
+    const resumeSeg = await libraryResumeSegment(serverUrl, ctx, lib, verifyPlayable);
+    if (resumeSeg) return asResume(resumeSeg);
+    const seg = await pickRandomFromLibrary(serverUrl, ctx, lib, verifyPlayable);
+    return seg ? asRandom(seg, 'nothing to resume, random from library') : undefined;
+  };
+
+  // Whole-server selection (no library scope): resume → next up → random.
+  const pickWholeServer = async (): Promise<{ seg: Segment; start: number } | undefined> => {
     const resume = await embyRequest<any>(
       serverUrl,
-      `/Users/${ctx.userId}/Items/Resume?Limit=10&MediaTypes=Video&Recursive=true&Fields=MediaSources,RunTimeTicks${scope}`,
+      `/Users/${ctx.userId}/Items/Resume?Limit=10&MediaTypes=Video&Recursive=true&Fields=MediaSources,RunTimeTicks`,
       reqOpts(ctx),
     );
     let seg = await firstPlayable(serverUrl, ctx, resume.Items ?? [], verifyPlayable);
-    if (seg) {
-      const posTicks = Number(seg.item.UserData?.PlaybackPositionTicks) || 0;
-      const start = posTicks > 0 ? Math.floor(posTicks / TICKS_PER_SECOND) : 0;
-      console.log(`[embywatch] Sequence Play: resuming "${seg.item.Name}" at ${start}s`);
-      return { seg, start };
-    }
-    const nextUp = await embyRequest<any>(serverUrl, `/Shows/NextUp?UserId=${ctx.userId}&Limit=10&Fields=MediaSources,RunTimeTicks${scope}`, reqOpts(ctx));
+    if (seg) return asResume(seg);
+    const nextUp = await embyRequest<any>(serverUrl, `/Shows/NextUp?UserId=${ctx.userId}&Limit=10&Fields=MediaSources,RunTimeTicks`, reqOpts(ctx));
     seg = await firstPlayable(serverUrl, ctx, nextUp.Items ?? [], verifyPlayable);
     if (seg) {
       console.log(`[embywatch] Sequence Play: starting Next Up "${seg.item.Name}"`);
       return { seg, start: 0 };
     }
-    seg = await pickRandomSegment(serverUrl, ctx, verifyPlayable, scopeId);
-    if (seg) {
-      const start = seg.runtimeSeconds > 0 ? Math.floor(seg.runtimeSeconds * (0.05 + Math.random() * 0.05)) : 0;
-      console.log(`[embywatch] Sequence Play: nothing to resume, random "${seg.item.Name}" from ${start}s`);
-      return { seg, start };
-    }
-    return undefined;
+    seg = await pickRandomSegment(serverUrl, ctx, verifyPlayable);
+    return seg ? asRandom(seg, 'nothing to resume, random') : undefined;
   };
 
-  let started = await pickStart(parentId);
+  let started = parentId ? await pickInLibrary(parentId) : await pickWholeServer();
   // If the chosen library has nothing to play, fall back to the whole server.
   if (!started && parentId) {
     console.warn('[embywatch] Sequence Play: library has nothing to play — falling back to the whole server');
-    started = await pickStart(undefined);
+    started = await pickWholeServer();
   }
   if (!started) {
     throw new Error('No streamable items found on Emby server — media may be offline (disk down); skipped reporting');
@@ -795,6 +884,7 @@ export async function runEmbywatch(serverUrl: string, config: EmbywatchConfig): 
 
   // Optionally scope everything to one library (name or 1-based index).
   const parentId = await resolveLibraryId(serverUrl, ctx, config.library);
+  if (parentId) console.log(`[embywatch] Scoped to library "${config.library}"`);
 
   // Sequence Play resumes and chains episodes; the default path plays one random item.
   if (config.sequencePlay === true) {
@@ -803,7 +893,9 @@ export async function runEmbywatch(serverUrl: string, config: EmbywatchConfig): 
 
   // 3. Pick a random streamable item. When the disk is down the metadata item
   // still exists, so verifying playability avoids reporting an unplayable file.
-  let picked = await pickRandomSegment(serverUrl, ctx, verifyPlayable, parentId);
+  let picked = parentId
+    ? await pickRandomFromLibrary(serverUrl, ctx, parentId, verifyPlayable)
+    : await pickRandomSegment(serverUrl, ctx, verifyPlayable);
   // If the chosen library has nothing to play, fall back to the whole server.
   if (!picked && parentId) {
     console.warn('[embywatch] Library has nothing to play — falling back to the whole server');
