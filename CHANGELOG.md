@@ -4,6 +4,42 @@ All notable changes to Bemby are documented here.
 
 ---
 
+## v0.9.36
+
+### 中文
+
+**新功能**
+
+- **真实观看（拉取实际字节）** -- Emby 观看新增<strong>真实观看</strong>开关：以真实播放速率从 Emby 服务器直连拉取实际媒体字节，使服务器看到与真实客户端一致的串流流量，而不只是进度上报。日志会显示本次<strong>已串流</strong>的数据量。注意：会消耗大量下行流量（单次可达数百 MB 至数 GB）。
+- **顺序播放（续播）** -- Emby 观看新增<strong>顺序播放</strong>开关：优先从上次离开的位置继续观看（Emby「继续观看」），其次是下一集（Next Up），仍无则随机选择；当前集看完后自动播放同剧集的下一集，直到用尽播放时长。仅在实际看完整集时才标记为已看，未看完的内容会保留在「继续观看」列表中。日志详情会列出本次播放的每一集，并显示<strong>顺序播放集数</strong>与<strong>总观看时长</strong>。
+- **限定媒体库** -- Emby 观看新增<strong>限定媒体库（可选）</strong>：填写媒体库名称或其序号（从 1 开始），仅从该库中挑选内容（含续播与顺序播放）。若找不到该媒体库，或库内没有可播放内容，则自动回退到整个服务器。
+- **执行间隔支持范围** -- 任务与模板的<strong>每隔多少天执行</strong>可填范围（如 <code>7-15</code>）：每次排程时在范围内随机取一个天数，使执行节奏不再固定；填单个数字（如 <code>7</code>）行为不变。
+- **批量修改 Telegram 资料** -- 批量操作新增<strong>批量修改资料</strong>：为所选已认证账户批量设置名字、姓氏和简介，每行对应一个账户、字段用制表符（Tab）分隔，可从表格直接粘贴，也可一键<strong>生成随机名字</strong>。作为后台批量任务运行（页面刷新不中断），账户之间按间隔依次处理并对失败账户自动重试。
+- **账户列表排序** -- 账户表格的名称、手机号、状态、添加时间列支持点击排序（升序 → 降序 → 恢复手动顺序），排序状态跨刷新保留；排序或搜索状态下会停用拖拽排序，避免对筛选后的子集重排造成误解。
+
+**修复**
+
+- **中止 Emby 观看任务** -- 从日志中停止正在运行的 Emby 观看任务时会立即中止（包括串流与等待过程中），并如实记为已取消，而不再继续重试。
+- **限定媒体库的可靠性** -- 修复部分经反向代理的 Emby 服务器上媒体库范围失效的问题：续播/下一集与随机挑选现在会按媒体库归属校验，避免选到库外内容。
+
+### English
+
+**Features**
+
+- **Real Watch (stream actual bytes)** -- Emby Watch gained a <strong>Real Watch</strong> toggle: the actual media bytes are pulled from the Emby server at real playback pace (direct play), so the server sees genuine streaming traffic like a real client instead of progress reports alone. The log shows how much was <strong>Streamed</strong>. Note: this uses significant download bandwidth (hundreds of MB to GBs per run).
+- **Sequence Play (resume & continue)** -- Emby Watch gained a <strong>Sequence Play</strong> toggle: it resumes from where the user left off (Emby Continue Watching), falling back to the next unwatched episode (Next Up) and then a random item; when an episode finishes it plays the next one in the show until the play duration is used up. An episode is only marked watched when it actually finishes, so a partly-watched item stays in Continue Watching. The log detail lists every episode played this run, along with <strong>Episodes played</strong> and <strong>Total watched</strong>.
+- **Limit to library** -- Emby Watch gained <strong>Limit to library (optional)</strong>: enter a library name or its index (starting from 1) to pick content only from that library, including resume and Sequence Play. If the library can't be matched, or has nothing to play, it falls back to the whole server.
+- **Run every (days) accepts a range** -- jobs and templates accept a range for <strong>Run every (days)</strong> (e.g. <code>7-15</code>): a random day count within the range is picked each time the job schedules, so the cadence is no longer fixed. A single number (e.g. <code>7</code>) behaves as before.
+- **Bulk Rename TG Profile** -- a new bulk action that sets the first name, last name and intro of the selected authenticated accounts. One line per account with fields separated by a Tab, so columns can be pasted straight from a spreadsheet, or use <strong>Generate random names</strong> to fill them. It runs as a background batch that survives page reloads, processing accounts one at a time with the shared gap between them and retrying failures.
+- **Sortable accounts table** -- click the Name, Phone, Status, or Added column header to sort (ascending → descending → back to the manual drag order); the choice is remembered across refreshes. Drag reordering is disabled while sorting or searching, since reordering a filtered subset is misleading.
+
+**Fixes**
+
+- **Cancelling an Emby Watch job** -- stopping a running Emby Watch job from the log list now aborts it immediately (including mid-stream and mid-wait) and reports it as cancelled instead of retrying.
+- **Library scoping reliability** -- fixed library scoping on Emby servers behind a reverse proxy: resume / Next Up and random selection now verify that the chosen item really belongs to the target library, so out-of-library content is no longer picked.
+
+---
+
 ## v0.9.35
 
 ### 中文

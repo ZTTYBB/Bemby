@@ -108,6 +108,14 @@
                   </td>
                 </tr>
                 <tr>
+                  <td>列排序</td>
+                  <td>
+                    点击名称、手机号、状态或添加时间列标题按该列排序：升序 →
+                    降序 →
+                    恢复手动拖拽顺序，排序状态跨刷新保留。排序或搜索状态下会停用拖拽排序，因为对筛选后的子集重排容易产生误解。
+                  </td>
+                </tr>
+                <tr>
                   <td>强制重新认证</td>
                   <td>
                     在编辑面板中点击"强制重新认证"，可清除现有会话并重置为未认证状态。
@@ -170,7 +178,7 @@
                 <tr>
                   <td>批量操作</td>
                   <td>
-                    勾选多个账户后，操作收纳于<strong>批量操作</strong>菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免限流：<strong>批量重命名</strong>（按 <code>{index}</code> 递增序号，可补零、实时预览）、<strong>获取属性</strong>、<strong>批量修改登录邮箱</strong>（<code>+</code> 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行且不存储，开始前需"测试登录"）、<strong>批量修改凭据</strong>（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥）、<strong>批量添加通行密钥</strong>。设置环境变量 <code>BULK_ACCOUNT_MANAGEMENT=1</code> 后还提供<strong>批量添加账户</strong>（每行 <code>手机号----API网址</code>，自动创建并从各 API 网页读取验证码/2FA 完成认证）与<strong>批量清理</strong>。
+                    勾选多个账户后，操作收纳于<strong>批量操作</strong>菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免限流：<strong>批量重命名</strong>（按 <code>{index}</code> 递增序号，可补零、实时预览）、<strong>获取属性</strong>、<strong>批量修改登录邮箱</strong>（<code>+</code> 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行且不存储，开始前需"测试登录"）、<strong>批量修改凭据</strong>（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥）、<strong>批量添加通行密钥</strong>、<strong>批量修改资料</strong>（批量设置 Telegram 名字/姓氏/简介，每行对应一个账户、字段用制表符 Tab 分隔，可从表格直接粘贴，或点击"生成随机名字"自动填充；作为后台批量任务运行，页面刷新不中断，失败账户自动重试）。设置环境变量 <code>BULK_ACCOUNT_MANAGEMENT=1</code> 后还提供<strong>批量添加账户</strong>（每行 <code>手机号----API网址</code>，自动创建并从各 API 网页读取验证码/2FA 完成认证）与<strong>批量清理</strong>。
                   </td>
                 </tr>
                 <tr>
@@ -232,6 +240,16 @@
                   <td>
                     Drag the grip handle on any account row to reorder the list;
                     the order is persisted.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Column sort</td>
+                  <td>
+                    Click the Name, Phone, Status, or Added column header to sort
+                    by it: ascending → descending → back to the manual drag
+                    order. The choice is remembered across refreshes. Drag
+                    reordering is disabled while sorting or searching, since
+                    reordering a filtered subset is misleading.
                   </td>
                 </tr>
                 <tr>
@@ -342,7 +360,13 @@
                     an app password used only for the run and never stored, after
                     a required Test login), <strong>Bulk Change Credential</strong>
                     (set/rotate the 2FA password, optionally removing other
-                    devices/passkeys), and <strong>Bulk Add Passkey</strong>.
+                    devices/passkeys), <strong>Bulk Add Passkey</strong>, and
+                    <strong>Bulk Rename TG Profile</strong> (set the Telegram
+                    first name, last name and intro for many accounts at once --
+                    one Tab-separated line per account so columns can be pasted
+                    straight from a spreadsheet, or click "Generate random names"
+                    to fill them; it runs as a background batch that survives
+                    page reloads and retries failed accounts).
                     Setting <code>BULK_ACCOUNT_MANAGEMENT=1</code> also enables
                     <strong>Bulk Add</strong> (one <code>phone----apiUrl</code>
                     per line, auto-creating and authenticating each account by
@@ -1007,6 +1031,28 @@
                     上报播放前先确认媒体文件可读取（磁盘在线），避免在文件离线时上报虚假观看。
                   </td>
                 </tr>
+                <tr>
+                  <td>真实观看（拉取实际字节）</td>
+                  <td>
+                    除进度上报外，以真实播放速率从 Emby
+                    服务器直连拉取实际媒体字节，使服务器产生与真实客户端一致的串流流量，日志中会记录本次<strong>已串流</strong>的数据量。注意：单次运行可能消耗数百
+                    MB 至数 GB 下行流量。
+                  </td>
+                </tr>
+                <tr>
+                  <td>顺序播放（续播）</td>
+                  <td>
+                    优先从上次离开的位置继续观看（Emby「继续观看」），其次是下一集（Next
+                    Up），仍无则随机选择；当前集看完后自动播放同剧集的下一集，直到用尽播放时长。仅在完整看完一集时才标记为已看，未看完的内容会保留在「继续观看」列表中。
+                  </td>
+                </tr>
+                <tr>
+                  <td>限定媒体库（可选）</td>
+                  <td>
+                    填写媒体库名称或其序号（从 1
+                    开始），仅从该媒体库中挑选内容（含续播与顺序播放），并校验所选内容确实属于该库。若找不到该媒体库，或库内没有可播放内容，则回退到整个服务器。
+                  </td>
+                </tr>
               </tbody>
             </table>
             <p class="help-note">
@@ -1111,6 +1157,11 @@
               若当前时间已在窗口内，则在剩余窗口时间内调度；若窗口已过，则安排在次日执行。
               多个任务会自动错峰，彼此至少间隔设置中「任务错峰」配置的分钟数（默认
               2 分钟），避免在同一分钟并发执行。
+            </p>
+            <p class="help-para">
+              <strong>每隔多少天执行</strong>控制两次执行之间的间隔天数：填数字（如
+              <code>7</code>）为固定间隔，填范围（如
+              <code>7-15</code>）则每次排程时在范围内随机取一个天数，使执行节奏不固定。任务与模板均支持。
             </p>
             <p class="help-note">
               在设置中关闭<em>每天仅运行一次</em>，可让调度器对今天已运行过的任务重新触发，便于测试。
@@ -1345,6 +1396,38 @@
                     offline.
                   </td>
                 </tr>
+                <tr>
+                  <td>Real Watch (stream actual bytes)</td>
+                  <td>
+                    On top of the progress reports, the actual media bytes are
+                    pulled from the Emby server at real playback pace (direct
+                    play), so the server records genuine streaming traffic like a
+                    real client; the log stores how much was
+                    <strong>Streamed</strong>. Note: a single run can use
+                    hundreds of MB to several GB of download bandwidth.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Sequence Play (resume &amp; continue)</td>
+                  <td>
+                    Resumes from where the account left off (Emby Continue
+                    Watching), falling back to the next unwatched episode (Next
+                    Up) and then a random item; when an episode finishes it plays
+                    the next one in the show until the play duration is used up.
+                    An episode is only marked watched when it actually finishes,
+                    so a partly-watched item stays in Continue Watching.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Limit to library (optional)</td>
+                  <td>
+                    Enter a library name or its index (starting from 1) to pick
+                    content only from that library, including resume and Sequence
+                    Play, verifying that the chosen item really belongs to it. If
+                    the library can't be matched, or has nothing to play, it
+                    falls back to the whole server.
+                  </td>
+                </tr>
               </tbody>
             </table>
             <p class="help-note">
@@ -1483,6 +1566,13 @@
               tomorrow. Jobs are automatically staggered at least the number of
               minutes configured under <em>Job Staggering</em> in Settings
               (default 2) so they never run in the same minute.
+            </p>
+            <p class="help-para">
+              <strong>Run every (days)</strong> sets the gap between runs: a
+              number (e.g. <code>7</code>) is a fixed interval, while a range
+              (e.g. <code>7-15</code>) picks a random day count within the range
+              each time the job schedules, so the cadence is not fixed. Both jobs
+              and templates support it.
             </p>
             <p class="help-note">
               Disable <em>Enforce one run per day</em> in Settings to allow the
@@ -2010,7 +2100,8 @@
             </p>
             <p class="help-para">
               点击任意 Emby 观看日志行可展开播放摘要卡片，显示以下信息：
-              内容名称（及剧集信息）、剧集总时长、播放起始与结束位置、实际观看时长、是否已标记为已看。
+              内容名称（及剧集信息）、剧集总时长、播放起始与结束位置、实际观看时长、是否已标记为已看；启用<strong>真实观看</strong>时另显示<strong>已串流</strong>的数据量。
+              启用<strong>顺序播放</strong>时，卡片会列出本次按顺序播放的每一集，并显示<strong>顺序播放集数</strong>与<strong>总观看时长</strong>。
             </p>
 
             <div
@@ -2138,7 +2229,11 @@
               Click any Emby Watch log row to expand a playback summary card
               showing: content title (and series/episode info), total runtime,
               start and end positions, actual duration watched, and whether the
-              item was marked as watched.
+              item was marked as watched. With <strong>Real Watch</strong> on it
+              also shows how much was <strong>Streamed</strong>. With
+              <strong>Sequence Play</strong> on, the card lists every episode
+              played in order, plus <strong>Episodes played</strong> and
+              <strong>Total watched</strong>.
             </p>
 
             <div

@@ -2,7 +2,7 @@
   <img src="docs/logo.png" width="200" alt="Bemby" />
 </p>
 
-# Bemby v0.9.35
+# Bemby v0.9.36
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/liveinaus/bemby)](https://hub.docker.com/r/liveinaus/bemby)
 [![更新日志](https://img.shields.io/badge/%E6%9B%B4%E6%96%B0%E6%97%A5%E5%BF%97-%E6%9F%A5%E7%9C%8B-blue)](https://github.com/liveinaus/Bemby/blob/main/CHANGELOG.md)
@@ -38,22 +38,22 @@
 
 ## 功能特性
 
-- **多账号** — 管理多个 Telegram 账号，每个账号通过 MTProto 独立认证；支持拖拽排序；会话失效时自动标记并显示重新认证按钮；代理徽章直接显示在账号行；账号列表新增 TG 账号列，显示 Telegram 显示名称和用户名（存储于数据库，首次访问自动获取，可手动刷新）；手机号下方自动显示根据号码解析出的国旗与国家名称；可切换显示"额外信息"列（登录邮箱、受限状态、通行密钥标记）；表格中可按住 Shift 点击选中连续区间；添加/编辑账号表单校验名称、手机号及（无全局默认凭据时的）API ID/Hash
+- **多账号** — 管理多个 Telegram 账号，每个账号通过 MTProto 独立认证；支持拖拽排序；会话失效时自动标记并显示重新认证按钮；代理徽章直接显示在账号行；账号列表新增 TG 账号列，显示 Telegram 显示名称和用户名（存储于数据库，首次访问自动获取，可手动刷新）；手机号下方自动显示根据号码解析出的国旗与国家名称；可切换显示"额外信息"列（登录邮箱、受限状态、通行密钥标记）；表格中可按住 Shift 点击选中连续区间；名称、手机号、状态、添加时间列支持点击排序（升序 → 降序 → 恢复手动顺序，排序状态跨刷新保留，排序或搜索时停用拖拽）；添加/编辑账号表单校验名称、手机号及（无全局默认凭据时的）API ID/Hash
 - **Telegram 账户安全管理** — 在账户编辑面板的"高级"选项卡中管理 2FA 密码（设置/修改/移除）、活跃会话（查看设备信息、单独终止或一键终止所有其他设备）、恢复邮箱（查看、设置、更改或移除；含完整的邮件确认流程）、以及通行密钥（查看、添加、移除已注册的 Passkeys；添加后可"使用通行密钥登录"，仅需再输入 2FA 密码，另可"验证"通行密钥是否仍被 Telegram 接受，实验性功能）
 - **更新 Telegram 个人资料** — 在"个人资料"选项卡中直接修改该账户的名字、姓氏和简介
 - **账户备注** — 可为每个账户添加自由文本备注；表格中备注列可切换显示；支持批量设置备注
-- **批量账户管理** — 账户批量操作统一收纳至"批量操作"菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免 Telegram 限流：**批量重命名**（`{index}` 递增序号、可补零、实时预览）、**批量获取属性**（刷新 TG 信息与附加属性）、**批量修改登录邮箱**（`+` 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行、绝不存储）、**批量修改凭据**（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥、按模板追加备注）、**批量添加通行密钥**；开启环境变量 `BULK_ACCOUNT_MANAGEMENT=1` 后还提供 **批量添加账户**（每行 `手机号----API网址`，自动创建并逐个从各 API 网页读取验证码/2FA 完成认证，支持名称编号方案、候选设备/代理/API 凭据随机选取、自定义提取正则）与 **批量清理**
+- **批量账户管理** — 账户批量操作统一收纳至"批量操作"菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免 Telegram 限流：**批量重命名**（`{index}` 递增序号、可补零、实时预览）、**批量获取属性**（刷新 TG 信息与附加属性）、**批量修改登录邮箱**（`+` 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行、绝不存储）、**批量修改凭据**（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥、按模板追加备注）、**批量添加通行密钥**、**批量修改资料**（批量设置名字/姓氏/简介，每行一个账户、字段用 Tab 分隔，可从表格粘贴或一键生成随机名字，后台批量执行、失败自动重试）；开启环境变量 `BULK_ACCOUNT_MANAGEMENT=1` 后还提供 **批量添加账户**（每行 `手机号----API网址`，自动创建并逐个从各 API 网页读取验证码/2FA 完成认证，支持名称编号方案、候选设备/代理/API 凭据随机选取、自定义提取正则）与 **批量清理**
 - **账户备份加密** — 导出会话文件时可设置自定义密码保护；导入时自动识别加密状态并提示输入密码；"强制重新认证"选项可在导入时清除令牌，避免 Telegram 因同一令牌多设备使用而撤销会话
 - **内置 Telegram 消息客户端** — 独立页面视图，直接在 Bemby 中与联系人、群组和频道聊天；支持表情回应、引用回复、内联图片查看、发送图片与文件、频道帖子评论线程、机器人命令自动补全、自动标记已读、贴纸显示、右键菜单静音（8小时/1周/永久）和取消静音、加入文件夹、编辑联系人姓名、简介链接化、小程序显示模式切换（应用内/浏览器）；拉黑/取消拉黑、举报（附原因与备注，举报用户/机器人时同步拉黑并删除聊天）、删除聊天/消息（可选"为对方也删除"）、编辑自己发送的消息、转发消息、多选批量转发/删除、双向输入中提示；群组/频道搜索兼顾本地标题匹配与全局搜索，结果更全面；移动端聊天头部按钮合并为 ⋯ 菜单，新增"跳转到最新消息"悬浮按钮；账号级"清除缓存"与"清理账号"（退出全部群组/删除全部私聊/移除全部联系人及文件夹，需二次确认）；打开非 Telegram 链接时可选择在 Bemby 内嵌或浏览器打开，内嵌前自动探测目标站点是否允许被嵌入，不允许时经内置代理加载并提示
 - **三种任务类型**
   - **签到** — 在随机的每日时间向 Telegram 机器人发送可配置命令并点击回复按钮
-  - **Emby 观看** — 在 Emby 服务器上模拟播放会话，从随机进度位置开始，定期上报播放进度，结束后可标记为已看；上报前可校验媒体文件是否可播放（磁盘在线），避免文件离线时上报虚假观看；User Agent 可从内置预设（SenPlayer、Yamby、Hills、Lenna、VidHub）中选择，也可在设置中自定义；可关联可选的 Telegram 账号用于发送通知
+  - **Emby 观看** — 在 Emby 服务器上模拟播放会话，从随机进度位置开始，定期上报播放进度，结束后可标记为已看；上报前可校验媒体文件是否可播放（磁盘在线），避免文件离线时上报虚假观看；可开启**真实观看**以真实播放速率直连拉取实际媒体字节（产生真实串流流量，注意消耗下行流量）；可开启**顺序播放**从上次离开处续播（无则播下一集，仍无则随机），看完一集自动接着下一集，仅在看完整集时才标记已看；可**限定媒体库**（填写库名或从 1 开始的序号，匹配不到或库内无可播内容时回退到整个服务器）；User Agent 可从内置预设（SenPlayer、Yamby、Hills、Lenna、VidHub）中选择，也可在设置中自定义；可关联可选的 Telegram 账号用于发送通知
   - **自定义** — 通过可配置的多步骤流程操作任意 Telegram 机器人，每步可触发命令、等待消息、点击按钮（支持 `{aiBtn}` AI 自动识别）、加入群组 / 订阅频道（支持公开用户名或私有邀请链接，可校验订阅状态、入群后点击验证按钮）、向指定联系人发送消息或点击其消息上的按钮、输入验证码（`enter_captcha` 步骤：复用上一步按钮点击后机器人的回复图片，无需二次等待，自动识别后发送答案）；发送命令步骤支持 `{aiInput}` / `{aiInput:N}` 占位符，自动将上一条消息中的图片发给 AI 识别并将识别结果填入命令；每个动作（延时除外）可独立配置最大重试次数，失败时仅重试该动作而不中断整个任务链；整个任务链也支持独立的最大重试次数；等待回复步骤支持可选的成功/失败文字匹配，收到含指定文字的回复时自动标记成功或失败；输入验证码步骤若 AI 返回字符数与预期长度不符则视为失败并触发重试；任务失败时完整保存已执行步骤的详细日志，AI 调用的提示词与响应始终写入步骤日志（无需开启开发者模式）
 - **命令模板** — 支持在启动命令中嵌入随机占位符（`{word:N}`、`{num:N}`、`{alpha:N}`、`{uuid}`）
 - **AI 按钮识别** — 签到按钮文字设为 `{aiBtn}` 时，自动通过视觉大模型识别应点击的按钮（支持图片验证码类场景）；AI 返回结果与可用按钮不符时自动重试（最多不超过任务重试次数，硬性上限 5 次）；可在设置页面配置 API 地址、密钥和模型；支持配置多个服务商，默认模型报错时自动切换；默认模型精确锁定到具体的"服务商 + 模型"记录，避免不同服务商提供同名模型时用错凭据
 - **调度器** — 在每个任务可配置的每日时间窗口内随机选取执行时间；自动错峰，各任务至少间隔可配置的分钟数（默认 2 分钟），避免同一分钟并发；同一时刻最多并发执行 2 个任务，超出自动排队；失败时自动重试
 - **实时日志** — 打开正在运行的任务日志时，详情面板实时刷新，每秒更新一次；任务完成后展示完整对话或播放摘要
-- **详细日志** — 点击日志行可展开详情：签到任务显示仿 Telegram 气泡对话；Emby 观看任务显示播放摘要卡片（剧集信息、起止位置、已看标记）
+- **详细日志** — 点击日志行可展开详情：签到任务显示仿 Telegram 气泡对话；Emby 观看任务显示播放摘要卡片（剧集信息、起止位置、已看标记、已串流数据量，顺序播放时另列出本次播放的每一集、顺序播放集数与总观看时长）
 - **TG 通知** — 可在设置中配置通知目标（用户名/t.me 链接）及触发时机（失败/成功），通过关联账号发送；未配置目标时默认发至"收藏夹"
 - **停止运行中的任务** — 可在日志列表中随时中止正在执行的任务
 - **复制任务** — 在任务列表中一键将现有任务复制为新任务
@@ -153,8 +153,12 @@ Railway 支持直接从 Docker Hub 镜像部署，无需 Fork 或连接 GitHub�
 | Emby 用户名/密码        | Emby 账号凭证（仅 Emby 观看）                                     |
 | 播放时长                | 模拟播放的秒数；实际时长在此基础上随机延长 0–10%（仅 Emby 观看）  |
 | 播放后标记已看          | 播放结束后将该剧集/电影标记为已看（默认开启，仅 Emby 观看）       |
+| 真实观看                | 以真实播放速率直连拉取实际媒体字节，产生真实串流流量；会消耗大量下行流量（仅 Emby 观看） |
+| 顺序播放                | 从上次离开处续播，看完一集自动接着下一集，仅看完整集才标记已看（仅 Emby 观看） |
+| 限定媒体库              | 媒体库名称或序号（从 1 开始）；匹配不到或库内无可播内容时回退到整个服务器（仅 Emby 观看，可不填） |
 | 账号（可选）            | 关联的 Telegram 账号，用于发送成功/失败通知（仅 Emby 观看，可不填）|
 | 时间窗口开始/结束        | 每日执行时间窗口，格式 HHMM，如 `1400`–`1600`                    |
+| 每隔多少天执行          | 执行间隔天数，填数字（如 `7`）或范围（如 `7-15`）；范围会在每次排程时随机取一个天数 |
 | 最大重试次数            | 失败时的重试次数                                                   |
 
 调度器每天在时间窗口内随机选取执行时间，并自动错开各任务（最小间隔可在设置中调整，默认 2 分钟）。若保存任务时当日窗口已过，则顺延至次日。
@@ -270,6 +274,12 @@ Emby 观看任务以真实 Emby 用户身份认证，模拟选定客户端（默
 
 Emby 服务器将该会话识别为与所选 User Agent 预设对应的客户端（默认为 **Mac / SenPlayer**）。
 
+可选的进阶开关：
+
+- **真实观看** — 除进度上报外，以真实播放速率从 `/Videos/{id}/stream` 直连拉取实际媒体字节，使服务器产生真实串流流量；日志记录本次已串流的数据量。单次运行可能消耗数百 MB 至数 GB 下行流量。
+- **顺序播放** — 优先续播「继续观看」中的内容，其次是 Next Up，仍无则随机；当前集看完后自动播放同剧集的下一集，直到用尽播放时长；仅在完整看完一集时才标记已看，未看完的内容保留在「继续观看」列表中。
+- **限定媒体库** — 按媒体库名称或序号（从 1 开始）限定挑选范围（含续播与顺序播放），并校验所选内容确实属于该库；匹配不到该库或库内没有可播放内容时回退到整个服务器。
+
 ---
 
 ## TODO
@@ -326,7 +336,7 @@ Bemby 仅供个人自动化和学习目的使用。请负责任地使用，并�
 [![Changelog](https://img.shields.io/badge/changelog-view-blue)](CHANGELOG.md)
 [![Telegram](https://img.shields.io/badge/Telegram-community-2CA5E0?logo=telegram&logoColor=white)](https://t.me/cool_bemby)
 
-[简体中文](#bemby-v0934) | **English**
+[简体中文](#bemby-v0936) | **English**
 
 > If Bemby saves you time, please consider giving it a star on GitHub. It helps others find the project and keeps development going.
 
@@ -355,22 +365,22 @@ A self-hosted automation tool for managing daily Telegram bot check-ins (签到)
 
 ### Features
 
-- **Multi-account** — manage multiple Telegram accounts, each independently authenticated via MTProto; drag-and-drop reordering; automatic session-expiry detection with re-auth prompt; proxy badge shown inline on each account row; a TG Name column shows each account's Telegram display name and username (stored in the database, auto-fetched on first visit, refreshable on demand); the phone number cell shows a flag and country name resolved from the calling code; a toggleable **Extra Info** column surfaces login email, restriction status, and passkey flags; hold Shift and click to select a contiguous range of rows; the add/edit form validates name, phone number, and (when no global default is set) API ID/Hash
+- **Multi-account** — manage multiple Telegram accounts, each independently authenticated via MTProto; drag-and-drop reordering; automatic session-expiry detection with re-auth prompt; proxy badge shown inline on each account row; a TG Name column shows each account's Telegram display name and username (stored in the database, auto-fetched on first visit, refreshable on demand); the phone number cell shows a flag and country name resolved from the calling code; a toggleable **Extra Info** column surfaces login email, restriction status, and passkey flags; hold Shift and click to select a contiguous range of rows; the Name, Phone, Status, and Added columns are sortable (ascending → descending → back to the manual drag order, remembered across refreshes, with drag reordering disabled while sorting or searching); the add/edit form validates name, phone number, and (when no global default is set) API ID/Hash
 - **Telegram account security** — manage 2FA password (set/change/remove), active login sessions (view device info, terminate individual or all others), recovery email (view, set, change, or remove with a full confirmation code flow), and passkeys (list, add, and remove registered WebAuthn passkeys — once added, **Log in with passkey** signs in and then asks only for the 2FA password, and **Verify** confirms Telegram still accepts the passkey; experimental) — all from the Advanced tab of the account edit panel
 - **Update Telegram profile** — edit the account's first name, last name, and bio directly from the Profile tab
 - **Account notes** — add free-text notes per account; the Notes column in the accounts table is toggleable (always hidden on mobile); bulk-update notes across selected accounts at once
-- **Bulk account management** — bulk operations are consolidated under a **Bulk Actions** menu and share a "Gap between accounts (seconds)" control to avoid Telegram flood limits: **Bulk Rename** (`{index}` running number, zero-padding, live preview), **Fetch Attributes** (refresh TG info and extra attributes), **Bulk Change Login Email** (`+`-tag template with variables, codes read from Gmail over IMAP with an app password used only for the run and never stored), **Bulk Change Credential** (set/rotate 2FA password, optionally removing other devices/passkeys and appending to notes), and **Bulk Add Passkey**; setting `BULK_ACCOUNT_MANAGEMENT=1` additionally enables **Bulk Add** (one `phone----apiUrl` per line, auto-creating and authenticating each account by reading the code/2FA from its API page, with a numbering scheme, random candidate device/proxy/API credentials, and custom extraction regexes) and **Bulk Clean**
+- **Bulk account management** — bulk operations are consolidated under a **Bulk Actions** menu and share a "Gap between accounts (seconds)" control to avoid Telegram flood limits: **Bulk Rename** (`{index}` running number, zero-padding, live preview), **Fetch Attributes** (refresh TG info and extra attributes), **Bulk Change Login Email** (`+`-tag template with variables, codes read from Gmail over IMAP with an app password used only for the run and never stored), **Bulk Change Credential** (set/rotate 2FA password, optionally removing other devices/passkeys and appending to notes), **Bulk Add Passkey**, and **Bulk Rename TG Profile** (set first name/last name/intro for many accounts at once, one Tab-separated line per account so columns can be pasted from a spreadsheet or filled with generated random names, run as a background batch that retries failures); setting `BULK_ACCOUNT_MANAGEMENT=1` additionally enables **Bulk Add** (one `phone----apiUrl` per line, auto-creating and authenticating each account by reading the code/2FA from its API page, with a numbering scheme, random candidate device/proxy/API credentials, and custom extraction regexes) and **Bulk Clean**
 - **Encrypted account backup** — export account sessions protected by a user-supplied password; imports require the matching key; optional "force re-auth" clears session tokens on import to prevent Telegram revoking a shared token
 - **Built-in Telegram Messenger** — a dedicated page view to chat with contacts, groups, and channels directly from Bemby; supports emoji reactions, quoted replies, inline photo viewing, sending images and files, channel post comment threads, bot command autocomplete, automatic read-marking, sticker display, mute/unmute from the context menu (8 h / 1 week / forever), add chats to folders, edit contact names in the profile panel, clickable URLs and @mentions in bios, mini app display toggle (in-app or browser); block/unblock, report (with a reason and comment, blocking and deleting the chat too when reporting a user/bot), delete chats/messages (with an optional "also delete for them"), edit your own sent messages, forward messages, multi-select bulk forward/delete, and two-way typing indicators; group/channel search combines local title matching with a global search for much more complete results; chat header buttons collapse into a single ⋯ menu on mobile, plus a floating "jump to latest" button; per-account **Clear cache** and **Clean account** (leave every group, delete every private chat, remove every contact and folder — gated behind a confirmation checkbox); opening a non-Telegram link offers a choice between opening in Bemby or the browser, probing first whether the target site allows embedding and falling back to a built-in proxy with a warning banner when it doesn't
 - **Three job types**
   - **Check-in (签到)** — sends a configurable command to a Telegram bot and clicks the reply button on a randomised daily schedule
-  - **Emby Watch** — simulates a playback session on an Emby server, starting from a random position, reporting progress at regular intervals, and optionally marking the item as watched; can verify the media file is playable (disk online) before reporting to avoid a fake watch when the file is offline; User Agent is selectable from built-in presets (SenPlayer, Yamby, Hills, Lenna, VidHub) or custom values managed in Settings; supports an optional linked Telegram account for notifications
+  - **Emby Watch** — simulates a playback session on an Emby server, starting from a random position, reporting progress at regular intervals, and optionally marking the item as watched; can verify the media file is playable (disk online) before reporting to avoid a fake watch when the file is offline; **Real Watch** pulls the actual media bytes at real playback pace so the server sees genuine streaming traffic (at the cost of download bandwidth); **Sequence Play** resumes where the account left off (else Next Up, else a random item) and chains into the next episode when one finishes, marking an episode watched only when it actually finishes; **Limit to library** restricts selection to one library by name or index (starting from 1), falling back to the whole server when it can't be matched or has nothing to play; User Agent is selectable from built-in presets (SenPlayer, Yamby, Hills, Lenna, VidHub) or custom values managed in Settings; supports an optional linked Telegram account for notifications
   - **Custom** — configurable multi-step flows that interact with any Telegram bot: send commands, wait for replies, click buttons (with `{aiBtn}` AI selection), join a group / subscribe to a channel (public username or private invite link, with optional subscription check and post-join verification button), send a message to or click a button for a specific contact, or run an **Enter Captcha** step that reuses the bot's reply from the preceding button click without waiting again, automatically recognises the image, and sends the answer; the `{aiInput}` / `{aiInput:N}` placeholder in a send-command step feeds the previous message's image to AI and substitutes the result into the command; each action (except delay) has its own max retry count — only that action is retried on failure, not the whole chain; the whole action chain also has its own max retry count independent of the global job retry; wait-for-reply supports optional success/fail text matching to classify replies automatically; enter-captcha validates the AI response length against the configured count and retries on mismatch; AI prompt and response are always visible per step in logs without needing developer logs enabled
 - **Command templates** — embed random placeholders in the start command (`{word:N}`, `{num:N}`, `{alpha:N}`, `{uuid}`)
 - **AI button detection** — set the check-in button to `{aiBtn}` and a vision model automatically identifies which button to click, including image-based CAPTCHA-style challenges; when the AI response does not match an available button it retries automatically (up to the job's max retries, hard-capped at 5); a fresh install pre-configures OpenRouter (`https://openrouter.ai/api/v1`) with the `nvidia/nemotron-nano-12b-v2-vl:free` model — just add your API key in Settings to activate it; configure multiple providers and enable auto-fallback so a rate-limited default model rolls over to another provider; the default model is pinned to an exact provider + model combination so two identically named models from different providers never get mixed up
 - **Scheduler** — picks a random time within a configurable daily window per job, automatically staggering jobs at least a configurable number of minutes apart (default 2) so they never pile into the same minute, with at most 2 jobs executing at once (extras queue); handles retry on failure
 - **Live log streaming** — opening a running job's log shows real-time updates as each step completes, refreshing every second
-- **Rich log detail** — click any log row to expand: check-in jobs show a Telegram-style chat view; Emby Watch jobs show a playback summary card with episode info and position data
+- **Rich log detail** — click any log row to expand: check-in jobs show a Telegram-style chat view; Emby Watch jobs show a playback summary card with episode info, position data, and streamed volume, listing every episode played plus episodes completed and total watched time for Sequence Play runs
 - **TG notifications** — configure a notification target and trigger events (failed / success) in Settings; the linked account sends to the configured target, falling back to Saved Messages if none is set
 - **Stop running jobs** — cancel an in-progress job directly from the log list
 - **Duplicate job** — copy any existing job into a new job with one click from the job list
@@ -470,8 +480,12 @@ Go to **Jobs** and click **Add Job**. Configure:
 | Emby Username/Password  | Emby account credentials (Emby Watch only)                                           |
 | Play Duration           | Seconds to simulate playback; actual duration is this value plus 0–10% random extra (Emby Watch only) |
 | Mark as watched         | Mark the episode/movie as watched in Emby after playback ends (default on, Emby Watch only) |
+| Real Watch              | Pull the actual media bytes at real playback pace so the server sees genuine streaming traffic; uses significant download bandwidth (Emby Watch only) |
+| Sequence Play           | Resume from the last position and chain into the next episode when one finishes; only marks an episode watched when it actually finishes (Emby Watch only) |
+| Limit to library        | Library name or index (starting from 1); falls back to the whole server when it can't be matched or has nothing to play (Emby Watch only, optional) |
 | Account (optional)      | Telegram account to send success/failure notifications via (Emby Watch only; leave blank to disable notifications) |
 | Window Start/End        | Daily schedule window in HHMM format, e.g. `1400`–`1600`                            |
+| Run every (days)        | Interval between runs: a number (e.g. `7`) or a range (e.g. `7-15`), where a range picks a random day count each time it schedules |
 | Max Retries             | Number of retry attempts on failure                                                  |
 
 The scheduler picks a random time within the window each day, automatically staggered away from other jobs (minimum gap configurable in Settings, default 2 minutes). If the window has already passed when the job is saved, it schedules for the following day.
@@ -586,6 +600,12 @@ The Emby Watch job authenticates as a real Emby user and simulates the selected 
 - If "Mark as watched" is enabled, calls `POST /Users/{id}/PlayedItems/{itemId}` to mark the item as watched
 
 The Emby server sees the session as the client matching the selected User Agent preset (default: **Mac / SenPlayer**).
+
+Optional advanced toggles:
+
+- **Real Watch** — on top of the progress reports, the actual media bytes are pulled from `/Videos/{id}/stream` at real playback pace, so the server records genuine streaming traffic; the log stores how much was streamed. A single run can use hundreds of MB to several GB of download bandwidth.
+- **Sequence Play** — prefers resuming an item from Continue Watching, then Next Up, then a random pick; when an episode finishes it plays the next one in the show until the play duration is used up. An episode is only marked watched when it actually finishes, so partly-watched items stay in Continue Watching.
+- **Limit to library** — restricts selection (including resume and Sequence Play) to one library by name or index (starting from 1), verifying that the chosen item really belongs to it; falls back to the whole server when the library can't be matched or has nothing to play.
 
 ---
 
