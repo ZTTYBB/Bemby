@@ -398,9 +398,9 @@ describe('embywatch Sequence Play', () => {
 });
 
 // Model an ID-aliasing proxy: ParentId is honoured only for browsing a library's
-// Series/Movies (SortBy=Random) and for scoped resume; the global Resume/NextUp
-// and whole-server random are unscoped. Distinguishes the query shapes the code
-// actually issues.
+// Series/Movies (SortBy=Random). The global Resume/NextUp and whole-server random
+// are unscoped; library membership is derived from each series' ParentId (a
+// bounded per-series lookup). Distinguishes the query shapes the code issues.
 const jsonRes = (body: unknown) => ({
   ok: true,
   status: 200,
@@ -409,10 +409,10 @@ const jsonRes = (body: unknown) => ({
 });
 function routeProxy(opts: {
   views: any[];
-  scopedResume?: any[]; // Items?ParentId&Filters=IsResumable (in-library resumables)
   librarySample?: any[]; // Items?ParentId&IncludeItemTypes=Series,Movie&SortBy=Random
   episodes?: Record<string, any[]>; // /Shows/{seriesId}/Episodes
-  wholeResume?: any[]; // /Items/Resume (unscoped)
+  wholeResume?: any[]; // /Items/Resume (unscoped global Continue Watching)
+  seriesParent?: Record<string, string>; // seriesId -> library id (membership signal)
   wholeRandom?: any[]; // /Items?SortBy=Random&IncludeItemTypes=Episode,Movie (unscoped)
   offlineIds?: string[]; // ids whose stream probe fails
 }) {
@@ -427,11 +427,15 @@ function routeProxy(opts: {
       const bad = (opts.offlineIds ?? []).includes(vid[1]);
       return Promise.resolve({ status: bad ? 404 : 206, body: { cancel: vi.fn() }, arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(bad ? 0 : 1024)) });
     }
-    if (url.includes('Filters=IsResumable')) return Promise.resolve(jsonRes({ Items: opts.scopedResume ?? [] }));
+    // Series ParentId lookup: /Users/u1/Items/{seriesId}?Fields=ParentId
+    const sl = url.match(/\/Items\/([^/?]+)\?Fields=ParentId/);
+    if (sl && sl[1] !== 'Resume') {
+      return Promise.resolve(jsonRes({ Id: sl[1], Type: 'Series', ParentId: opts.seriesParent?.[sl[1]] }));
+    }
+    if (url.includes('/Items/Resume')) return Promise.resolve(jsonRes({ Items: opts.wholeResume ?? [] }));
     if (url.includes('IncludeItemTypes=Series,Movie')) return Promise.resolve(jsonRes({ Items: opts.librarySample ?? [] }));
     const eps = url.match(/\/Shows\/([^/]+)\/Episodes/);
     if (eps) return Promise.resolve(jsonRes({ Items: opts.episodes?.[eps[1]] ?? [] }));
-    if (url.includes('/Items/Resume')) return Promise.resolve(jsonRes({ Items: opts.wholeResume ?? [] }));
     if (url.includes('/Shows/NextUp')) return Promise.resolve(jsonRes({ Items: [] }));
     if (url.includes('SortBy=Random')) return Promise.resolve(jsonRes({ Items: opts.wholeRandom ?? [] }));
     return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
@@ -468,42 +472,47 @@ describe('embywatch library scoping', () => {
     expect(urls().some(u => u.includes('IncludeItemTypes=Series,Movie'))).toBe(false);
   });
 
-  it('never resumes an out-of-library item even when the global Resume list is not scoped', async () => {
-    // The proxy exposes no in-library resumables, but the global Continue Watching
-    // holds a drama from another library. Sequence Play must not touch it.
+  it('resumes the in-library Continue Watching item and skips out-of-library ones', async () => {
+    // Global Continue Watching holds a drama (other library) and an in-library
+    // anime. Sequence Play must resume the anime, never the drama.
+    const drama = { Id: 'drama', Name: 'E29', SeriesName: 'Drama', Type: 'Episode', SeriesId: 'sDrama', RunTimeTicks: 600_000_000, UserData: { PlaybackPositionTicks: 100_000_000 }, MediaSources: [{ Id: 'd-s' }] };
+    const anime = { Id: 'anime5', Name: 'Ep 5', SeriesName: 'Anime', Type: 'Episode', SeriesId: 'sAnime', RunTimeTicks: 600_000_000, UserData: { PlaybackPositionTicks: 300_000_000 }, MediaSources: [{ Id: 'a-s' }] };
     routeProxy({
       views,
-      scopedResume: [], // proxy: no episodes exposed under the library
-      librarySample: [series('sA', 'InLibShow')],
-      episodes: { sA: [ep('e1', 1)] },
-      wholeResume: [{ Id: 'drama', Name: 'OutOfLib E29', Type: 'Episode', SeriesId: 'other', RunTimeTicks: 10_000_000, MediaSources: [{ Id: 'd-s' }] }],
+      wholeResume: [drama, anime], // drama first, but it is out-of-library
+      seriesParent: { sDrama: 'lib-movies', sAnime: 'lib-tv' },
+      episodes: { sAnime: [] },
     });
     const result = await runEmbywatch('https://emby.example.com', { ...baseConfig, sequencePlay: true, verifyPlayable: false, playDuration: 2, library: 'TV Shows' });
 
     expect(result.sequencePlay).toBe(true);
-    expect((result.episodes ?? []).every(e => e.title.startsWith('Ep'))).toBe(true);
-    expect((result.episodes ?? []).some(e => e.title.includes('OutOfLib'))).toBe(false);
-    // The global (unscoped) Resume list was never consulted for the pick.
-    expect(urls().some(u => u.includes('/Items/Resume'))).toBe(false);
-    // The scoped resume query was bounded and library-scoped.
-    expect(urls().find(u => u.includes('Filters=IsResumable'))).toContain('ParentId=lib-tv');
+    expect(result.episodes?.[0].title).toBe('Ep 5'); // resumed the in-library anime
+    expect(result.episodes?.[0].startSeconds).toBe(30); // from its stored position
+    expect((result.episodes ?? []).some(e => e.title === 'E29')).toBe(false); // never the drama
+    // No random library browse was needed since resume succeeded.
+    expect(urls().some(u => u.includes('IncludeItemTypes=Series,Movie'))).toBe(false);
   });
 
-  it('resumes an in-library item when the server honours scoped resume', async () => {
-    // 60s episode resumed 30s in.
-    const resumable = { ...ep('e5', 5), RunTimeTicks: 600_000_000, UserData: { PlaybackPositionTicks: 300_000_000 } };
-    routeProxy({ views, scopedResume: [resumable], episodes: { series1: [ep('e5', 5), ep('e6', 6)] } });
-    const result = await runEmbywatch('https://emby.example.com', { ...baseConfig, sequencePlay: true, verifyPlayable: false, playDuration: 2, library: 'TV Shows' });
-    expect(result.episodes?.[0].title).toBe('Ep 5');
-    expect(result.episodes?.[0].startSeconds).toBe(30); // resumed from the stored position
+  it('starts a random in-library title when nothing in the library is resuming', async () => {
+    // Only out-of-library resume exists → skip it, start a random in-library show.
+    const drama = { Id: 'drama', Name: 'E29', Type: 'Episode', SeriesId: 'sDrama', RunTimeTicks: 600_000_000, UserData: { PlaybackPositionTicks: 100_000_000 }, MediaSources: [{ Id: 'd-s' }] };
+    routeProxy({
+      views,
+      wholeResume: [drama],
+      seriesParent: { sDrama: 'lib-movies' },
+      librarySample: [series('sA', 'InLibShow')],
+      episodes: { sA: [ep('e1', 1)] },
+    });
+    const result = await runEmbywatch('https://emby.example.com', { ...baseConfig, sequencePlay: true, verifyPlayable: false, playDuration: 1, library: 'TV Shows' });
+    expect(result.episodes?.[0].title).toBe('Ep 1'); // in-library random start
+    expect((result.episodes ?? []).some(e => e.title === 'E29')).toBe(false);
   });
 
   it('falls back to the whole server when the library has nothing to play', async () => {
     routeProxy({
       views,
-      scopedResume: [],
-      librarySample: [], // empty library
       wholeResume: [],
+      librarySample: [], // empty library
       wholeRandom: [{ Id: 'w1', Name: 'Whole', Type: 'Movie', RunTimeTicks: 20_000_000, MediaSources: [{ Id: 's' }] }],
     });
     const result = await runEmbywatch('https://emby.example.com', { ...baseConfig, sequencePlay: true, verifyPlayable: false, playDuration: 1, library: 'TV Shows' });

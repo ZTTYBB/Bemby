@@ -633,21 +633,52 @@ async function pickRandomFromLibrary(serverUrl: string, ctx: PlayCtx, parentId: 
 // In-library resume: scoped resumable items with a real playback position. Works
 // on servers that honour ParentId; returns nothing on proxies that don't expose
 // episodes under a library — so we never resume an out-of-library item.
+// A series' ParentId is its library, which is the reliable, bounded membership
+// signal (Ids/SearchTerm/ParentId-intersection queries are ignored by aliasing
+// proxies). Cached per run so each series is fetched at most once.
+async function libraryOfSeries(serverUrl: string, ctx: PlayCtx, seriesId: string, cache: Map<string, string | undefined>): Promise<string | undefined> {
+  if (cache.has(seriesId)) return cache.get(seriesId);
+  let parent: string | undefined;
+  try {
+    const s = await embyRequest<any>(serverUrl, `/Users/${ctx.userId}/Items/${seriesId}?Fields=ParentId`, reqOpts(ctx));
+    parent = s?.ParentId;
+  } catch {
+    parent = undefined;
+  }
+  cache.set(seriesId, parent);
+  return parent;
+}
+
+async function itemInLibrary(serverUrl: string, ctx: PlayCtx, item: any, libraryId: string, cache: Map<string, string | undefined>): Promise<boolean> {
+  if (!item) return false;
+  if (item.ParentId === libraryId) return true; // movie directly under the library
+  const seriesId = item.Type === 'Episode' ? item.SeriesId : item.Id;
+  if (!seriesId) return false;
+  return (await libraryOfSeries(serverUrl, ctx, seriesId, cache)) === libraryId;
+}
+
+// In-library resume: the global Continue Watching list (which the proxy returns
+// unscoped) filtered to the target library by each item's series ParentId. This
+// is what lets us resume the right in-library show without scanning the library.
 async function libraryResumeSegment(serverUrl: string, ctx: PlayCtx, parentId: string, verifyPlayable: boolean): Promise<Segment | undefined> {
   let res: any;
   try {
     res = await embyRequest<any>(
       serverUrl,
-      `/Users/${ctx.userId}/Items?ParentId=${parentId}&Recursive=true&Filters=IsResumable&IncludeItemTypes=Episode,Movie&SortBy=DatePlayed&SortOrder=Descending&Limit=10&Fields=MediaSources,RunTimeTicks,UserData`,
+      `/Users/${ctx.userId}/Items/Resume?Limit=25&MediaTypes=Video&Recursive=true&Fields=MediaSources,RunTimeTicks,UserData,ParentId`,
       reqOpts(ctx),
     );
   } catch {
     return undefined;
   }
-  // Guard against servers that ignore Filters=IsResumable and return non-resumable
-  // rows: keep only items with an actual playback position.
-  const resumable = (res.Items ?? []).filter((i: any) => Number(i.UserData?.PlaybackPositionTicks) > 0);
-  return firstPlayable(serverUrl, ctx, resumable, verifyPlayable);
+  const cache = new Map<string, string | undefined>();
+  for (const cand of res.Items ?? []) {
+    if (Number(cand.UserData?.PlaybackPositionTicks) <= 0) continue;
+    if (!(await itemInLibrary(serverUrl, ctx, cand, parentId, cache))) continue;
+    const seg = toSegment(cand);
+    if (!verifyPlayable || (await available(serverUrl, ctx, seg))) return seg;
+  }
+  return undefined;
 }
 
 /** Random streamable item (existing behaviour), retried up to MAX_PICK_ATTEMPTS. */
