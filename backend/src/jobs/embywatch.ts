@@ -701,32 +701,45 @@ async function pickRandomFromLibrary(serverUrl: string, ctx: PlayCtx, parentId: 
   return undefined;
 }
 
-// In-library resume: scoped resumable items with a real playback position. Works
-// on servers that honour ParentId; returns nothing on proxies that don't expose
-// episodes under a library — so we never resume an out-of-library item.
-// A series' ParentId is its library, which is the reliable, bounded membership
-// signal (Ids/SearchTerm/ParentId-intersection queries are ignored by aliasing
-// proxies). Cached per run so each series is fetched at most once.
-async function libraryOfSeries(serverUrl: string, ctx: PlayCtx, seriesId: string, cache: Map<string, string | undefined>): Promise<string | undefined> {
-  if (cache.has(seriesId)) return cache.get(seriesId);
-  let parent: string | undefined;
+// Library membership for a resume candidate. The primary signal is the item's
+// Ancestors chain: real Emby servers return it with the library's CollectionFolder
+// (view) id, even though the physical ParentId chain runs through separate folders
+// (Series -> letter folder -> disk folder -> root), so "series ParentId == view id"
+// never matches there. Falls back to the series' ParentId for aliasing proxies that
+// flatten the hierarchy and 404 on Ancestors. Bounded: at most one lookup per series
+// (episodes of a series share the same ancestors), cached across the resume list.
+async function ancestorsIncludeLibrary(serverUrl: string, ctx: PlayCtx, itemId: string, libraryId: string): Promise<boolean> {
   try {
-    const s = await embyRequest<any>(serverUrl, `/Users/${ctx.userId}/Items/${seriesId}?Fields=ParentId`, reqOpts(ctx));
-    parent = s?.ParentId;
+    const anc = await embyRequest<any>(serverUrl, `/Items/${itemId}/Ancestors?UserId=${ctx.userId}`, reqOpts(ctx));
+    return Array.isArray(anc) && anc.some((a: any) => a?.Id === libraryId);
   } catch {
     throwIfAborted(ctx.signal);
-    parent = undefined;
+    return false;
   }
-  cache.set(seriesId, parent);
-  return parent;
 }
 
-async function itemInLibrary(serverUrl: string, ctx: PlayCtx, item: any, libraryId: string, cache: Map<string, string | undefined>): Promise<boolean> {
+async function seriesParentId(serverUrl: string, ctx: PlayCtx, seriesId: string): Promise<string | undefined> {
+  try {
+    const s = await embyRequest<any>(serverUrl, `/Users/${ctx.userId}/Items/${seriesId}?Fields=ParentId`, reqOpts(ctx));
+    return s?.ParentId;
+  } catch {
+    throwIfAborted(ctx.signal);
+    return undefined;
+  }
+}
+
+async function itemInLibrary(serverUrl: string, ctx: PlayCtx, item: any, libraryId: string, cache: Map<string, boolean>): Promise<boolean> {
   if (!item) return false;
-  if (item.ParentId === libraryId) return true; // movie directly under the library
-  const seriesId = item.Type === 'Episode' ? item.SeriesId : item.Id;
-  if (!seriesId) return false;
-  return (await libraryOfSeries(serverUrl, ctx, seriesId, cache)) === libraryId;
+  if (item.ParentId === libraryId) return true; // movie/series directly under the view
+  const key = item.Type === 'Episode' ? (item.SeriesId ?? item.Id) : item.Id;
+  if (cache.has(key)) return cache.get(key) as boolean;
+  let inLib = await ancestorsIncludeLibrary(serverUrl, ctx, item.Id, libraryId);
+  if (!inLib) {
+    const seriesId = item.Type === 'Episode' ? item.SeriesId : item.Id;
+    if (seriesId) inLib = (await seriesParentId(serverUrl, ctx, seriesId)) === libraryId;
+  }
+  cache.set(key, inLib);
+  return inLib;
 }
 
 // In-library resume: the global Continue Watching list (which the proxy returns
@@ -737,14 +750,14 @@ async function libraryResumeSegment(serverUrl: string, ctx: PlayCtx, parentId: s
   try {
     res = await embyRequest<any>(
       serverUrl,
-      `/Users/${ctx.userId}/Items/Resume?Limit=25&MediaTypes=Video&Recursive=true&Fields=MediaSources,RunTimeTicks,UserData,ParentId`,
+      `/Users/${ctx.userId}/Items/Resume?Limit=25&MediaTypes=Video&Recursive=true&Fields=MediaSources,RunTimeTicks,UserData,ParentId,SeriesId`,
       reqOpts(ctx),
     );
   } catch {
     throwIfAborted(ctx.signal);
     return undefined;
   }
-  const cache = new Map<string, string | undefined>();
+  const cache = new Map<string, boolean>();
   for (const cand of res.Items ?? []) {
     throwIfAborted(ctx.signal);
     if (Number(cand.UserData?.PlaybackPositionTicks) <= 0) continue;

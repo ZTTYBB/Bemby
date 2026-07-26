@@ -397,10 +397,12 @@ describe('embywatch Sequence Play', () => {
   });
 });
 
-// Model an ID-aliasing proxy: ParentId is honoured only for browsing a library's
-// Series/Movies (SortBy=Random). The global Resume/NextUp and whole-server random
-// are unscoped; library membership is derived from each series' ParentId (a
-// bounded per-series lookup). Distinguishes the query shapes the code issues.
+// Model an Emby server behind optional ID-aliasing. ParentId is honoured only for
+// browsing a library's Series/Movies (SortBy=Random). The global Resume/NextUp and
+// whole-server random are unscoped. Library membership is derived primarily from the
+// item's Ancestors chain (real Emby returns the CollectionFolder view id there); when
+// Ancestors is unavailable (aliasing proxy → 404) it falls back to the series'
+// ParentId. Distinguishes the query shapes the code issues.
 const jsonRes = (body: unknown) => ({
   ok: true,
   status: 200,
@@ -412,7 +414,8 @@ function routeProxy(opts: {
   librarySample?: any[]; // Items?ParentId&IncludeItemTypes=Series,Movie&SortBy=Random
   episodes?: Record<string, any[]>; // /Shows/{seriesId}/Episodes
   wholeResume?: any[]; // /Items/Resume (unscoped global Continue Watching)
-  seriesParent?: Record<string, string>; // seriesId -> library id (membership signal)
+  ancestors?: Record<string, string[]>; // itemId -> ancestor ids (real Emby membership signal)
+  seriesParent?: Record<string, string>; // seriesId -> library id (aliasing-proxy fallback)
   wholeRandom?: any[]; // /Items?SortBy=Random&IncludeItemTypes=Episode,Movie (unscoped)
   offlineIds?: string[]; // ids whose stream probe fails
 }) {
@@ -426,6 +429,15 @@ function routeProxy(opts: {
     if (vid) {
       const bad = (opts.offlineIds ?? []).includes(vid[1]);
       return Promise.resolve({ status: bad ? 404 : 206, body: { cancel: vi.fn() }, arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(bad ? 0 : 1024)) });
+    }
+    // Ancestors chain: /Items/{id}/Ancestors — real Emby's membership signal.
+    // Return the configured chain, or 404 (like an aliasing proxy) so the code
+    // falls back to the series ParentId signal.
+    const anc = url.match(/\/Items\/([^/?]+)\/Ancestors/);
+    if (anc) {
+      const chain = opts.ancestors?.[anc[1]];
+      if (!chain) return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found', text: vi.fn().mockResolvedValue('') });
+      return Promise.resolve(jsonRes(chain.map(id => ({ Id: id }))));
     }
     // Series ParentId lookup: /Users/u1/Items/{seriesId}?Fields=ParentId
     const sl = url.match(/\/Items\/([^/?]+)\?Fields=ParentId/);
@@ -472,22 +484,29 @@ describe('embywatch library scoping', () => {
     expect(urls().some(u => u.includes('IncludeItemTypes=Series,Movie'))).toBe(false);
   });
 
-  it('resumes the in-library Continue Watching item and skips out-of-library ones', async () => {
-    // Global Continue Watching holds a drama (other library) and an in-library
-    // anime. Sequence Play must resume the anime, never the drama.
+  it('resumes the in-library Continue Watching item (Ancestors signal) and chains the next episode', async () => {
+    // Real-Emby shape: the library view sits above physical folders, so membership
+    // comes from the Ancestors chain, not the series ParentId. Global Continue
+    // Watching holds an out-of-library drama and an in-library anime; Sequence Play
+    // must resume the anime, then keep playing the next episode in the same show.
     const drama = { Id: 'drama', Name: 'E29', SeriesName: 'Drama', Type: 'Episode', SeriesId: 'sDrama', RunTimeTicks: 600_000_000, UserData: { PlaybackPositionTicks: 100_000_000 }, MediaSources: [{ Id: 'd-s' }] };
-    const anime = { Id: 'anime5', Name: 'Ep 5', SeriesName: 'Anime', Type: 'Episode', SeriesId: 'sAnime', RunTimeTicks: 600_000_000, UserData: { PlaybackPositionTicks: 300_000_000 }, MediaSources: [{ Id: 'a-s' }] };
+    // Short runtimes keep the real-timed watch fast: Ep 5 resumes near its end
+    // (1s left), then Ep 6 (1s) plays and completes.
+    const anime = { Id: 'anime5', Name: 'Ep 5', SeriesName: 'Anime', Type: 'Episode', SeriesId: 'sAnime', IndexNumber: 5, RunTimeTicks: 20_000_000, UserData: { PlaybackPositionTicks: 10_000_000 }, MediaSources: [{ Id: 'a-s' }] };
+    const anime6 = { Id: 'anime6', Name: 'Ep 6', SeriesName: 'Anime', Type: 'Episode', SeriesId: 'sAnime', IndexNumber: 6, RunTimeTicks: 10_000_000, MediaSources: [{ Id: 'a6-s' }] };
     routeProxy({
       views,
       wholeResume: [drama, anime], // drama first, but it is out-of-library
-      seriesParent: { sDrama: 'lib-movies', sAnime: 'lib-tv' },
-      episodes: { sAnime: [] },
+      // Real Emby: physical parent chain differs from the view id; Ancestors carries it.
+      ancestors: { drama: ['folderD', 'lib-movies', 'root'], anime5: ['folderA', 'lib-tv', 'root'] },
+      episodes: { sAnime: [anime, anime6] },
     });
-    const result = await runEmbywatch('https://emby.example.com', { ...baseConfig, sequencePlay: true, verifyPlayable: false, playDuration: 2, library: 'TV Shows' });
+    const result = await runEmbywatch('https://emby.example.com', { ...baseConfig, sequencePlay: true, verifyPlayable: false, playDuration: 5, library: 'TV Shows' });
 
     expect(result.sequencePlay).toBe(true);
     expect(result.episodes?.[0].title).toBe('Ep 5'); // resumed the in-library anime
-    expect(result.episodes?.[0].startSeconds).toBe(30); // from its stored position
+    expect(result.episodes?.[0].startSeconds).toBe(1); // from its stored position (1s)
+    expect(result.episodes?.[1].title).toBe('Ep 6'); // sequence play chained the next episode
     expect((result.episodes ?? []).some(e => e.title === 'E29')).toBe(false); // never the drama
     // No random library browse was needed since resume succeeded.
     expect(urls().some(u => u.includes('IncludeItemTypes=Series,Movie'))).toBe(false);
