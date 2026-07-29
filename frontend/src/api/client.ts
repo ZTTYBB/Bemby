@@ -377,6 +377,15 @@ export type CustomAction =
       verifyButton?: string;
       verifyWaitMs?: number;
     }
+  | {
+      type: "open_mini_app";
+      contact?: string;
+      button?: string;
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+    }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
 
 export type CustomConfig = {

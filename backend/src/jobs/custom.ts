@@ -18,15 +18,18 @@ import {
   recognizeCaptchaWithAI,
   buildCaptchaPrompt,
   findUrlButton,
+  escapeHtml,
+  callAI,
 } from "./checkin";
 import { loadCheckinUrl } from "./cloudflare";
+import { openableButtonUrl, webButtonOf, type WebButton } from "../tg/miniApp";
 import type { CustomConfig, CustomStepLog } from "../types";
 
 export type CustomJobLog = {
   steps: CustomStepLog[];
 };
 
-// Opens a Cloudflare-gated URL (e.g. a "我不是机器人" button/answer) in a headless
+// Opens a Cloudflare-gated URL (e.g. a "我不是机器人" button/answer) in the installed
 // browser to pass the "I am not a bot" check, recording the outcome on the step.
 // Returns the final page's visible text for success/fail matching.
 async function passCloudflare(
@@ -34,18 +37,56 @@ async function passCloudflare(
   cfChallenge: boolean | undefined,
   step: CustomStepLog,
   webProxyUrl?: string,
+  miniApp = false,
 ): Promise<string> {
   if (!cfChallenge) {
     throw new Error(
       'This click opens a Cloudflare-protected page ("I am not a bot"). Enable "Solve Cloudflare challenge" for this action.',
     );
   }
-  const cf = await loadCheckinUrl(url, webProxyUrl);
+  const cf = await loadCheckinUrl(url, webProxyUrl, { miniApp });
   step.cfHost = cf.finalHost;
   step.cfChallenged = cf.challenged;
   step.cfPassed = cf.ok;
+  step.cfMiniApp = miniApp || undefined;
+  step.cfMiniAppAction = cf.inAppAction;
   if (!cf.ok) throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
   return cf.text;
+}
+
+// A URL or Mini App button opens a page instead of firing a callback; Mini App
+// buttons get their signed URL from Telegram first, exactly as a real client does.
+// After a callback click the checkin may still hinge on a page: a URL the bot
+// answered with, or a follow-up URL / Mini App button in its replies. Returns the
+// page text (empty when there is nothing to open).
+async function followUpCfText(
+  client: TelegramClient,
+  peer: Api.TypeEntityLike,
+  answer: Api.messages.BotCallbackAnswer | null,
+  responses: { msg: Api.Message }[],
+  step: CustomStepLog,
+  webProxyUrl?: string,
+): Promise<string> {
+  const answerUrl = (answer as any)?.url as string | undefined;
+  if (answerUrl) return passCloudflare(answerUrl, true, step, webProxyUrl);
+
+  const hit = responses.map((r) => ({ msg: r.msg, web: findUrlButton(r.msg) })).find((h) => h.web);
+  if (!hit?.web) return '';
+  return openWebButton(client, hit.web, peer, hit.msg, true, step, webProxyUrl);
+}
+
+async function openWebButton(
+  client: TelegramClient,
+  web: WebButton,
+  peer: Api.TypeEntityLike,
+  msg: Api.Message | null,
+  cfChallenge: boolean | undefined,
+  step: CustomStepLog,
+  webProxyUrl?: string,
+): Promise<string> {
+  const { url, signed } = await openableButtonUrl(client, web, peer, msg ?? undefined);
+  step.cfMiniAppSigned = web.miniApp ? signed : undefined;
+  return passCloudflare(url, cfChallenge, step, webProxyUrl, web.miniApp);
 }
 
 export class CustomJobError extends Error {
@@ -1020,11 +1061,14 @@ export async function runCustom(
                         : btnText.includes(targetText);
                       if (!matches) continue;
 
-                      // A URL button ("我不是机器人") or a WebApp/Mini-App button
-                      // (FutureEcho's "Verify" -> a Turnstile page) carries the web
-                      // address; open it in a browser to pass the Cloudflare check.
-                      if (btn instanceof Api.KeyboardButtonUrl || btn instanceof Api.KeyboardButtonWebView) {
-                        const cfText = await passCloudflare(btn.url, action.cfChallenge, step, webProxyUrl);
+                      // A URL button ("我不是机器人") or a Mini App button (FutureEcho's
+                      // "Verify", a "打开小程序签到" app) carries the web address; open it
+                      // in a browser to pass the Cloudflare check.
+                      const web = webButtonOf(btn);
+                      if (web) {
+                        const cfText = await openWebButton(
+                          client, web, botUsername, buttonsMsg, action.cfChallenge, step, webProxyUrl,
+                        );
                         clicked = true;
                         step.clickedButton = btnText;
                         step.result = `Opened "${btnText}"`;
@@ -1187,10 +1231,11 @@ export async function runCustom(
                       // Only chase a Cloudflare URL from the response when this action
                       // opted in; otherwise an incidental URL/WebApp button (e.g. a
                       // "Verify" the user handles in a later action) must be ignored.
-                      const cfUrl = action.cfChallenge
-                        ? ((answer as any)?.url || responses.map((r) => findUrlButton(r.msg)).find(Boolean)?.url)
-                        : undefined;
-                      if (cfUrl) cfText = await passCloudflare(cfUrl, true, step, webProxyUrl);
+                      if (action.cfChallenge) {
+                        cfText = await followUpCfText(
+                          client, botUsername, answer, responses, step, webProxyUrl,
+                        );
+                      }
 
                       // Check success/fail text in callback answer, response, or CF page
                       if (action.successContains || action.failContains) {
@@ -1385,11 +1430,14 @@ export async function runCustom(
                         : btnText.includes(targetText);
                       if (!matches) continue;
 
-                      // A URL button ("我不是机器人") or a WebApp/Mini-App button
-                      // (FutureEcho's "Verify" -> a Turnstile page) carries the web
-                      // address; open it in a browser to pass the Cloudflare check.
-                      if (btn instanceof Api.KeyboardButtonUrl || btn instanceof Api.KeyboardButtonWebView) {
-                        const cfText = await passCloudflare(btn.url, action.cfChallenge, step, webProxyUrl);
+                      // A URL button ("我不是机器人") or a Mini App button (FutureEcho's
+                      // "Verify", a "打开小程序签到" app) carries the web address; open it
+                      // in a browser to pass the Cloudflare check.
+                      const web = webButtonOf(btn);
+                      if (web) {
+                        const cfText = await openWebButton(
+                          client, web, entity, buttonsMsg, action.cfChallenge, step, webProxyUrl,
+                        );
                         clicked = true;
                         step.clickedButton = btnText;
                         step.result = `Opened "${btnText}"`;
@@ -1544,10 +1592,11 @@ export async function runCustom(
                       // Only chase a Cloudflare URL from the response when this action
                       // opted in; otherwise an incidental URL/WebApp button (e.g. a
                       // "Verify" the user handles in a later action) must be ignored.
-                      const cfUrl = action.cfChallenge
-                        ? ((answer as any)?.url || responses.map((r) => findUrlButton(r.msg)).find(Boolean)?.url)
-                        : undefined;
-                      if (cfUrl) cfText = await passCloudflare(cfUrl, true, step, webProxyUrl);
+                      if (action.cfChallenge) {
+                        cfText = await followUpCfText(
+                          client, entity, answer, responses, step, webProxyUrl,
+                        );
+                      }
 
                       if (action.successContains || action.failContains) {
                         const texts = [answer?.message ?? '', ...responses.map((r) => r.msg.message ?? ''), cfText].filter(Boolean).join('\n');
@@ -2165,6 +2214,71 @@ export async function runCustom(
 
                   if (pendingApproval && action.checkMembership)
                     throw new Error("Subscription not confirmed: request is still pending approval");
+                }
+                break;
+              }
+
+              case "open_mini_app": {
+                const target = action.contact?.trim() || botUsername;
+                const wantBtn = action.button?.trim();
+                step.label = `Open Mini App${wantBtn ? ` "${wantBtn}"` : ""} from ${target}`;
+
+                // Pass `target` through rather than pre-resolving it: GramJS resolves
+                // and caches the peer itself, and the extra ResolveUsername round-trip
+                // is what tends to time out here.
+                const msgs = (await client.getMessages(target, { limit: 10 })) as Api.Message[];
+                let hit: { web: WebButton; msg: Api.Message } | undefined;
+                for (const m of msgs) {
+                  const web = findUrlButton(m, wantBtn);
+                  if (web?.miniApp) {
+                    hit = { web, msg: m };
+                    break;
+                  }
+                }
+                if (!hit) {
+                  throw new Error(
+                    `No Mini App button${wantBtn ? ` matching "${wantBtn}"` : ""} in the last 10 messages from ${target}`,
+                  );
+                }
+
+                step.clickedButton = hit.web.text;
+                const { url, signed } = await openableButtonUrl(client, hit.web, target, hit.msg);
+                step.cfMiniApp = true;
+                step.cfMiniAppSigned = signed;
+
+                const cf = await loadCheckinUrl(url, webProxyUrl, {
+                  miniApp: true,
+                  inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
+                  solveQuestion: async (question) => {
+                    const prompt =
+                      `A Telegram Mini App is asking a verification question before it will ` +
+                      `complete a checkin. The screen reads:\n\n${question}\n\n` +
+                      `Reply with ONLY the answer to type into the input, nothing else.`;
+                    const { response } = await callAI([], prompt, 512);
+                    step.aiPrompt = prompt;
+                    step.aiResponse = response;
+                    return response;
+                  },
+                });
+                step.cfHost = cf.finalHost;
+                step.cfChallenged = cf.challenged;
+                step.cfPassed = cf.ok;
+                step.cfMiniAppAction = cf.inAppAction;
+                step.responseHtml = escapeHtml(cf.text.slice(0, 2000)).replace(/\n/g, "<br>");
+                if (!cf.ok) {
+                  throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
+                }
+                step.result = cf.inAppAction
+                  ? `Opened "${hit.web.text}", pressed "${cf.inAppAction}"`
+                  : `Opened "${hit.web.text}"`;
+
+                if (action.failContains && cf.text.includes(action.failContains)) {
+                  throw new Error(`Page indicates failure: "${action.failContains}" detected`);
+                }
+                if (action.successContains && !cf.text.includes(action.successContains)) {
+                  throw new Error(
+                    `Expected success indicator "${action.successContains}" not found in the Mini App page`,
+                  );
                 }
                 break;
               }
