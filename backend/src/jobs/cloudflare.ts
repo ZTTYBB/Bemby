@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import net from "node:net";
 import { spawn } from "node:child_process";
+import { SocksClient } from "socks";
 import { connect } from "puppeteer-real-browser";
 type Browser = Awaited<ReturnType<typeof connect>>["browser"];
 type Page = Awaited<ReturnType<typeof connect>>["page"];
@@ -136,10 +138,78 @@ function proxyOption(proxyUrl?: string): { host: string; port: number; username?
   }
 }
 
+type SocksBridge = { port: number; close: () => void };
+
+/**
+ * Chromium cannot use a SOCKS5 proxy that needs credentials: --proxy-server takes no
+ * password and its auth prompt only answers HTTP 407. Bemby's proxies are exactly that
+ * (socks5://user:pass@host:port), so when one is configured for Cloudflare solving we
+ * put a loopback HTTP proxy in front of it for the browser's lifetime and point the
+ * browser at that. Only CONNECT is handled -- challenge pages are https.
+ */
+function startSocksBridge(url: URL): Promise<SocksBridge> {
+  const proxy = {
+    host: url.hostname,
+    port: Number(url.port),
+    type: (url.protocol === "socks4:" ? 4 : 5) as 4 | 5,
+    userId: url.username ? decodeURIComponent(url.username) : undefined,
+    password: url.password ? decodeURIComponent(url.password) : undefined,
+  };
+
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((client) => {
+    sockets.add(client);
+    client.on("close", () => sockets.delete(client));
+    client.on("error", () => client.destroy());
+
+    client.once("data", async (chunk) => {
+      const head = chunk.toString("latin1");
+      const target = head.match(/^CONNECT\s+([^\s:]+):(\d+)/i);
+      if (!target) {
+        client.end("HTTP/1.1 405 Method Not Allowed\r\n\r\n");
+        return;
+      }
+      try {
+        const { socket } = await SocksClient.createConnection({
+          proxy,
+          command: "connect",
+          // Hostname is passed through so the proxy resolves it, as socks5h does
+          destination: { host: target[1], port: Number(target[2]) },
+        });
+        sockets.add(socket);
+        socket.on("close", () => sockets.delete(socket));
+        socket.on("error", () => socket.destroy());
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        socket.pipe(client);
+        client.pipe(socket);
+      } catch {
+        client.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+      }
+    });
+  });
+
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      resolve({
+        port,
+        close: () => {
+          for (const socket of sockets) socket.destroy();
+          server.close();
+        },
+      });
+    });
+  });
+}
+
 // Launches a real (rebrowser-patched) Chromium via puppeteer-real-browser: headed
 // under an auto-managed Xvfb display with a real cursor, and turnstile:true so it
 // auto-clicks Cloudflare Turnstile. This is the realistic path to pass Turnstile.
-async function launchBrowser(proxyUrl?: string): Promise<{ browser: Browser; page: Page }> {
+async function launchBrowser(
+  proxyUrl?: string,
+): Promise<{ browser: Browser; page: Page; closeBridge?: () => void }> {
   const executablePath = chromiumExecutable();
   if (!executablePath) {
     throw new Error(
@@ -168,13 +238,34 @@ async function launchBrowser(proxyUrl?: string): Promise<{ browser: Browser; pag
     process.env.FONTCONFIG_PATH = `${root}/etc/fonts`;
   }
 
-  return connect({
-    headless: false,
-    turnstile: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--window-size=1280,800"],
-    customConfig: { chromePath: executablePath },
-    proxy: proxyOption(proxyUrl),
-  });
+  // A SOCKS proxy is reached through a loopback HTTP bridge (Chromium cannot
+  // authenticate to SOCKS itself); http(s) proxies are passed straight through.
+  let bridge: SocksBridge | undefined;
+  let proxy = proxyOption(proxyUrl);
+  if (proxyUrl && /^socks/i.test(proxyUrl)) {
+    try {
+      bridge = await startSocksBridge(new URL(proxyUrl));
+      proxy = { host: "127.0.0.1", port: bridge.port };
+    } catch (err: any) {
+      console.error(`[cloudflare] SOCKS bridge failed: ${err?.message ?? err}`);
+      bridge = undefined;
+      proxy = undefined;
+    }
+  }
+
+  try {
+    const launched = await connect({
+      headless: false,
+      turnstile: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--window-size=1280,800"],
+      customConfig: { chromePath: executablePath },
+      proxy,
+    });
+    return { ...launched, closeBridge: bridge?.close };
+  } catch (err) {
+    bridge?.close();
+    throw err;
+  }
 }
 
 // Full-page Cloudflare interstitial ("Just a moment...").
@@ -636,9 +727,11 @@ export async function loadCheckinUrl(
     }
   })();
   let browser: Browser | undefined;
+  let closeBridge: (() => void) | undefined;
   try {
     const launched = await launchBrowser(proxyUrl);
     browser = launched.browser;
+    closeBridge = launched.closeBridge;
     const page = launched.page;
 
     // In dev the backend runs via tsx/esbuild, which wraps functions passed to
@@ -753,5 +846,6 @@ export async function loadCheckinUrl(
     return { ok: false, challenged: false, text: "", finalHost };
   } finally {
     await browser?.close().catch(() => {});
+    closeBridge?.();
   }
 }
