@@ -72,8 +72,15 @@ async function followUpCfText(
 
   const hit = responses.map((r) => ({ msg: r.msg, web: findUrlButton(r.msg) })).find((h) => h.web);
   if (!hit?.web) return '';
-  return openWebButton(client, hit.web, peer, hit.msg, true, step, webProxyUrl);
+  return (await openWebButton(client, hit.web, peer, hit.msg, true, step, webProxyUrl)).text;
 }
+
+type WebButtonOutcome = {
+  /** Text of the page that was opened, empty when nothing was loaded. */
+  text: string;
+  /** Set when a `?start=` deep link was followed, so the caller can re-anchor. */
+  deepLinkSent?: { botUsername: string; msg: Api.Message };
+};
 
 async function openWebButton(
   client: TelegramClient,
@@ -83,10 +90,25 @@ async function openWebButton(
   cfChallenge: boolean | undefined,
   step: CustomStepLog,
   webProxyUrl?: string,
-): Promise<string> {
+): Promise<WebButtonOutcome> {
+  // A `?start=` deep link is followed the way a real client does -- by sending the
+  // command to that bot -- not by loading a page. Group bots use these to move a
+  // verification into a private chat.
+  if (web.startLink) {
+    const { botUsername, startParam } = web.startLink;
+    const sent = await client.sendMessage(botUsername, { message: `/start ${startParam}` });
+    step.result = `Followed deep link: /start ${startParam} to @${botUsername}`;
+    return { text: "", deepLinkSent: { botUsername, msg: sent } };
+  }
+
   const { url, signed } = await openableButtonUrl(client, web, peer, msg ?? undefined);
   step.cfMiniAppSigned = web.miniApp ? signed : undefined;
-  return passCloudflare(url, cfChallenge, step, webProxyUrl, web.miniApp);
+  if (web.miniApp && !signed) {
+    throw new Error(
+      `Telegram would not sign the Mini App behind "${web.text}"; the app cannot be opened logged in`,
+    );
+  }
+  return { text: await passCloudflare(url, cfChallenge, step, webProxyUrl, web.miniApp) };
 }
 
 export class CustomJobError extends Error {
@@ -202,6 +224,10 @@ async function waitForButtonsInChat(
 
     const handler = async (event: NewMessageEvent) => {
       const msg = event.message as Api.Message;
+      // Match the chat by id here rather than through NewMessage({ chats }): that filter
+      // stringifies an entity object to "[object Object]" and then throws an unhandled
+      // rejection while resolving it on the next update -- immediate in a busy group.
+      if (!msg.peerId || utils.getPeerId(msg.peerId) !== chatPeerId) return;
       collected.push(msg);
       if (hasInlineButtons(msg)) succeed(msg);
     };
@@ -215,7 +241,7 @@ async function waitForButtonsInChat(
       if (hasInlineButtons(msg)) succeed(msg);
     };
 
-    client.addEventHandler(handler, new NewMessage({ chats: [chat] }));
+    client.addEventHandler(handler, new NewMessage({}));
     client.addEventHandler(editHandler, new Raw({}));
   });
 }
@@ -1066,12 +1092,25 @@ export async function runCustom(
                       // in a browser to pass the Cloudflare check.
                       const web = webButtonOf(btn);
                       if (web) {
-                        const cfText = await openWebButton(
+                        const opened = await openWebButton(
                           client, web, botUsername, buttonsMsg, action.cfChallenge, step, webProxyUrl,
                         );
+                        const cfText = opened.text;
+                        // Following a deep link starts a private chat with that bot;
+                        // re-anchor so a later wait_reply looks past this send
+                        if (opened.deepLinkSent) {
+                          const { botUsername: linkBot, msg: sentMsg } = opened.deepLinkSent;
+                          const anchor = anchorFromSent(sentMsg);
+                          if (linkBot.toLowerCase() === botUsername.replace(/^@/, '').toLowerCase()) {
+                            sendAnchor = anchor;
+                          }
+                          contactAnchors.set(linkBot, anchor);
+                          contactAnchors.set(`@${linkBot}`, anchor);
+                        }
                         clicked = true;
                         step.clickedButton = btnText;
-                        step.result = `Opened "${btnText}"`;
+                        // A deep-link button records its own result inside openWebButton
+                        if (!step.result) step.result = `Opened "${btnText}"`;
                         if (action.failContains && cfText.includes(action.failContains)) {
                           throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
                         }
@@ -1435,12 +1474,25 @@ export async function runCustom(
                       // in a browser to pass the Cloudflare check.
                       const web = webButtonOf(btn);
                       if (web) {
-                        const cfText = await openWebButton(
+                        const opened = await openWebButton(
                           client, web, entity, buttonsMsg, action.cfChallenge, step, webProxyUrl,
                         );
+                        const cfText = opened.text;
+                        // Following a deep link starts a private chat with that bot;
+                        // re-anchor so a later wait_reply looks past this send
+                        if (opened.deepLinkSent) {
+                          const { botUsername: linkBot, msg: sentMsg } = opened.deepLinkSent;
+                          const anchor = anchorFromSent(sentMsg);
+                          if (linkBot.toLowerCase() === botUsername.replace(/^@/, '').toLowerCase()) {
+                            sendAnchor = anchor;
+                          }
+                          contactAnchors.set(linkBot, anchor);
+                          contactAnchors.set(`@${linkBot}`, anchor);
+                        }
                         clicked = true;
                         step.clickedButton = btnText;
-                        step.result = `Opened "${btnText}"`;
+                        // A deep-link button records its own result inside openWebButton
+                        if (!step.result) step.result = `Opened "${btnText}"`;
                         if (action.failContains && cfText.includes(action.failContains)) {
                           throw new Error(`Reply indicates failure: "${action.failContains}" detected`);
                         }
@@ -2245,6 +2297,11 @@ export async function runCustom(
                 const { url, signed } = await openableButtonUrl(client, hit.web, target, hit.msg);
                 step.cfMiniApp = true;
                 step.cfMiniAppSigned = signed;
+                if (!signed) {
+                  throw new Error(
+                    `Telegram would not sign the Mini App behind "${hit.web.text}"; it cannot be opened logged in`,
+                  );
+                }
 
                 const cf = await loadCheckinUrl(url, webProxyUrl, {
                   miniApp: true,

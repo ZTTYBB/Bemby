@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Api } from 'telegram';
-import { webButtonOf } from '../tg/miniApp';
+import { webButtonOf, parseBotStartLink } from '../tg/miniApp';
 import { solveArithmetic } from '../jobs/cloudflare';
 
 describe('webButtonOf', () => {
@@ -26,6 +26,56 @@ describe('webButtonOf', () => {
   it('ignores callback buttons', () => {
     const btn = new Api.KeyboardButtonCallback({ text: '签到', data: Buffer.from('x') });
     expect(webButtonOf(btn)).toBeUndefined();
+  });
+
+  it('treats a t.me named mini app link as a Mini App', () => {
+    const btn = new Api.KeyboardButtonUrl({
+      text: '在 App 中验证',
+      url: 'https://telegram.me/nmnmfunbot/panel?startapp=L3dlYi12ZXJpZnkvLTEwMDEzNTY5MTUzMzAvNjUxNDM2NjUwNg%3D%3D',
+    });
+    const web = webButtonOf(btn);
+    expect(web?.miniApp).toBe(true);
+    expect(web?.miniAppLink).toEqual({
+      botUsername: 'nmnmfunbot',
+      appShortName: 'panel',
+      // padding stripped: Telegram rejects '=' in start_param
+      startParam: 'L3dlYi12ZXJpZnkvLTEwMDEzNTY5MTUzMzAvNjUxNDM2NjUwNg',
+    });
+  });
+
+  it('marks a t.me ?start= link as a deep link, not a page to load', () => {
+    const btn = new Api.KeyboardButtonUrl({
+      text: '在私信中验证',
+      url: 'https://telegram.me/nmnmfunbot?start=joinverify_-1001356915330',
+    });
+    const web = webButtonOf(btn);
+    expect(web?.miniApp).toBe(false);
+    expect(web?.startLink).toEqual({
+      botUsername: 'nmnmfunbot',
+      startParam: 'joinverify_-1001356915330',
+    });
+  });
+
+  it('leaves an ordinary URL button alone', () => {
+    const btn = new Api.KeyboardButtonUrl({ text: '打开浏览器验证', url: 'https://nmbot.nmnm.fun/#/web-verify/-100/1' });
+    const web = webButtonOf(btn);
+    expect(web?.miniApp).toBe(false);
+    expect(web?.startLink).toBeUndefined();
+    expect(web?.miniAppLink).toBeUndefined();
+  });
+});
+
+describe('parseBotStartLink', () => {
+  it('reads the payload a group bot hands to a private chat', () => {
+    expect(parseBotStartLink('https://t.me/somebot?start=joinverify_-100123')).toEqual({
+      botUsername: 'somebot',
+      startParam: 'joinverify_-100123',
+    });
+  });
+
+  it('ignores mini app links and non-Telegram URLs', () => {
+    expect(parseBotStartLink('https://t.me/somebot/panel?startapp=abc')).toBeNull();
+    expect(parseBotStartLink('https://example.com/?start=abc')).toBeNull();
   });
 });
 
