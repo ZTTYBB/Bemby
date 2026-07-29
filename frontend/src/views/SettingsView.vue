@@ -525,6 +525,109 @@
             {{ t("settings.proxyUrlHint") }}
           </p>
 
+          <!-- Import from a proxy provider -->
+          <div class="proxy-edit-panel" style="margin-top: 12px">
+            <div class="card-section-title" style="font-size: 12px">
+              {{ t("settings.providersSection") }}
+            </div>
+            <p style="font-size: 11px; color: #888; margin: 0 0 8px">
+              {{ t("settings.providersHint") }}
+            </p>
+
+            <div
+              v-for="(prov, i) in providers"
+              :key="prov.id"
+              style="border-top: 1px solid #eee; padding-top: 8px; margin-top: 8px"
+            >
+              <div class="proxy-row">
+                <input
+                  v-model.trim="prov.name"
+                  class="form-input"
+                  style="flex: 0 0 140px"
+                  :placeholder="t('settings.providerName')"
+                />
+                <select v-model="prov.type" class="form-input" style="flex: 0 0 130px">
+                  <option value="webshare">Webshare</option>
+                  <option value="list">{{ t("settings.providerTypeList") }}</option>
+                </select>
+                <label class="form-checkbox-label" style="flex: 0 0 auto">
+                  <input type="checkbox" v-model="prov.enabled" />
+                  {{ t("settings.providerEnabled") }}
+                </label>
+                <button
+                  class="btn btn-ghost btn-sm btn-icon"
+                  :disabled="providersSyncing"
+                  :title="t('settings.providerSyncOne')"
+                  @click="syncProviders(prov.id)"
+                >
+                  <i class="fa-solid fa-rotate"></i>
+                </button>
+                <button
+                  class="btn btn-danger btn-sm btn-icon"
+                  :title="t('settings.providerDelete')"
+                  @click="providers.splice(i, 1)"
+                >
+                  <i class="fa-solid fa-trash"></i>
+                </button>
+              </div>
+              <div class="proxy-row" style="margin-top: 6px">
+                <input
+                  v-if="prov.type === 'list'"
+                  v-model.trim="prov.url"
+                  class="form-input"
+                  :placeholder="t('settings.providerUrlPlaceholder')"
+                />
+                <select
+                  v-if="prov.type === 'list'"
+                  v-model="prov.scheme"
+                  class="form-input"
+                  style="flex: 0 0 110px"
+                >
+                  <option value="http">http</option>
+                  <option value="socks5">socks5</option>
+                </select>
+                <input
+                  v-model.trim="prov.apiKey"
+                  class="form-input"
+                  type="password"
+                  autocomplete="off"
+                  :placeholder="
+                    prov.hasKey
+                      ? t('settings.providerKeyStored')
+                      : prov.type === 'webshare'
+                        ? t('settings.providerKeyPlaceholder')
+                        : t('settings.providerKeyOptional')
+                  "
+                />
+              </div>
+            </div>
+
+            <div class="proxy-row" style="margin-top: 10px">
+              <button class="btn btn-ghost btn-sm" @click="addProvider">
+                <i class="fa-solid fa-plus"></i> {{ t("settings.providerAdd") }}
+              </button>
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="providersSaving || !providers.length"
+                @click="saveProviders"
+              >
+                <i class="fa-solid fa-floppy-disk"></i>
+                {{ providersSaving ? t("common.saving") : t("settings.providerSave") }}
+              </button>
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="providersSyncing || !providers.length"
+                @click="syncProviders()"
+              >
+                <i class="fa-solid fa-rotate"></i>
+                {{ providersSyncing ? t("settings.providerSyncing") : t("settings.providerSyncAll") }}
+              </button>
+            </div>
+
+            <div v-if="providersMsg" class="success-msg" style="margin-top: 8px">{{ providersMsg }}</div>
+            <div v-if="providersErrorMsg" class="error-msg" style="margin-top: 8px">{{ providersErrorMsg }}</div>
+          </div>
+
           <button
             class="btn btn-primary"
             style="margin-top: 14px"
@@ -1334,6 +1437,7 @@ import type {
   UAPreset,
   AiSupplier,
   Proxy,
+  ProxyProvider,
   TgAppClient,
 } from "../api/client";
 import { t } from "../i18n";
@@ -1443,6 +1547,11 @@ const editingProxyId = ref<string | null>(null);
 const proxyEditTesting = ref(false);
 const proxiesMsg = ref("");
 const proxiesError = ref("");
+const providers = ref<ProxyProvider[]>([]);
+const providersSaving = ref(false);
+const providersSyncing = ref(false);
+const providersMsg = ref("");
+const providersErrorMsg = ref("");
 
 type ProxyForm = {
   protocol: "socks5" | "socks4";
@@ -1695,6 +1804,7 @@ const credMsg = ref("");
 const credError = ref("");
 
 onMounted(async () => {
+  await loadProviders();
   try {
     const s = await settingsApi.get();
     form.default_timezone = s.default_timezone;
@@ -1896,6 +2006,77 @@ async function saveProxies() {
     proxiesError.value = err.response?.data?.error ?? t("settings.saveFailed");
   } finally {
     proxiesSaving.value = false;
+  }
+}
+
+// Proxy providers: configured sellers whose current list can be pulled in. Keys are
+// never sent back by the server, so a blank key field means "leave it as it is".
+function addProvider() {
+  providers.value.push({
+    // Timestamp-based so a new row is stable before the first save
+    id: `p${Date.now().toString(36)}`,
+    name: "Webshare",
+    type: "webshare",
+    scheme: "http",
+    enabled: true,
+    apiKey: "",
+  });
+}
+
+async function loadProviders() {
+  try {
+    providers.value = await settingsApi.getProxyProviders();
+  } catch {
+    providers.value = [];
+  }
+}
+
+async function saveProviders() {
+  providersMsg.value = "";
+  providersErrorMsg.value = "";
+  providersSaving.value = true;
+  try {
+    providers.value = await settingsApi.saveProxyProviders(providers.value);
+    providersMsg.value = t("settings.saved");
+  } catch (err: any) {
+    providersErrorMsg.value = err.response?.data?.error ?? t("settings.saveFailed");
+  } finally {
+    providersSaving.value = false;
+  }
+}
+
+async function syncProviders(providerId?: string) {
+  providersMsg.value = "";
+  providersErrorMsg.value = "";
+  providersSyncing.value = true;
+  try {
+    // Save first, so a key or URL just typed in is the one used
+    providers.value = await settingsApi.saveProxyProviders(providers.value);
+    const res = await settingsApi.syncProxyProviders(providerId);
+    if (!res.ok) {
+      providersErrorMsg.value = res.error ?? t("settings.providerSyncFailed");
+      return;
+    }
+    providersMsg.value = t("settings.providerSynced")
+      .replace("{added}", String(res.added ?? 0))
+      .replace("{removed}", String(res.removed ?? 0))
+      .replace("{total}", String(res.total ?? 0));
+    const failed = (res.providers ?? []).filter((p) => !p.ok);
+    if (failed.length) {
+      providersErrorMsg.value = failed.map((p) => `${p.name}: ${p.error}`).join("; ");
+    }
+    // The server rewrote the proxy list, so refresh what is on screen
+    const fresh = await settingsApi.get();
+    try {
+      proxies.value = JSON.parse(fresh.proxies ?? "[]");
+    } catch {
+      /* keep what is on screen */
+    }
+    await loadProviders();
+  } catch (err: any) {
+    providersErrorMsg.value = err.response?.data?.error ?? t("settings.providerSyncFailed");
+  } finally {
+    providersSyncing.value = false;
   }
 }
 

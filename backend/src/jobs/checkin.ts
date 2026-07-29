@@ -7,6 +7,7 @@ import type { TgDeviceParams } from '../auth/tgAuth';
 import { NewMessage, NewMessageEvent, Raw } from 'telegram/events';
 import { loadCheckinUrl } from './cloudflare';
 import { openableButtonUrl, webButtonOf, type WebButton } from '../tg/miniApp';
+import { cfProxyCandidates, rememberCfProxy } from '../tg/proxyProviders';
 
 export type CheckinAttemptLog = {
   attempt: number;
@@ -54,6 +55,10 @@ export type CheckinAttemptLog = {
   cfMiniAppAction?: string;
   /** The bot never replied; a standing Mini App button from the chat was opened. */
   cfFromHistory?: boolean;
+  /** Proxy whose exit IP the challenge was cleared through. */
+  cfProxy?: string;
+  /** How many exits were tried before the page loaded. */
+  cfAttempts?: number;
 };
 
 export class CheckinError extends Error {
@@ -912,11 +917,25 @@ export async function runCheckin(
         'Checkin requires opening a Cloudflare-protected page ("I am not a bot"). Enable "Solve Cloudflare challenge" for this job.',
       );
     }
-    const result = await loadCheckinUrl(url, webProxyUrl, { miniApp: log.cfMiniApp });
+    const host = (() => {
+      try {
+        return new URL(url).host;
+      } catch {
+        return '';
+      }
+    })();
+    const result = await loadCheckinUrl(url, webProxyUrl, {
+      miniApp: log.cfMiniApp,
+      // Cloudflare refuses some exit IPs outright, so the rest of the pool stands by
+      proxyCandidates: cfProxyCandidates(webProxyUrl, host),
+    });
     log.cfHost = result.finalHost;
     log.cfChallenged = result.challenged;
     log.cfPassed = result.ok;
     log.cfMiniAppAction = result.inAppAction;
+    log.cfProxy = result.proxyLabel;
+    log.cfAttempts = result.attempts;
+    if (result.ok && result.proxyId) rememberCfProxy(result.finalHost, result.proxyId);
     if (!result.ok) throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
     return result.text;
   };

@@ -967,6 +967,7 @@ export type Settings = {
   cf_solver_enabled?: string;
   /** Server-computed: "true" when the Cloudflare-solver browser is installed. */
   cf_chromium_installed?: string;
+  proxy_providers_count?: string;
 };
 
 export const settingsApi = {
@@ -983,6 +984,52 @@ export const settingsApi = {
         "/settings/cf-solver/install",
       )
       .then((r) => r.data),
+  getProxyProviders: () =>
+    api
+      .get<{ providers: ProxyProvider[] }>("/settings/proxy-providers")
+      .then((r) => r.data.providers),
+  saveProxyProviders: (providers: ProxyProvider[]) =>
+    api
+      .put<{ providers: ProxyProvider[] }>("/settings/proxy-providers", { providers })
+      .then((r) => r.data.providers),
+  syncProxyProviders: (providerId?: string) =>
+    api
+      .post<ProxySyncResult>(
+        "/settings/proxy-providers/sync",
+        providerId ? { providerId } : {},
+      )
+      .then((r) => r.data),
+};
+
+export type ProxyProviderType = "webshare" | "list";
+
+export type ProxyProvider = {
+  id: string;
+  name: string;
+  type: ProxyProviderType;
+  /** Never returned by the server; send a value to set or change it. */
+  apiKey?: string;
+  /** True when the server holds a key for this provider. */
+  hasKey?: boolean;
+  url?: string;
+  scheme?: "http" | "socks5";
+  enabled?: boolean;
+};
+
+export type ProxySyncResult = {
+  ok: boolean;
+  error?: string;
+  added?: number;
+  updated?: number;
+  removed?: number;
+  total?: number;
+  providers?: Array<{
+    providerId: string;
+    name: string;
+    ok: boolean;
+    fetched?: number;
+    error?: string;
+  }>;
 };
 
 // ── AI Suppliers ──────────────────────────────────────────────────────────────
