@@ -157,6 +157,23 @@ export type CustomAction =
       verifyButton?: string;
       verifyWaitMs?: number;
     }
+  | {
+      // Open a Mini App button's page in the installed browser (passing Cloudflare on
+      // the way) and press a control inside the app, which is where such bots put the
+      // actual checkin. `contact` empty/undefined targets the job's bot chat.
+      type: "open_mini_app";
+      contact?: string;
+      /** Inline button that opens the Mini App; blank takes the most recent one. */
+      button?: string;
+      /**
+       * Controls to press inside the app, in order, each named by its visible text.
+       * Blank auto-detects a checkin-worded control.
+       */
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+    }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
 
 export type CustomConfig = {
@@ -238,6 +255,12 @@ export type CustomStepLog = {
   cfChallenged?: boolean;
   /** The challenge was cleared (or the page loaded with none). */
   cfPassed?: boolean;
+  /** The page was opened as a Telegram Mini App (WebView button). */
+  cfMiniApp?: boolean;
+  /** Telegram returned a signed Mini App URL (the app loads logged in). */
+  cfMiniAppSigned?: boolean;
+  /** Label of the checkin control pressed inside the Mini App page. */
+  cfMiniAppAction?: string;
 };
 
 export type EmbywatchConfig = {

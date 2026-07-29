@@ -374,6 +374,7 @@
                   <option value="enter_captcha" :disabled="aiKeyMissing">{{ t('jobs.custom.actionEnterCaptcha') }}{{ aiKeyMissing ? ' (' + t('jobs.noApiKey') + ')' : '' }}</option>
                   <option value="join_group">{{ t('jobs.custom.actionJoinGroup') }}</option>
                   <option value="subscribe_channel">{{ t('jobs.custom.actionSubscribeChannel') }}</option>
+                  <option value="open_mini_app">{{ t('jobs.custom.actionOpenMiniApp') }}</option>
                 </select>
                 <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === 0" @click="moveUp(i)"><i class="fa-solid fa-arrow-up"></i></button>
                 <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === customActions.length - 1" @click="moveDown(i)"><i class="fa-solid fa-arrow-down"></i></button>
@@ -639,6 +640,39 @@
                     {{ t('jobs.custom.labelCheckSubscription') }}
                   </label>
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.checkSubscriptionHint') }}</div>
+                </div>
+              </div>
+
+              <!-- open_mini_app -->
+              <div v-if="action.type === 'open_mini_app'" class="custom-action-params">
+                <div class="form-group" style="margin-bottom:0">
+                  <label class="form-label">{{ t('jobs.custom.labelContactOptional') }}</label>
+                  <input v-model.trim="action.contact" class="form-input" :placeholder="t('jobs.custom.contactOptionalPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.contactOptionalHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelMiniAppButton') }}</label>
+                  <input v-model.trim="action.button" class="form-input" :placeholder="t('jobs.custom.miniAppButtonPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppButtonHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelInAppButton') }}</label>
+                  <input v-model.trim="action.appButton" class="form-input" :placeholder="t('jobs.custom.inAppButtonPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.inAppButtonHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelSuccessContains') }}</label>
+                  <input v-model.trim="action.successContains" class="form-input" :placeholder="t('jobs.custom.successContainsPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.successContainsHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelFailContains') }}</label>
+                  <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelMaxRetries') }}</label>
+                  <input v-model.number="action.maxRetries" class="form-input" type="number" min="0" max="10" />
                 </div>
               </div>
             </div>
@@ -976,7 +1010,7 @@ import { debounce } from '../composables/useDebounce';
 import PaginationBar from '../components/PaginationBar.vue';
 
 type CustomActionForm = {
-  type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'enter_captcha' | 'join_group' | 'subscribe_channel';
+  type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'enter_captcha' | 'join_group' | 'subscribe_channel' | 'open_mini_app';
   content: string;
   contentDropdown: string;
   contentCustom: string;
@@ -999,6 +1033,7 @@ type CustomActionForm = {
   verifyButton: string;
   verifyWaitMs: number;
   channelId: string;
+  appButton: string;
 };
 
 const jobs = ref<Job[]>([]);
@@ -1275,7 +1310,7 @@ function onJobTypeChange() {
 }
 
 function defaultAction(): CustomActionForm {
-  return { type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '', contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到', buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0, captchaLength: '', successContains: '', failContains: '', cfChallenge: false, contact: '', groupId: '', checkMembership: false, verifyButton: '', verifyWaitMs: 30000, channelId: '' };
+  return { type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '', contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到', buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0, captchaLength: '', successContains: '', failContains: '', cfChallenge: false, contact: '', groupId: '', checkMembership: false, verifyButton: '', verifyWaitMs: 30000, channelId: '', appButton: '' };
 }
 
 function addAction() {
@@ -1363,6 +1398,7 @@ function applyTemplate(tpl: JobTemplate) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha' as const, maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group' as const, groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000 };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel' as const, channelId: a.channelId, checkMembership: a.checkMembership ?? false };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
             let buttonDropdown: string, buttonCustom = '', buttonAiHint = '';
@@ -1597,6 +1633,7 @@ function openEdit(j: Job) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha', maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group', groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000 };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel', channelId: a.channelId, checkMembership: a.checkMembership ?? false };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app', contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
             let buttonDropdown: string, buttonCustom = '', buttonAiHint = '';
@@ -1755,6 +1792,15 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Record<
           ...(a.verifyButton.trim() ? { verifyButton: a.verifyButton.trim(), verifyWaitMs: a.verifyWaitMs } : {}),
         };
         if (a.type === 'subscribe_channel') return { type: 'subscribe_channel' as const, channelId: a.channelId, ...(a.checkMembership ? { checkMembership: true } : {}) };
+        if (a.type === 'open_mini_app') return {
+          type: 'open_mini_app' as const,
+          ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
+          ...(a.button.trim() ? { button: a.button.trim() } : {}),
+          ...(a.appButton.trim() ? { appButtons: a.appButton.split('>').map(x => x.trim()).filter(Boolean) } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+        };
         let button: string;
         if (a.buttonDropdown === 'custom') button = a.buttonCustom;
         else if (a.buttonDropdown === '{aiBtn}') button = a.buttonAiHint.trim() ? `{aiBtn:${a.buttonAiHint.trim()}}` : '{aiBtn}';

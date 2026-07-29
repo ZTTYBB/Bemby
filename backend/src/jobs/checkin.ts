@@ -6,6 +6,7 @@ import type { TgProxy } from '../types';
 import type { TgDeviceParams } from '../auth/tgAuth';
 import { NewMessage, NewMessageEvent, Raw } from 'telegram/events';
 import { loadCheckinUrl } from './cloudflare';
+import { openableButtonUrl, webButtonOf, type WebButton } from '../tg/miniApp';
 
 export type CheckinAttemptLog = {
   attempt: number;
@@ -45,6 +46,14 @@ export type CheckinAttemptLog = {
   cfChallenged?: boolean;
   /** The challenge was cleared (or the page loaded with none). */
   cfPassed?: boolean;
+  /** The page was opened as a Telegram Mini App (WebView button). */
+  cfMiniApp?: boolean;
+  /** Telegram returned a signed Mini App URL (the app loads logged in). */
+  cfMiniAppSigned?: boolean;
+  /** Label of the checkin control pressed inside the Mini App page. */
+  cfMiniAppAction?: string;
+  /** The bot never replied; a standing Mini App button from the chat was opened. */
+  cfFromHistory?: boolean;
 };
 
 export class CheckinError extends Error {
@@ -574,22 +583,18 @@ export async function parseMessages(
 }
 
 // Finds an openable inline button that carries a web address rather than a
-// callback: a URL button (e.g. "我不是机器人") or a WebApp/Mini-App button (e.g.
-// FutureEcho's "🔐 Verify" -> a Cloudflare Turnstile page). Both hold the address
-// in `.url`. When `matchText` is given, only a button whose label contains it
-// is returned.
-export function findUrlButton(msg: Api.Message | undefined, matchText?: string): { text: string; url: string } | undefined {
+// callback: a URL button (e.g. "我不是机器人") or a Mini App button (e.g. FutureEcho's
+// "🔐 Verify", or a "打开小程序签到" checkin app). Mini App buttons are flagged so the
+// caller can have Telegram sign the URL before opening it. When `matchText` is
+// given, only a button whose label contains it is returned.
+export function findUrlButton(msg: Api.Message | undefined, matchText?: string): WebButton | undefined {
   const markup = (msg as any)?.replyMarkup;
   if (!(markup instanceof Api.ReplyInlineMarkup)) return undefined;
   for (const row of markup.rows) {
     for (const btn of row.buttons) {
-      const url =
-        btn instanceof Api.KeyboardButtonUrl || btn instanceof Api.KeyboardButtonWebView
-          ? btn.url
-          : undefined;
-      if (!url) continue;
-      const text = (btn as any).text as string;
-      if (!matchText || text.includes(matchText)) return { text, url };
+      const web = webButtonOf(btn);
+      if (!web) continue;
+      if (!matchText || web.text.includes(matchText)) return web;
     }
   }
   return undefined;
@@ -602,13 +607,14 @@ async function findUrlButtonRecent(
   client: TelegramClient,
   botUsername: string,
   signal?: AbortSignal,
-): Promise<{ text: string; url: string } | undefined> {
+  miniAppOnly = false,
+): Promise<{ web: WebButton; msg: Api.Message } | undefined> {
   if (signal?.aborted) return undefined;
   try {
     const msgs = (await client.getMessages(botUsername, { limit: 6 })) as Api.Message[];
     for (const m of msgs) {
       const found = findUrlButton(m);
-      if (found) return found;
+      if (found && (!miniAppOnly || found.miniApp)) return { web: found, msg: m };
     }
   } catch {
     /* ignore fetch errors, fall back to the raced reply */
@@ -889,6 +895,43 @@ export async function runCheckin(
   await client.connect();
   log.connectMs = Date.now() - t_connect;
 
+  // Mini App buttons must be signed by Telegram before the page will accept us.
+  const toOpenableUrl = async (web: WebButton, msg?: Api.Message): Promise<string> => {
+    if (!web.miniApp) return web.url;
+    log.cfMiniApp = true;
+    const { url, signed } = await openableButtonUrl(client, web, botUsername, msg);
+    log.cfMiniAppSigned = signed;
+    return url;
+  };
+
+  // Opens a checkin page in the installed browser, passing any Cloudflare challenge.
+  // Returns the page text for success/fail matching.
+  const openCheckinPage = async (url: string): Promise<string> => {
+    if (!cfChallenge) {
+      throw new Error(
+        'Checkin requires opening a Cloudflare-protected page ("I am not a bot"). Enable "Solve Cloudflare challenge" for this job.',
+      );
+    }
+    const result = await loadCheckinUrl(url, webProxyUrl, { miniApp: log.cfMiniApp });
+    log.cfHost = result.finalHost;
+    log.cfChallenged = result.challenged;
+    log.cfPassed = result.ok;
+    log.cfMiniAppAction = result.inAppAction;
+    if (!result.ok) throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
+    return result.text;
+  };
+
+  const assertOutcome = (...texts: string[]): void => {
+    if (!successContains && !failContains) return;
+    const joined = texts.filter(Boolean).join('\n');
+    if (failContains && joined.includes(failContains)) {
+      throw new Error(`Reply indicates failure: "${failContains}" detected`);
+    }
+    if (successContains && !joined.includes(successContains)) {
+      throw new Error(`Expected success indicator "${successContains}" not found in response`);
+    }
+  };
+
   try {
     if (signal?.aborted) throw new Error('Job cancelled');
     const expandedCommand = expandCommand(startCommand);
@@ -909,6 +952,21 @@ export async function runCheckin(
         log.commandResponseHtml = parsed.html;
         log.commandResponseImages = parsed.images;
         log.availableButtons = parsed.buttons;
+      }
+
+      // Some bots answer minutes or hours later, but a Mini App checkin button is a
+      // standing entry point (unlike a one-shot verify link): open the one already in
+      // the chat rather than failing on the reply that never came.
+      if (cfChallenge && err instanceof BotReplyTimeoutError) {
+        const standing = await findUrlButtonRecent(client, botUsername, signal, true);
+        if (standing) {
+          log.cfFromHistory = true;
+          log.buttonClicked = standing.web.text;
+          const cfText = await openCheckinPage(await toOpenableUrl(standing.web, standing.msg));
+          assertOutcome(cfText);
+          log.totalMs = Date.now() - attemptStart;
+          return log;
+        }
       }
       throw err;
     }
@@ -963,10 +1021,12 @@ export async function runCheckin(
         const btnText = (btn as any).text as string;
         const matches = useExactMatch ? btnText === targetText : btnText.includes(targetText);
         if (matches) {
-          // A URL button carries the web checkin address; it isn't clickable via
-          // callback, so we open it in a browser (below) to pass the CF check.
-          if (btn instanceof Api.KeyboardButtonUrl) {
-            urlToOpen = btn.url;
+          // A URL or Mini App button carries the web checkin address; neither is
+          // clickable via callback, so we open it in a browser (below) to pass the
+          // CF check -- which is also how a real client runs a Mini App.
+          const web = webButtonOf(btn);
+          if (web) {
+            urlToOpen = await toOpenableUrl(web, buttonsMsg);
             log.buttonClicked = btnText;
             clicked = true;
             break;
@@ -1033,9 +1093,12 @@ export async function runCheckin(
               log.buttonResponseImage = bp.images[0];
               log.buttonResponseButtons = bp.buttons.length ? bp.buttons : undefined;
             }
-            // A follow-up URL button (e.g. "我不是机器人") takes precedence as the
-            // step that actually completes the checkin.
-            if (!urlToOpen) urlToOpen = findUrlButton(responseMsg)?.url;
+            // A follow-up URL / Mini App button (e.g. "我不是机器人") takes precedence
+            // as the step that actually completes the checkin.
+            if (!urlToOpen) {
+              const followUp = findUrlButton(responseMsg);
+              if (followUp) urlToOpen = await toOpenableUrl(followUp, responseMsg);
+            }
           }
 
           // A timed-out callback only counts as a failure if the bot never reacted. If no
@@ -1072,42 +1135,24 @@ export async function runCheckin(
     // The verify/CF prompt is often one of several follow-up messages, so fall
     // back to scanning recent messages if the raced reply didn't carry it.
     if (cfChallenge && !urlToOpen) {
-      urlToOpen = (await findUrlButtonRecent(client, botUsername, signal))?.url;
+      const recent = await findUrlButtonRecent(client, botUsername, signal);
+      if (recent) urlToOpen = await toOpenableUrl(recent.web, recent.msg);
     }
 
     // Some bots complete (or unlock) the checkin only after a Cloudflare-gated web
-    // page is opened: a "我不是机器人" URL button, or a WebApp "Verify" button
-    // leading to a Cloudflare Turnstile page. Open it headless to pass the check.
+    // page is opened: a "我不是机器人" URL button, or a Mini App button ("Verify",
+    // "打开小程序签到") whose page carries the challenge. Open it in the installed
+    // browser to pass the check.
     let cfPageText = '';
     let reclickText = '';
     if (urlToOpen) {
-      if (!cfChallenge) {
-        throw new Error(
-          'Checkin requires opening a Cloudflare-protected page ("I am not a bot"). Enable "Solve Cloudflare challenge" for this job.',
-        );
-      }
-      const result = await loadCheckinUrl(urlToOpen, webProxyUrl);
-      log.cfHost = result.finalHost;
-      log.cfChallenged = result.challenged;
-      log.cfPassed = result.ok;
-      if (!result.ok) {
-        throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
-      }
-      cfPageText = result.text;
+      cfPageText = await openCheckinPage(urlToOpen);
       // Verify pages only unlock the checkin; re-click the button to register it.
       reclickText = await reclickCheckinButton(client, botUsername, log.buttonClicked ?? checkinButton, replyTimeoutMs, signal);
     }
 
     // Check success/fail text in callback answer, button response, CF page, or re-click
-    if (successContains || failContains) {
-      const texts = [log.callbackAnswer ?? '', htmlToText(log.buttonResponseHtml ?? ''), cfPageText, reclickText].filter(Boolean).join('\n');
-      if (failContains && texts.includes(failContains)) {
-        throw new Error(`Reply indicates failure: "${failContains}" detected`);
-      }
-      if (successContains && !texts.includes(successContains)) {
-        throw new Error(`Expected success indicator "${successContains}" not found in response`);
-      }
-    }
+    assertOutcome(log.callbackAnswer ?? '', htmlToText(log.buttonResponseHtml ?? ''), cfPageText, reclickText);
 
     log.totalMs = Date.now() - attemptStart;
     return log;
