@@ -113,6 +113,11 @@ const SETTLE_MS = 1_500;
 const IN_APP_SETTLE_MS = 4_000;
 // Between in-app steps: enough for a dialog to be raised or a list to re-render.
 const IN_APP_STEP_MS = 1_200;
+// After a widget challenge: how long to wait for the site to confirm the outcome.
+const CONFIRM_TIMEOUT_MS = 20_000;
+// A Mini App is a single-page app: give it time to boot before judging the page.
+const APP_READY_TIMEOUT_MS = 25_000;
+const READY_POLL_MS = 500;
 
 // Builds the http(s)/socks proxy option puppeteer-real-browser expects.
 function proxyOption(proxyUrl?: string): { host: string; port: number; username?: string; password?: string } | undefined {
@@ -181,39 +186,168 @@ async function isInterstitial(page: Page): Promise<boolean> {
     .catch(() => false);
 }
 
-// A Turnstile challenge is present or in play: a widget, its iframe, or the
-// Turnstile script that renders it after an interaction (custom verify portals).
-async function hasTurnstile(page: Page): Promise<boolean> {
+// Turnstile renders into a shadow root when a site calls turnstile.render() itself, and
+// document.querySelector cannot see inside one -- so every widget lookup walks shadow
+// roots as well, or an app's challenge looks absent while it sits there unsolved.
+const DEEP_QUERY_FN = `
+  function __deepQuery(selector) {
+    var out = [];
+    (function walk(root) {
+      out.push.apply(out, Array.prototype.slice.call(root.querySelectorAll(selector)));
+      Array.prototype.forEach.call(root.querySelectorAll('*'), function (el) {
+        if (el.shadowRoot) walk(el.shadowRoot);
+      });
+    })(document);
+    return out;
+  }
+`;
+
+/**
+ * An interactive Turnstile challenge is on the page. The response field is the reliable
+ * marker: Turnstile creates it for every widget, including ones rendered explicitly into
+ * the site's own element, whose iframe then lives in a closed shadow root that no
+ * selector can reach.
+ */
+async function hasTurnstileWidget(page: Page): Promise<boolean> {
   return page
     .evaluate(
-      () =>
-        !!document.querySelector(
-          ".cf-turnstile, iframe[src*='challenges.cloudflare.com'], script[src*='challenges.cloudflare.com/turnstile']",
-        ),
+      `(function () { ${DEEP_QUERY_FN}
+         return __deepQuery(".cf-turnstile, iframe[src*='challenges.cloudflare.com'], [name='cf-turnstile-response']").length > 0;
+       })()`,
+    )
+    .then((v) => !!v)
+    .catch(() => false);
+}
+
+/** The Turnstile script is loaded, so a widget may still be rendered later. */
+async function hasTurnstileScript(page: Page): Promise<boolean> {
+  return page
+    .evaluate(
+      () => !!document.querySelector("script[src*='challenges.cloudflare.com/turnstile']"),
     )
     .catch(() => false);
 }
 
-// A solved Turnstile populates this hidden field with a token.
-async function turnstileToken(page: Page): Promise<string> {
+// Either form counts when deciding whether a page is challenge-gated at all.
+async function hasTurnstile(page: Page): Promise<boolean> {
+  return (await hasTurnstileWidget(page)) || (await hasTurnstileScript(page));
+}
+
+type Box = { x: number; y: number; width: number; height: number };
+
+/**
+ * Locates the Turnstile widget's iframe through CDP with `pierce`, the only way to see
+ * an element inside the closed shadow root Turnstile renders into. Returns its
+ * on-screen box.
+ */
+async function turnstileBoxViaCdp(page: Page): Promise<Box | null> {
+  let session: any;
+  try {
+    session = await (page as any).target().createCDPSession();
+    const { root } = await session.send("DOM.getDocument", { depth: -1, pierce: true });
+
+    let nodeId: number | null = null;
+    const walk = (node: any) => {
+      if (nodeId) return;
+      if (node.nodeName === "IFRAME") {
+        const attrs: string[] = node.attributes ?? [];
+        for (let i = 0; i < attrs.length; i += 2) {
+          if (attrs[i] === "src" && /challenges\.cloudflare\.com/.test(attrs[i + 1] ?? "")) {
+            nodeId = node.nodeId;
+            return;
+          }
+        }
+      }
+      for (const child of node.children ?? []) walk(child);
+      for (const shadow of node.shadowRoots ?? []) walk(shadow);
+      if (node.contentDocument) walk(node.contentDocument);
+    };
+    walk(root);
+    if (!nodeId) return null;
+
+    const { model } = await session.send("DOM.getBoxModel", { nodeId });
+    const border = model.border as number[]; // x1,y1,x2,y2,x3,y3,x4,y4
+    return {
+      x: border[0],
+      y: border[1],
+      width: border[2] - border[0],
+      height: border[5] - border[1],
+    };
+  } catch {
+    return null;
+  } finally {
+    await session?.detach?.().catch(() => {});
+  }
+}
+
+/**
+ * Clicks an embedded Turnstile widget's checkbox with a real mouse click at its left
+ * edge, where the checkbox sits.
+ *
+ * puppeteer-real-browser's own auto-clicker aims at the parent element of the response
+ * field, which for an explicitly rendered widget is a wrapper holding nothing but a
+ * hidden input -- a zero-sized box, so its click lands nowhere and the challenge waits
+ * forever. Hence the CDP lookup, with the widget's sized ancestor as a fallback.
+ */
+export async function clickTurnstileWidget(page: Page): Promise<boolean> {
+  let box = await turnstileBoxViaCdp(page);
+
+  if (!box || box.width < 20) {
+    box = (await page
+      .evaluate(
+        `(function () { ${DEEP_QUERY_FN}
+           var el = __deepQuery("iframe[src*='challenges.cloudflare.com'], .cf-turnstile, [name='cf-turnstile-response']")[0];
+           if (!el) return null;
+           // Climb to something actually laid out: the widget's own slot in the page
+           var node = el;
+           for (var i = 0; node && i < 4; i++, node = node.parentElement) {
+             var r = node.getBoundingClientRect();
+             if (r.width >= 200 && r.height >= 30) {
+               node.scrollIntoView({ block: 'center' });
+               r = node.getBoundingClientRect();
+               return { x: r.x, y: r.y, width: r.width, height: r.height };
+             }
+           }
+           return null;
+         })()`,
+      )
+      .catch(() => null)) as Box | null;
+  }
+  if (!box || box.width < 20) return false;
+
+  // Approach the checkbox like a pointer would, then click it
+  await page.mouse.move(box.x + 12, box.y + box.height / 2 + 8).catch(() => {});
+  await page.mouse.click(box.x + 30, box.y + box.height / 2).catch(() => {});
+  return true;
+}
+
+// A solved Turnstile fills its hidden response field with a token; the widget API is
+// asked as well, since a site can render the widget somewhere this cannot reach.
+export async function turnstileToken(page: Page): Promise<string> {
   return page
-    .evaluate(() => {
-      const el = document.querySelector(
-        "[name='cf-turnstile-response']",
-      ) as HTMLInputElement | HTMLTextAreaElement | null;
-      return el?.value ?? "";
-    })
+    .evaluate(
+      `(function () { ${DEEP_QUERY_FN}
+         var el = __deepQuery("[name='cf-turnstile-response']")[0];
+         if (el && el.value) return el.value;
+         try { return window.turnstile && window.turnstile.getResponse ? (window.turnstile.getResponse() || '') : ''; }
+         catch (e) { return ''; }
+       })()`,
+    )
+    .then((v) => (typeof v === "string" ? v : ""))
     .catch(() => "");
 }
 
 // Text a verify portal shows once the identity check has gone through.
-const SUCCESS_RE = /success|verified|verification complete|completed|已(驗|验)證|(驗|验)證成功|(驗|验)證完成/i;
+const SUCCESS_RE =
+  /success|verified|verification complete|completed|已(驗|验)[證证]|(驗|验)[證证](成功|完成|通過|通过)|已通過|已通过/i;
 
 // Some verify portals only engage Turnstile after the user clicks a button. A
 // real (CDP) click is required -- Turnstile ignores untrusted element.click()
 // events. Generic: prefer a button whose label reads like a verify/continue
 // action, otherwise fall back to the sole visible button (these portals almost
-// always have exactly one), so it isn't tied to any one site's wording.
+// always have exactly one), so it isn't tied to any one site's wording. Nothing is
+// clicked on a page full of unrelated controls (e.g. a Mini App panel with a nav
+// sidebar), where guessing would navigate away from the challenge.
 async function clickVerifyButton(page: Page): Promise<boolean> {
   const sel = await page
     .evaluate(() => {
@@ -226,10 +360,7 @@ async function clickVerifyButton(page: Page): Promise<boolean> {
           e.textContent || (e as HTMLInputElement).value || "",
         ),
       );
-      const target =
-        byText ??
-        (visible.length === 1 ? visible[0] : visible.find((e) => e.tagName === "BUTTON")) ??
-        null;
+      const target = byText ?? (visible.length === 1 ? visible[0] : null);
       if (!target) return null;
       target.setAttribute("data-cf-click", "1");
       return "[data-cf-click='1']";
@@ -260,6 +391,27 @@ const IN_APP_DONE_RE = /已签到|已簽到|已打卡|已领取|已領取|已完
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const LOADING_RE = /loading|加载|加載|載入|please wait|请稍候|請稍候/i;
+
+/**
+ * Waits for a single-page app to finish booting: a Mini App served straight from
+ * `goto` is usually still a spinner, and judging the page then sees neither the
+ * challenge it is about to render nor the controls to press. Returns as soon as a
+ * challenge shows up, or once the rendered text has stopped changing.
+ */
+async function waitForAppReady(page: Page): Promise<void> {
+  const deadline = Date.now() + APP_READY_TIMEOUT_MS;
+  let previous = "";
+  while (Date.now() < deadline) {
+    if ((await hasTurnstile(page)) || (await isInterstitial(page))) return;
+    const text = (await page.evaluate(() => document.body?.innerText ?? "").catch(() => "")).trim();
+    const booting = !text || text.length < 40 || LOADING_RE.test(text);
+    if (!booting && text === previous) return;
+    previous = text;
+    await new Promise((r) => setTimeout(r, READY_POLL_MS));
+  }
 }
 
 /**
@@ -506,31 +658,62 @@ export async function loadCheckinUrl(
       // real signal, so a goto rejection isn't fatal.
     });
 
-    const startUrl = page.url();
-    const interstitial = await isInterstitial(page);
-    const turnstile = await hasTurnstile(page);
-    const challenged = interstitial || turnstile;
+    // Compare without the fragment: a Mini App rewriting its hash route is not the
+    // portal navigating away, and counting it would call the challenge solved at once.
+    const withoutHash = (u: string) => u.split("#")[0];
+    const startUrl = withoutHash(page.url());
+    if (opts.miniApp) await waitForAppReady(page);
 
-    // A plain page with no challenge indicators is considered loaded/ok.
-    let solved = !challenged;
+    // Works a challenge that is on the page right now. Returns null when there is
+    // none, so callers can tell "nothing to do" from "tried and failed".
+    const solveChallenge = async (): Promise<boolean | null> => {
+      const interstitial = await isInterstitial(page);
+      let widget = await hasTurnstileWidget(page);
 
-    if (challenged) {
+      // A verify portal may load the Turnstile script and only render the widget once
+      // its single button is pressed, so try that before concluding there is nothing.
+      if (!interstitial && !widget && (await hasTurnstileScript(page))) {
+        if (await clickVerifyButton(page)) {
+          for (let i = 0; i < 6 && !widget; i++) {
+            await new Promise((r) => setTimeout(r, READY_POLL_MS));
+            widget = await hasTurnstileWidget(page);
+          }
+        }
+      }
+      if (!interstitial && !widget) return null;
+
       // Custom verify portals only engage Turnstile after a real click.
-      if (turnstile) await clickVerifyButton(page);
+      if (widget) await clickVerifyButton(page);
 
-      const deadline = Date.now() + CHALLENGE_TIMEOUT_MS;
+      const challengeStart = Date.now();
+      const deadline = challengeStart + CHALLENGE_TIMEOUT_MS;
+      let widgetClicks = 0;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, POLL_MS));
         // Strongest signal: a Turnstile token was issued.
-        if (await turnstileToken(page)) { solved = true; break; }
-        // A full-page interstitial that clears (and left no widget) is done.
-        if (interstitial && !(await isInterstitial(page)) && !(await hasTurnstile(page))) { solved = true; break; }
+        if (await turnstileToken(page)) return true;
+        // Nudge a widget that is sitting there unsolved: it may be an interactive
+        // checkbox that nothing has clicked yet. Spaced out, so a widget that is
+        // verifying on its own is not interrupted.
+        if (widget && widgetClicks < 3 && Date.now() > challengeStart + (widgetClicks + 1) * 4_000) {
+          widgetClicks++;
+          await clickTurnstileWidget(page);
+        }
+        // A challenge that cleared and left no widget behind is done.
+        if (!(await isInterstitial(page)) && !(await hasTurnstileWidget(page))) return true;
         // Portal navigated away or shows a success message.
-        if (page.url() !== startUrl) { solved = true; break; }
+        if (withoutHash(page.url()) !== startUrl) return true;
         const body = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
-        if (SUCCESS_RE.test(body)) { solved = true; break; }
+        if (SUCCESS_RE.test(body)) return true;
       }
-    }
+      return false;
+    };
+
+    // The challenge may be up already, or an app may only raise it once a provider or
+    // action is chosen inside it -- so try before the in-app steps and again after.
+    const before = await solveChallenge();
+    let solved = before ?? true;
+    let challenged = before !== null;
 
     await new Promise((r) => setTimeout(r, SETTLE_MS));
 
@@ -538,9 +721,27 @@ export async function loadCheckinUrl(
     let inAppAction: string | undefined;
     if (opts.miniApp && solved) {
       inAppAction = await runInAppClicks(page, opts.inAppClicks ?? [], opts.solveQuestion);
+
+      const after = await solveChallenge();
+      if (after !== null) {
+        challenged = true;
+        solved = after;
+      }
     }
 
-    const text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+    // A widget-based challenge is verified server-side after the token is issued, so
+    // the app's own wording is the outcome. Give it a bounded wait rather than closing
+    // the browser while the request is still in flight.
+    let text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+    if (challenged && !SUCCESS_RE.test(text)) {
+      const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+        if (SUCCESS_RE.test(text)) break;
+      }
+    }
+
     return { ok: solved, challenged, text, finalHost, inAppAction };
   } catch (err: any) {
     const msg = err?.message ?? String(err);

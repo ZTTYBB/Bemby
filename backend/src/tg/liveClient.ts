@@ -6,6 +6,7 @@ import { NewMessage, Raw, type NewMessageEvent } from "telegram/events";
 import { db, getDefaultTgApiCredentials } from "../db/database";
 import { parseTgProxy } from "../jobs/runner";
 import { resolveAppClientParams } from "./appClient";
+import { parseMiniAppLink } from "./miniApp";
 
 export type TgLiveMessage = {
   chatId: string;
@@ -1915,29 +1916,9 @@ export async function startBot(
   };
 }
 
-/**
- * Parses a t.me/BotName[/AppShortName]?startapp=PARAM mini app link.
- * The startapp value is percent-decoded and stripped of base64 padding:
- * Telegram only accepts [A-Za-z0-9_-] in start_param, so raw links carrying
- * %3D-encoded padding fail with START_PARAM_INVALID (issue seen with
- * telegram.me/.../panel?startapp=...%3D%3D).
- */
-export function parseMiniAppLink(
-  tmeOrUrl: string,
-): { botUsername: string; appShortName?: string; startParam: string } | null {
-  const m = tmeOrUrl.match(
-    /t(?:elegram)?\.me\/([A-Za-z]\w+)(?:\/([A-Za-z]\w+))?\?startapp=([^&\s]+)/i,
-  );
-  if (!m) return null;
-  let startParam = m[3];
-  try {
-    startParam = decodeURIComponent(startParam);
-  } catch {
-    // Malformed escape sequence -- keep the raw value
-  }
-  startParam = startParam.replace(/=+$/, "");
-  return { botUsername: m[1], appShortName: m[2], startParam };
-}
+// Mini app link parsing is shared with the job runner (tg/miniApp.ts); re-exported
+// here so existing callers keep working.
+export { parseMiniAppLink };
 
 // Resolves a mini app URL to an authenticated web app URL.
 // Handles two cases:
