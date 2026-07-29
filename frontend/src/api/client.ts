@@ -46,10 +46,20 @@ api.interceptors.response.use(
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+// How Telegram delivered (or refused to deliver) a login code.
+export type SentCodeInfo = {
+  type: string;
+  nextType: string | null;
+  timeout: number | null;
+  codeLength: number | null;
+  detail: Record<string, string | number>;
+};
+
 export type AuthStatus =
   | "unauthenticated"
   | "pending_code"
   | "pending_2fa"
+  | "pending_signup"
   | "authenticated"
   | "session_expired";
 
@@ -612,13 +622,29 @@ export const accountsApi = {
         step?: "2fa" | "done";
         message?: string;
         isCodeViaApp?: boolean;
+        codeInfo?: SentCodeInfo;
       }>(`/accounts/${id}/auth/request`)
       .then((r) => r.data),
   resendCode: (id: number) =>
-    api.post(`/accounts/${id}/auth/resend`).then((r) => r.data),
-  verify: (id: number, data: { code?: string; password?: string }) =>
     api
-      .post<{ step: string }>(`/accounts/${id}/auth/verify`, data)
+      .post<{ ok: boolean; codeInfo?: SentCodeInfo }>(
+        `/accounts/${id}/auth/resend`,
+      )
+      .then((r) => r.data),
+  verify: (
+    id: number,
+    data: {
+      code?: string;
+      password?: string;
+      firstName?: string;
+      lastName?: string;
+    },
+  ) =>
+    api
+      .post<{ step: "2fa" | "signup" | "done" }>(
+        `/accounts/${id}/auth/verify`,
+        data,
+      )
       .then((r) => r.data),
   checkStatus: (id: number) =>
     api

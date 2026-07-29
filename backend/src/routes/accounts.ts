@@ -6,6 +6,7 @@ import {
   requestCode,
   submitCode,
   submitPassword,
+  submitSignUp,
   checkAccountStatus,
   resendCodeAsSms,
   updateTwoFa,
@@ -1499,7 +1500,7 @@ router.post("/:id/auth/request", async (req, res) => {
       }
     }
 
-    const { isCodeViaApp } = await requestCode(
+    const { isCodeViaApp, info } = await requestCode(
       account.id,
       apiId,
       apiHash,
@@ -1510,7 +1511,12 @@ router.post("/:id/auth/request", async (req, res) => {
     db.prepare(
       "UPDATE tg_accounts SET auth_status = 'pending_code' WHERE id = ?",
     ).run(account.id);
-    res.json({ method: "code", message: "Verification code sent", isCodeViaApp });
+    res.json({
+      method: "code",
+      message: "Verification code sent",
+      isCodeViaApp,
+      codeInfo: info,
+    });
   } catch (err: any) {
     if (rpcBadRequest(res, err, 'auth/request')) return;
     internalError(res, err, 'auth/request');
@@ -1526,8 +1532,8 @@ router.post("/:id/auth/resend", async (req, res) => {
     return;
   }
   try {
-    await resendCodeAsSms(account.id);
-    res.json({ ok: true });
+    const info = await resendCodeAsSms(account.id);
+    res.json({ ok: true, codeInfo: info });
   } catch (err: any) {
     if (rpcBadRequest(res, err, 'auth/resend')) return;
     internalError(res, err, 'auth/resend');
@@ -1543,12 +1549,23 @@ router.post("/:id/auth/verify", async (req, res) => {
     return;
   }
 
-  const { code, password } = req.body as { code?: string; password?: string };
+  const { code, password, firstName, lastName } = req.body as {
+    code?: string;
+    password?: string;
+    firstName?: string;
+    lastName?: string;
+  };
 
   try {
     if (account.auth_status === "pending_code" && code) {
       const result = await submitCode(account.id, code);
-      if (result.needsPassword) {
+      if (result.needsSignUp) {
+        // Code was valid but the number has no account -- offer registration.
+        db.prepare(
+          "UPDATE tg_accounts SET auth_status = 'pending_signup' WHERE id = ?",
+        ).run(account.id);
+        res.json({ step: "signup" });
+      } else if (result.needsPassword) {
         db.prepare(
           "UPDATE tg_accounts SET auth_status = 'pending_2fa' WHERE id = ?",
         ).run(account.id);
@@ -1559,6 +1576,13 @@ router.post("/:id/auth/verify", async (req, res) => {
         ).run(result.session, account.id);
         res.json({ step: "done" });
       }
+    } else if (account.auth_status === "pending_signup" && firstName) {
+      const session = await submitSignUp(account.id, firstName, lastName);
+      db.prepare(
+        "UPDATE tg_accounts SET auth_status = 'authenticated', session_string = ? WHERE id = ?",
+      ).run(session, account.id);
+      saveTgMeta(account.id, firstName, lastName, undefined);
+      res.json({ step: "done" });
     } else if (account.auth_status === "pending_2fa" && password) {
       const session = await submitPassword(account.id, password);
       db.prepare(

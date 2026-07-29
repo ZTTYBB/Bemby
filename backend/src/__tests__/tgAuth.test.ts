@@ -1,23 +1,33 @@
-// Tests that requestCode correctly forwards proxy config to TelegramClient.
+// Tests that requestCode correctly forwards proxy config to TelegramClient and
+// reports how Telegram delivered the code.
 // vi.hoisted ensures mock values are available inside the vi.mock() factory
 // (which is hoisted to the top of the file before const declarations run).
 
-const { mockConnect, mockSendCode, mockDestroy, MockTelegramClient } = vi.hoisted(() => {
+const { mockConnect, mockInvoke, mockDestroy, MockTelegramClient } = vi.hoisted(() => {
   const mockConnect    = vi.fn().mockResolvedValue(undefined);
-  const mockSendCode   = vi.fn().mockResolvedValue({ phoneCodeHash: 'hash123' });
+  const mockInvoke     = vi.fn().mockResolvedValue({
+    className: 'auth.SentCode',
+    phoneCodeHash: 'hash123',
+    type: { className: 'auth.SentCodeTypeSms', length: 5 },
+    nextType: { className: 'auth.CodeTypeCall' },
+    timeout: 60,
+  });
   const mockDestroy    = vi.fn().mockResolvedValue(undefined);
   const MockTelegramClient = vi.fn().mockReturnValue({
     connect: mockConnect,
-    sendCode: mockSendCode,
+    invoke: mockInvoke,
     destroy: mockDestroy,
     session: { save: vi.fn().mockReturnValue('') },
   });
-  return { mockConnect, mockSendCode, mockDestroy, MockTelegramClient };
+  return { mockConnect, mockInvoke, mockDestroy, MockTelegramClient };
 });
 
 vi.mock('telegram', () => ({
   TelegramClient: MockTelegramClient,
-  Api: {},
+  Api: {
+    auth: { SendCode: vi.fn().mockImplementation((args) => ({ ...args })) },
+    CodeSettings: vi.fn().mockImplementation(() => ({})),
+  },
   Logger: vi.fn().mockReturnValue({}),
 }));
 
@@ -78,5 +88,51 @@ describe('requestCode', () => {
 
     const opts = vi.mocked(TelegramClient).mock.calls[0][3] as Record<string, unknown>;
     expect(opts).toHaveProperty('proxy', proxy);
+  });
+
+  it('reports the delivery type, fallback and retry timeout', async () => {
+    const result = await requestCode(106, 12345, 'apihash', '+61400000001');
+
+    expect(result.isCodeViaApp).toBe(false);
+    expect(result.info).toEqual({
+      type: 'auth.SentCodeTypeSms',
+      nextType: 'auth.CodeTypeCall',
+      timeout: 60,
+      codeLength: 5,
+      detail: {},
+    });
+  });
+
+  it('flags a code sent to the Telegram app and keeps type-specific detail', async () => {
+    mockInvoke.mockResolvedValueOnce({
+      className: 'auth.SentCode',
+      phoneCodeHash: 'hash999',
+      type: { className: 'auth.SentCodeTypeFirebaseSms', length: 6, pushTimeout: 30 },
+    });
+
+    const result = await requestCode(107, 12345, 'apihash', '+61400000001');
+
+    expect(result.isCodeViaApp).toBe(false);
+    expect(result.info.type).toBe('auth.SentCodeTypeFirebaseSms');
+    expect(result.info.nextType).toBeNull();
+    expect(result.info.detail).toEqual({ pushTimeout: 30 });
+  });
+
+  it('retries once when the DC answers AUTH_RESTART', async () => {
+    mockInvoke.mockRejectedValueOnce({ errorMessage: 'AUTH_RESTART' });
+
+    const result = await requestCode(108, 12345, 'apihash', '+61400000001');
+
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    expect(result.info.type).toBe('auth.SentCodeTypeSms');
+  });
+
+  it('destroys the client and rethrows when sending the code fails', async () => {
+    mockInvoke.mockRejectedValue({ errorMessage: 'PHONE_NUMBER_FLOOD' });
+
+    await expect(
+      requestCode(109, 12345, 'apihash', '+61400000001'),
+    ).rejects.toMatchObject({ errorMessage: 'PHONE_NUMBER_FLOOD' });
+    expect(mockDestroy).toHaveBeenCalled();
   });
 });

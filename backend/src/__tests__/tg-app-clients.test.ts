@@ -10,21 +10,33 @@ import Database from 'better-sqlite3';
 
 let testDb!: InstanceType<typeof Database>;
 
-const { MockTelegramClient, mockConnect, mockSendCode, mockGetMe, mockDestroy } = vi.hoisted(() => {
+const { MockTelegramClient, mockConnect, mockInvoke, mockGetMe, mockDestroy } = vi.hoisted(() => {
   const mockConnect    = vi.fn().mockResolvedValue(undefined);
-  const mockSendCode   = vi.fn().mockResolvedValue({ phoneCodeHash: 'hash' });
+  // requestCode sends the code with the raw auth.SendCode request
+  const mockInvoke     = vi.fn().mockResolvedValue({
+    className: 'auth.SentCode',
+    phoneCodeHash: 'hash',
+    type: { className: 'auth.SentCodeTypeSms', length: 5 },
+  });
   const mockGetMe      = vi.fn().mockResolvedValue({
     firstName: 'Test', deleted: false, restricted: false, restrictionReason: [],
   });
   const mockDestroy = vi.fn().mockResolvedValue(undefined);
   const MockTelegramClient = vi.fn().mockReturnValue({
-    connect: mockConnect, sendCode: mockSendCode, getMe: mockGetMe,
+    connect: mockConnect, invoke: mockInvoke, getMe: mockGetMe,
     destroy: mockDestroy, session: { save: vi.fn().mockReturnValue('') },
   });
-  return { MockTelegramClient, mockConnect, mockSendCode, mockGetMe, mockDestroy };
+  return { MockTelegramClient, mockConnect, mockInvoke, mockGetMe, mockDestroy };
 });
 
-vi.mock('telegram', () => ({ TelegramClient: MockTelegramClient, Api: {}, Logger: vi.fn().mockReturnValue({}) }));
+vi.mock('telegram', () => ({
+  TelegramClient: MockTelegramClient,
+  Api: {
+    auth: { SendCode: vi.fn().mockImplementation((args) => ({ ...args })) },
+    CodeSettings: vi.fn().mockImplementation(() => ({})),
+  },
+  Logger: vi.fn().mockReturnValue({}),
+}));
 vi.mock('telegram/extensions/Logger', () => ({ LogLevel: { NONE: 0 } }));
 vi.mock('telegram/sessions', () => ({ StringSession: vi.fn().mockReturnValue({}) }));
 vi.mock('../db/database', () => ({ get db() { return testDb; } }));

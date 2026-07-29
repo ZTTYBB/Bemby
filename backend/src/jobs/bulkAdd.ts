@@ -395,6 +395,12 @@ async function authenticateAccount(
   item.status = "submitting_code";
   item.message = "Submitting verification code";
   const result = await submitCode(account.id, apiCreds.code);
+  // Bulk-add authenticates existing accounts; registering an unoccupied number
+  // needs a name, so leave it to the per-account sign-up flow.
+  if (result.needsSignUp)
+    throw new Error(
+      "Number is not registered on Telegram -- register it from the account's Authenticate dialog",
+    );
   if (result.needsPassword) {
     db.prepare(
       "UPDATE tg_accounts SET auth_status = 'pending_2fa' WHERE id = ?",

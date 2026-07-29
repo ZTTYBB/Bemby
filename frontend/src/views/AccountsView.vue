@@ -2643,6 +2643,60 @@
             />
           </div>
           <p class="code-hint-note">{{ t("accounts.codeNoReceiveHint") }}</p>
+
+          <!-- What Telegram actually did with the request: the delivery type
+               explains a code that never arrives. -->
+          <div v-if="codeInfo" class="code-diag">
+            <div v-if="codeUndeliverable" class="code-diag-warn">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+              {{ t("accounts.codeUndeliverable") }}
+            </div>
+            <div>
+              {{ t("accounts.codeDelivery") }}:
+              <strong>{{ codeTypeLabel(codeInfo.type) }}</strong>
+            </div>
+            <div>
+              {{ t("accounts.codeNextType") }}:
+              <strong>{{
+                codeInfo.nextType
+                  ? codeTypeLabel(codeInfo.nextType)
+                  : t("accounts.codeNextTypeNone")
+              }}</strong>
+            </div>
+            <div v-if="codeInfo.timeout">
+              {{ t("accounts.codeRetryAfter").replace("{n}", String(codeInfo.timeout)) }}
+            </div>
+            <div v-if="codeInfo.codeLength">
+              {{ t("accounts.codeLength").replace("{n}", String(codeInfo.codeLength)) }}
+            </div>
+            <div v-for="(value, key) in codeInfo.detail" :key="key">
+              {{ key }}: {{ value }}
+            </div>
+            <div v-if="!codeInfo.nextType && !codeInfo.timeout" class="code-diag-warn">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+              {{ t("accounts.codeNoDispatchHint") }}
+            </div>
+            <code>{{ codeInfo.type }}</code>
+            <!-- The app-code box has its own resend button. Offer one for every
+                 other type, including when no fallback was declared: what the
+                 resend refuses with is itself a useful signal. -->
+            <button
+              v-if="!isCodeViaApp"
+              class="btn btn-sm btn-ghost"
+              :disabled="resendBusy"
+              @click="resendAsSms"
+            >
+              <i class="fa-solid fa-rotate-right"></i>
+              {{
+                resendBusy
+                  ? "..."
+                  : codeInfo.nextType
+                    ? t("accounts.resendNext")
+                    : t("accounts.resendAnyway")
+              }}
+            </button>
+          </div>
+
           <div class="modal-footer">
             <button class="btn btn-ghost" @click="closeAuth">
               <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
@@ -2654,6 +2708,49 @@
             >
               <i class="fa-solid fa-check"></i>
               {{ authBusy ? t("accounts.verifying") : t("accounts.verify") }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Step: register a new account on an unoccupied number -->
+        <div v-else-if="authStep === 'signup'">
+          <div class="info-box" style="margin-bottom: 14px">
+            <i class="fa-solid fa-user-plus" style="margin-right: 6px"></i>
+            {{ t("accounts.signUpHint") }}
+          </div>
+          <div class="form-group">
+            <label class="form-label"
+              >{{ t("accounts.profileFirstName") }} *</label
+            >
+            <input
+              v-model.trim="signUpFirstName"
+              class="form-input"
+              maxlength="64"
+              autofocus
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{
+              t("accounts.profileLastName")
+            }}</label>
+            <input
+              v-model.trim="signUpLastName"
+              class="form-input"
+              maxlength="64"
+            />
+          </div>
+          <p class="code-hint-note">{{ t("accounts.signUpTosNote") }}</p>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="closeAuth">
+              <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+            </button>
+            <button
+              class="btn btn-primary"
+              :disabled="authBusy || !signUpFirstName"
+              @click="submitSignUp"
+            >
+              <i class="fa-solid fa-user-plus"></i>
+              {{ authBusy ? t("accounts.signingUp") : t("accounts.signUp") }}
             </button>
           </div>
         </div>
@@ -2799,6 +2896,7 @@ import {
   type BulkAddOptions,
   type BulkProfileBatch,
   type BulkProfileEntry,
+  type SentCodeInfo,
 } from "../api/client";
 import { t, locale } from "../i18n";
 import { usePersistedRef } from "../composables/usePersistedRef";
@@ -3518,12 +3616,15 @@ async function doImport() {
 // ── Auth state ────────────────────────────────────────────────────────────────
 const showAuth = ref(false);
 const authTarget = ref<Account | null>(null);
-const authStep = ref<"idle" | "code" | "2fa">("idle");
+const authStep = ref<"idle" | "code" | "2fa" | "signup">("idle");
 const authCode = ref("");
 const authPassword = ref("");
+const signUpFirstName = ref("");
+const signUpLastName = ref("");
 const authError = ref("");
 const authBusy = ref(false);
 const isCodeViaApp = ref(false);
+const codeInfo = ref<SentCodeInfo | null>(null);
 const authViaPasskey = ref(false);
 const resendBusy = ref(false);
 
@@ -4446,6 +4547,7 @@ function statusBadge(s: Account["authStatus"]) {
     authenticated: "badge badge-green",
     pending_code: "badge badge-orange",
     pending_2fa: "badge badge-orange",
+    pending_signup: "badge badge-orange",
     unauthenticated: "badge badge-grey",
     session_expired: "badge badge-red",
   };
@@ -4946,6 +5048,9 @@ function openAuth(a: Account) {
   authStep.value = "idle";
   authCode.value = "";
   authPassword.value = "";
+  signUpFirstName.value = "";
+  signUpLastName.value = "";
+  codeInfo.value = null;
   authError.value = "";
   authViaPasskey.value = false;
   showAuth.value = true;
@@ -4957,6 +5062,23 @@ function closeAuth() {
   showAuth.value = false;
 }
 
+// Delivery types the official app must complete itself (device integrity check
+// or an email set up in-app), so no code will ever reach a third-party client.
+const UNDELIVERABLE_CODE_TYPES = ["firebasesms", "setupemailrequired"];
+
+const codeUndeliverable = computed(() => {
+  const raw = codeInfo.value?.type.toLowerCase() ?? "";
+  return UNDELIVERABLE_CODE_TYPES.some((t) => raw.includes(t));
+});
+
+// "auth.SentCodeTypeFirebaseSms" / "auth.CodeTypeSms" -> localised label,
+// falling back to the raw TL class when Telegram adds a new type.
+function codeTypeLabel(raw: string): string {
+  const key = raw.replace(/^auth\.(Sent)?CodeType/, "").toLowerCase();
+  const label = t(`accounts.codeType.${key}`);
+  return label.startsWith("accounts.codeType.") ? raw : label;
+}
+
 // Translate known Telegram auth refusal codes into readable, localised messages.
 function authErrorText(raw: string): string {
   if (!raw) return t("accounts.errors.verifyFailed");
@@ -4966,6 +5088,12 @@ function authErrorText(raw: string): string {
     return t("accounts.errors.codeInvalid");
   if (raw.includes("PHONE_CODE_EXPIRED"))
     return t("accounts.errors.codeExpired");
+  if (raw.includes("FIRSTNAME_INVALID") || raw.includes("LASTNAME_INVALID"))
+    return t("accounts.errors.signUpNameInvalid");
+  if (raw.includes("PHONE_NUMBER_OCCUPIED"))
+    return t("accounts.errors.signUpNumberOccupied");
+  if (raw.includes("SIGN_UP_RESTRICTED"))
+    return t("accounts.errors.signUpRestricted");
   if (raw.startsWith("FLOOD")) return t("accounts.errors.flood");
   return raw;
 }
@@ -4987,6 +5115,7 @@ async function sendCode() {
     } else {
       authViaPasskey.value = false;
       isCodeViaApp.value = res.isCodeViaApp ?? false;
+      codeInfo.value = res.codeInfo ?? null;
       authStep.value = "code";
     }
   } catch (err: any) {
@@ -5002,7 +5131,8 @@ async function resendAsSms() {
   if (!authTarget.value) return;
   resendBusy.value = true;
   try {
-    await accountsApi.resendCode(authTarget.value.id);
+    const res = await accountsApi.resendCode(authTarget.value.id);
+    if (res.codeInfo) codeInfo.value = res.codeInfo;
     isCodeViaApp.value = false;
   } catch (err: any) {
     authError.value =
@@ -5022,10 +5152,34 @@ async function verifyCode() {
     });
     if (res.step === "2fa") {
       authStep.value = "2fa";
+    } else if (res.step === "signup") {
+      authStep.value = "signup";
     } else {
       showAuth.value = false;
       await load();
     }
+  } catch (err: any) {
+    authError.value = authErrorText(
+      err.response?.data?.error ?? err.message ?? "",
+    );
+  } finally {
+    authBusy.value = false;
+  }
+}
+
+// Registers a new Telegram account on the number after the code step reported
+// that it is unoccupied.
+async function submitSignUp() {
+  if (!authTarget.value || !signUpFirstName.value) return;
+  authError.value = "";
+  authBusy.value = true;
+  try {
+    await accountsApi.verify(authTarget.value.id, {
+      firstName: signUpFirstName.value,
+      lastName: signUpLastName.value,
+    });
+    showAuth.value = false;
+    await load();
   } catch (err: any) {
     authError.value = authErrorText(
       err.response?.data?.error ?? err.message ?? "",
@@ -5177,6 +5331,32 @@ tr:hover .tg-name-refresh {
   font-size: 13px;
   color: #92400e;
   line-height: 1.5;
+}
+
+.code-diag {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: #4b5563;
+  line-height: 1.7;
+}
+
+.code-diag code {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: #6b7280;
+  word-break: break-all;
+}
+
+.code-diag-warn {
+  color: #92400e;
+  font-weight: 500;
+  margin-bottom: 6px;
 }
 
 .edit-tabs {

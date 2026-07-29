@@ -2,6 +2,7 @@ export type AuthStatus =
   | "unauthenticated"
   | "pending_code"
   | "pending_2fa"
+  | "pending_signup"
   | "authenticated"
   | "session_expired";
 export type JobType = "checkin" | "embywatch" | "custom" | "autoreg";
