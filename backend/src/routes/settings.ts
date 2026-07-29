@@ -5,6 +5,12 @@ import { SocksClient } from "socks";
 import { parseTgProxy } from "../jobs/runner";
 import { isBulkAccountManagementEnabled } from "../jobs/bulkAdd";
 import { installCfChromium, isChromiumInstalled } from "../jobs/cloudflare";
+import {
+  providersForClient,
+  saveProviders,
+  syncProviders,
+  type ProxyProvider,
+} from "../tg/proxyProviders";
 
 const router = Router();
 
@@ -42,6 +48,9 @@ export const CLIENT_HIDDEN_KEYS = new Set([
   // Legacy single-key AI credential (superseded by the ai_suppliers table);
   // never echo it back to the client on upgraded installs.
   "ai_api_key",
+  // Proxy provider credentials: served separately, with keys replaced by a flag
+  "webshare_api_key",
+  "proxy_providers",
 ]);
 
 /** True when an AI key exists anywhere the runtime looks: a supplier, the legacy setting or the env. */
@@ -83,6 +92,8 @@ function getClientSettings(): Record<string, string> {
     : "false";
   // Whether the on-demand Cloudflare-solver browser is present
   result.cf_chromium_installed = isChromiumInstalled() ? "true" : "false";
+  // Synthetic count so the client can show whether proxy importing is set up
+  result.proxy_providers_count = String(providersForClient().length);
   return result;
 }
 
@@ -143,6 +154,59 @@ router.post("/cf-solver/install", async (_req, res) => {
     res.status(500).json({ ok: false, message: err?.message ?? "Install failed" });
   } finally {
     cfInstalling = false;
+  }
+});
+
+// ── Proxy providers ───────────────────────────────────────────────────────────
+// Configured proxy sellers whose current list can be pulled into the proxies setting.
+// API keys are never sent back to the client; a `hasKey` flag stands in for them.
+
+router.get("/proxy-providers", (_req, res) => {
+  res.json({ providers: providersForClient() });
+});
+
+router.put("/proxy-providers", (req, res) => {
+  const { providers } = req.body as { providers?: ProxyProvider[] };
+  if (!Array.isArray(providers)) {
+    res.status(400).json({ error: "providers array is required" });
+    return;
+  }
+
+  const seen = new Set<string>();
+  for (const p of providers) {
+    if (!p?.id?.trim() || !p?.name?.trim()) {
+      res.status(400).json({ error: "Each provider needs an id and a name" });
+      return;
+    }
+    if (p.type !== "webshare" && p.type !== "list") {
+      res.status(400).json({ error: `Unsupported provider type "${p.type}"` });
+      return;
+    }
+    if (p.type === "list" && !p.url?.trim()) {
+      res.status(400).json({ error: `"${p.name}" needs a list URL` });
+      return;
+    }
+    if (seen.has(p.id)) {
+      res.status(400).json({ error: "Provider ids must be unique" });
+      return;
+    }
+    seen.add(p.id);
+  }
+
+  saveProviders(providers);
+  res.json({ providers: providersForClient() });
+});
+
+// Pull the current lists in. `providerId` syncs a single provider; otherwise every
+// enabled one is synced. Manual proxies, and imports from providers that were not
+// synced, are preserved.
+router.post("/proxy-providers/sync", async (req, res) => {
+  const { providerId } = req.body as { providerId?: string };
+  try {
+    const result = await syncProviders(providerId?.trim() || undefined);
+    res.json({ ok: true, ...result });
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: err?.message ?? "Sync failed" });
   }
 });
 

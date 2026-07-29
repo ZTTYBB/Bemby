@@ -21,8 +21,9 @@ import {
   escapeHtml,
   callAI,
 } from "./checkin";
-import { loadCheckinUrl } from "./cloudflare";
+import { loadCheckinUrl, type LoadOptions } from "./cloudflare";
 import { openableButtonUrl, webButtonOf, type WebButton } from "../tg/miniApp";
+import { cfProxyCandidates, rememberCfProxy } from "../tg/proxyProviders";
 import type { CustomConfig, CustomStepLog } from "../types";
 
 export type CustomJobLog = {
@@ -38,13 +39,29 @@ async function passCloudflare(
   step: CustomStepLog,
   webProxyUrl?: string,
   miniApp = false,
+  extra: Pick<LoadOptions, "inAppClicks" | "solveQuestion" | "refreshUrl"> = {},
 ): Promise<string> {
   if (!cfChallenge) {
     throw new Error(
       'This click opens a Cloudflare-protected page ("I am not a bot"). Enable "Solve Cloudflare challenge" for this action.',
     );
   }
-  const cf = await loadCheckinUrl(url, webProxyUrl, { miniApp });
+  const host = (() => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return "";
+    }
+  })();
+  const cf = await loadCheckinUrl(url, webProxyUrl, {
+    miniApp,
+    ...extra,
+    // Cloudflare refuses some exit IPs outright, so the rest of the pool stands by
+    proxyCandidates: cfProxyCandidates(webProxyUrl, host),
+  });
+  step.cfProxy = cf.proxyLabel;
+  step.cfAttempts = cf.attempts;
+  if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
   step.cfHost = cf.finalHost;
   step.cfChallenged = cf.challenged;
   step.cfPassed = cf.ok;
@@ -2303,6 +2320,13 @@ export async function runCustom(
                   );
                 }
 
+                const cfHost = (() => {
+                  try {
+                    return new URL(url).host;
+                  } catch {
+                    return "";
+                  }
+                })();
                 const cf = await loadCheckinUrl(url, webProxyUrl, {
                   miniApp: true,
                   inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
@@ -2316,11 +2340,19 @@ export async function runCustom(
                     step.aiResponse = response;
                     return response;
                   },
+                  // Cloudflare judges the exit IP too, so let the rest of the pool try
+                  proxyCandidates: cfProxyCandidates(webProxyUrl, cfHost),
+                  // Init data ages, so each attempt gets a freshly signed URL
+                  refreshUrl: async () =>
+                    (await openableButtonUrl(client, hit!.web, target, hit!.msg)).url,
                 });
                 step.cfHost = cf.finalHost;
                 step.cfChallenged = cf.challenged;
                 step.cfPassed = cf.ok;
                 step.cfMiniAppAction = cf.inAppAction;
+                step.cfProxy = cf.proxyLabel;
+                step.cfAttempts = cf.attempts;
+                if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
                 step.responseHtml = escapeHtml(cf.text.slice(0, 2000)).replace(/\n/g, "<br>");
                 if (!cf.ok) {
                   throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');

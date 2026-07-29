@@ -261,6 +261,10 @@ export type CustomStepLog = {
   cfMiniAppSigned?: boolean;
   /** Label of the checkin control pressed inside the Mini App page. */
   cfMiniAppAction?: string;
+  /** Proxy whose exit IP the challenge was cleared through. */
+  cfProxy?: string;
+  /** How many exits were tried before the page loaded. */
+  cfAttempts?: number;
 };
 
 export type EmbywatchConfig = {

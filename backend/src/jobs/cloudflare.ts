@@ -4,6 +4,7 @@ import net from "node:net";
 import { spawn } from "node:child_process";
 import { SocksClient } from "socks";
 import { connect } from "puppeteer-real-browser";
+import type { ProxyCandidate } from "../tg/proxyProviders";
 type Browser = Awaited<ReturnType<typeof connect>>["browser"];
 type Page = Awaited<ReturnType<typeof connect>>["page"];
 
@@ -87,6 +88,12 @@ export type CheckinPageResult = {
   finalHost: string;
   /** Label of the checkin control pressed inside a Mini App page, if any. */
   inAppAction?: string;
+  /** Id of the proxy the accepted (or last) attempt went through. */
+  proxyId?: string;
+  /** Human-readable name of that proxy, for the job log. */
+  proxyLabel?: string;
+  /** How many exits were tried. */
+  attempts?: number;
 };
 
 export type LoadOptions = {
@@ -104,6 +111,13 @@ export type LoadOptions = {
   inAppClicks?: string[];
   /** Answers a question read off the app (used by the `{aiInput}` step). */
   solveQuestion?: (question: string) => Promise<string>;
+  /**
+   * Exits to try, in order, when a challenge is refused. Cloudflare accepts some IPs and
+   * not others, so a single proxy is often not enough.
+   */
+  proxyCandidates?: ProxyCandidate[];
+  /** Re-mints the URL between attempts (signed Mini App init data ages). */
+  refreshUrl?: () => Promise<string>;
 };
 
 const NAV_TIMEOUT_MS = 45_000;
@@ -428,6 +442,11 @@ export async function turnstileToken(page: Page): Promise<string> {
     .catch(() => "");
 }
 
+// Text a page shows when the challenge was refused outright. Recognising it ends the
+// attempt at once instead of waiting out the timeout, so the next exit can be tried.
+const REFUSED_RE =
+  /人机验证失败|人機驗證失敗|验证失败|驗證失敗|verification failed|challenge failed|请刷新页面重试|請刷新頁面重試/i;
+
 // Text a verify portal shows once the identity check has gone through.
 const SUCCESS_RE =
   /success|verified|verification complete|completed|已(驗|验)[證证]|(驗|验)[證证](成功|完成|通過|通过)|已通過|已通过/i;
@@ -709,15 +728,11 @@ async function runInAppClicks(
   return done.length ? done.join(" → ") : undefined;
 }
 
-/**
- * Load `url` in the installed Chromium, pass any Cloudflare challenge (full-page
- * interstitial or embedded Turnstile widget), and return the final page's visible
- * text so the caller can match success/fail keywords.
- */
-export async function loadCheckinUrl(
+/** One load-and-solve pass through a single exit (the proxy, or direct). */
+async function attemptLoad(
   url: string,
-  proxyUrl?: string,
-  opts: LoadOptions = {},
+  proxyUrl: string | undefined,
+  opts: LoadOptions,
 ): Promise<CheckinPageResult> {
   const finalHost = (() => {
     try {
@@ -798,6 +813,8 @@ export async function loadCheckinUrl(
         if (withoutHash(page.url()) !== startUrl) return true;
         const body = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
         if (SUCCESS_RE.test(body)) return true;
+        // The site has already rejected this exit; waiting the rest out gains nothing
+        if (REFUSED_RE.test(body)) return false;
       }
       return false;
     };
@@ -807,6 +824,15 @@ export async function loadCheckinUrl(
     const before = await solveChallenge();
     let solved = before ?? true;
     let challenged = before !== null;
+
+    // Some apps render their own "verification failed" instead of a challenge widget
+    if (solved) {
+      const body = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+      if (REFUSED_RE.test(body)) {
+        solved = false;
+        challenged = true;
+      }
+    }
 
     await new Promise((r) => setTimeout(r, SETTLE_MS));
 
@@ -826,7 +852,7 @@ export async function loadCheckinUrl(
     // the app's own wording is the outcome. Give it a bounded wait rather than closing
     // the browser while the request is still in flight.
     let text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
-    if (challenged && !SUCCESS_RE.test(text)) {
+    if (solved && challenged && !SUCCESS_RE.test(text)) {
       const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, POLL_MS));
@@ -848,4 +874,51 @@ export async function loadCheckinUrl(
     await browser?.close().catch(() => {});
     closeBridge?.();
   }
+}
+
+/**
+ * Load `url` in the installed Chromium, pass any Cloudflare challenge (full-page
+ * interstitial or embedded Turnstile widget), and return the final page's visible
+ * text so the caller can match success/fail keywords.
+ *
+ * Cloudflare judges the exit IP as much as the browser, so when the caller offers a pool
+ * of proxies (`opts.proxyCandidates`) each is tried until one is accepted. Only a refused
+ * challenge moves on to the next -- a page that loads with no challenge, or one that
+ * clears it, is done. `opts.refreshUrl` re-mints the address between attempts, which a
+ * signed Mini App URL needs since its init data ages.
+ */
+export async function loadCheckinUrl(
+  url: string,
+  proxyUrl?: string,
+  opts: LoadOptions = {},
+): Promise<CheckinPageResult> {
+  const candidates: ProxyCandidate[] = opts.proxyCandidates?.length
+    ? opts.proxyCandidates
+    : [{ id: proxyUrl ? "job" : "direct", label: proxyUrl ? "job proxy" : "direct", url: proxyUrl }];
+
+  let target = url;
+  let last: CheckinPageResult | undefined;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    if (i > 0) {
+      console.log(`[cloudflare] challenge refused, retrying via ${candidate.label}`);
+      // A signed Mini App URL ages, so mint a fresh one for this attempt when possible
+      if (opts.refreshUrl) {
+        const fresh = await opts.refreshUrl().catch(() => undefined);
+        if (fresh) target = fresh;
+      }
+    }
+
+    const result = await attemptLoad(target, candidate.url, opts);
+    last = {
+      ...result,
+      proxyId: candidate.id,
+      proxyLabel: candidate.label,
+      attempts: i + 1,
+    };
+    if (result.ok) return last;
+  }
+
+  return last!;
 }
