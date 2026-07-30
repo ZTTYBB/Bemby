@@ -313,6 +313,189 @@ describe('db upgrade -- AI supplier seeding skips existing suppliers', () => {
   });
 });
 
+// ── jobs.last_success_at backfill ─────────────────────────────────────────────
+
+describe('db upgrade -- jobs.last_success_at backfill', () => {
+  let db: DB;
+
+  // Mirrors runOnce() in database.ts
+  function runOnce(id: string, fn: () => void) {
+    const flagKey = `migration:${id}`;
+    if (db.prepare('SELECT 1 FROM settings WHERE key = ?').get(flagKey)) return;
+    fn();
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, '1')").run(flagKey);
+  }
+
+  function runBackfill() {
+    try { db.exec('ALTER TABLE jobs ADD COLUMN last_success_at TEXT'); } catch {}
+    runOnce('jobs-last-success-at-backfill', () => {
+      db.exec(`
+        UPDATE jobs SET last_success_at = (
+          SELECT MAX(l.ran_at) FROM job_logs l
+          WHERE l.job_id = jobs.id AND l.status = 'success'
+        )
+        WHERE last_success_at IS NULL
+      `);
+    });
+  }
+
+  function lastSuccess(jobId: number): string | null {
+    return (db.prepare('SELECT last_success_at FROM jobs WHERE id = ?').get(jobId) as any).last_success_at;
+  }
+
+  function addJob(name: string): number {
+    return db.prepare('INSERT INTO jobs (name, account_id, bot_username) VALUES (?, ?, ?)')
+      .run(name, null, '@bot').lastInsertRowid as number;
+  }
+
+  function addLog(jobId: number, ranAt: string, status: string) {
+    db.prepare('INSERT INTO job_logs (job_id, ran_at, status) VALUES (?, ?, ?)').run(jobId, ranAt, status);
+  }
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    db.exec(INITIAL_SCHEMA);
+    // account_id is nullable in the post-rebuild schema this column ships against
+    db.exec('DROP TABLE jobs');
+    db.exec(`
+      CREATE TABLE jobs (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        name         TEXT NOT NULL,
+        account_id   INTEGER REFERENCES tg_accounts(id) ON DELETE SET NULL,
+        bot_username TEXT NOT NULL DEFAULT ''
+      );
+      CREATE TABLE job_logs (
+        id     INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL,
+        ran_at TEXT    NOT NULL,
+        status TEXT    NOT NULL
+      );
+    `);
+  });
+
+  it('backfills the most recent successful run from surviving log history', () => {
+    const id = addJob('Job A');
+    addLog(id, '2026-01-01T10:00:00Z', 'success');
+    addLog(id, '2026-03-05T10:00:00Z', 'success');
+    addLog(id, '2026-02-01T10:00:00Z', 'success');
+
+    runBackfill();
+
+    expect(lastSuccess(id)).toBe('2026-03-05T10:00:00Z');
+  });
+
+  it('ignores failed and running rows', () => {
+    const id = addJob('Job B');
+    addLog(id, '2026-01-01T10:00:00Z', 'success');
+    addLog(id, '2026-04-01T10:00:00Z', 'failed');
+    addLog(id, '2026-05-01T10:00:00Z', 'running');
+
+    runBackfill();
+
+    expect(lastSuccess(id)).toBe('2026-01-01T10:00:00Z');
+  });
+
+  it('leaves jobs with no successful history as null', () => {
+    const id = addJob('Job C');
+    addLog(id, '2026-01-01T10:00:00Z', 'failed');
+
+    runBackfill();
+
+    expect(lastSuccess(id)).toBeNull();
+  });
+
+  it('does not cross-contaminate jobs', () => {
+    const a = addJob('Job A');
+    const b = addJob('Job B');
+    addLog(a, '2026-01-01T10:00:00Z', 'success');
+    addLog(b, '2026-06-01T10:00:00Z', 'success');
+
+    runBackfill();
+
+    expect(lastSuccess(a)).toBe('2026-01-01T10:00:00Z');
+    expect(lastSuccess(b)).toBe('2026-06-01T10:00:00Z');
+  });
+
+  it('second boot does not re-run the backfill after logs are purged', () => {
+    const id = addJob('Job D');
+    addLog(id, '2026-01-01T10:00:00Z', 'success');
+
+    runBackfill();
+    expect(lastSuccess(id)).toBe('2026-01-01T10:00:00Z');
+
+    // Retention purge wipes the history, then the app restarts
+    db.exec('DELETE FROM job_logs');
+    runBackfill();
+
+    expect(lastSuccess(id)).toBe('2026-01-01T10:00:00Z');
+  });
+
+  it('a live value recorded by a run is never overwritten by the backfill', () => {
+    const id = addJob('Job E');
+    db.exec('ALTER TABLE jobs ADD COLUMN last_success_at TEXT');
+    db.prepare('UPDATE jobs SET last_success_at = ? WHERE id = ?').run('2026-07-20T08:00:00Z', id);
+    // Stale log history that predates the recorded value
+    addLog(id, '2026-01-01T10:00:00Z', 'success');
+
+    runBackfill();
+
+    expect(lastSuccess(id)).toBe('2026-07-20T08:00:00Z');
+  });
+
+  it('existing job data survives the ALTER', () => {
+    const id = addJob('Job F');
+    runBackfill();
+    const row = db.prepare('SELECT * FROM jobs WHERE id = ?').get(id) as any;
+    expect(row.name).toBe('Job F');
+    expect(row.bot_username).toBe('@bot');
+  });
+});
+
+// ── recording a successful run ────────────────────────────────────────────────
+
+describe('db upgrade -- last_success_at only moves forward', () => {
+  let db: DB;
+
+  const RECORD_SQL = `UPDATE jobs SET last_success_at = ?
+     WHERE id = ? AND (last_success_at IS NULL OR last_success_at < ?)`;
+
+  function record(jobId: number, ranAt: string) {
+    db.prepare(RECORD_SQL).run(ranAt, jobId, ranAt);
+  }
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE jobs (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT NOT NULL,
+        last_success_at TEXT
+      );
+    `);
+    db.prepare('INSERT INTO jobs (name) VALUES (?)').run('J');
+  });
+
+  it('sets the value on the first successful run', () => {
+    record(1, '2026-07-01T00:00:00Z');
+    expect((db.prepare('SELECT last_success_at FROM jobs WHERE id = 1').get() as any).last_success_at)
+      .toBe('2026-07-01T00:00:00Z');
+  });
+
+  it('advances to a later run', () => {
+    record(1, '2026-07-01T00:00:00Z');
+    record(1, '2026-07-05T00:00:00Z');
+    expect((db.prepare('SELECT last_success_at FROM jobs WHERE id = 1').get() as any).last_success_at)
+      .toBe('2026-07-05T00:00:00Z');
+  });
+
+  it('a slow run finishing out of order does not rewind the value', () => {
+    record(1, '2026-07-05T00:00:00Z');
+    record(1, '2026-07-01T00:00:00Z'); // started earlier, finished later
+    expect((db.prepare('SELECT last_success_at FROM jobs WHERE id = 1').get() as any).last_success_at)
+      .toBe('2026-07-05T00:00:00Z');
+  });
+});
+
 // ── jobs account_id nullable migration (data preservation) ───────────────────
 
 describe('db upgrade -- jobs_v2 migration preserves all job data', () => {

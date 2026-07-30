@@ -114,6 +114,7 @@ const SCHEMA = `
     template_id           INTEGER REFERENCES job_templates(id) ON DELETE SET NULL,
     run_every_days        INTEGER NOT NULL DEFAULT 1,
     retired               TEXT,
+    last_success_at       TEXT,
     created_at            DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 

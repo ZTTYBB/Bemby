@@ -409,6 +409,25 @@ try {
   db.exec("ALTER TABLE job_templates ADD COLUMN run_every_days_max INTEGER");
 } catch {}
 
+// Durable stamp of a job's last successful run. job_logs is pruned by the
+// log_retention_days setting, so the derived value cannot be trusted long-term.
+// Added after the jobs table rebuild above so its positional `SELECT *` copy
+// isn't broken by an extra column.
+try {
+  db.exec("ALTER TABLE jobs ADD COLUMN last_success_at TEXT");
+} catch {}
+// One-shot backfill from whatever log history survives. Guarded by runOnce and
+// an IS NULL filter so a later purge never re-writes a live value.
+runOnce("jobs-last-success-at-backfill", () => {
+  db.exec(`
+    UPDATE jobs SET last_success_at = (
+      SELECT MAX(l.ran_at) FROM job_logs l
+      WHERE l.job_id = jobs.id AND l.status = 'success'
+    )
+    WHERE last_success_at IS NULL
+  `);
+});
+
 try {
   db.exec(`
     CREATE TABLE IF NOT EXISTS tg_message_cache (

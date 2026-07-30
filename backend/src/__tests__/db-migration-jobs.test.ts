@@ -76,6 +76,15 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE jobs ADD COLUMN retired TEXT",
 ];
 
+// ALTER TABLE jobs ADD COLUMN statements that run *after* the jobs_v2 swap in
+// database.ts. These must NOT be listed in JOBS_V2_MIGRATION below: the swap's
+// positional `INSERT INTO jobs_v2 SELECT * FROM jobs` breaks if `jobs` carries
+// columns the jobs_v2 DDL doesn't declare.
+const POST_REBUILD_ALTERS = [
+  "ALTER TABLE jobs ADD COLUMN run_every_days_max INTEGER",
+  "ALTER TABLE jobs ADD COLUMN last_success_at TEXT",
+];
+
 // The jobs_v2 swap block from database.ts — must list every column that ALTER_MIGRATIONS adds.
 const JOBS_V2_MIGRATION = `
   DROP TABLE IF EXISTS jobs_v2;
@@ -238,5 +247,63 @@ describe('jobs account_id nullable migration', () => {
 
     const logs = db.prepare('SELECT * FROM job_logs').all() as any[];
     expect(logs).toHaveLength(0);
+  });
+});
+
+describe('jobs columns added after the jobs_v2 rebuild', () => {
+  function runPostRebuildAlters(db: DB) {
+    for (const sql of POST_REBUILD_ALTERS) {
+      try { db.exec(sql); } catch { /* already exists on re-run */ }
+    }
+  }
+
+  it('production order (swap, then ALTERs) preserves job rows and log history', () => {
+    const db = buildFreshDb();
+    const accId = insertAccount(db);
+    const jobId = insertJob(db, accId).lastInsertRowid as number;
+    insertJobLog(db, jobId);
+
+    runAccountIdMigration(db);
+    runPostRebuildAlters(db);
+
+    const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as any;
+    expect(job.name).toBe('J');
+    expect(job.bot_username).toBe('bot');
+    expect(job.run_every_days).toBe(1);
+    // New columns land as NULL, not as a shifted copy of a neighbouring column
+    expect(job.run_every_days_max).toBeNull();
+    expect(job.last_success_at).toBeNull();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM job_logs').get()).toEqual({ n: 1 });
+  });
+
+  it('post-rebuild ALTERs are idempotent across restarts', () => {
+    const db = buildFreshDb();
+    runAccountIdMigration(db);
+    expect(() => runPostRebuildAlters(db)).not.toThrow();
+    expect(() => runPostRebuildAlters(db)).not.toThrow();
+  });
+
+  it('running them before the swap would break the positional copy', () => {
+    // Guards the ordering: an extra column on `jobs` that jobs_v2 doesn't
+    // declare makes `INSERT INTO jobs_v2 SELECT *` fail outright.
+    const db = buildFreshDb();
+    runPostRebuildAlters(db);
+
+    expect(() => db.exec(JOBS_V2_MIGRATION)).toThrow();
+  });
+
+  it('legacy pre-swap installs still reach the new columns', () => {
+    // Upgrade from the oldest schema: NOT NULL account_id triggers the swap,
+    // then the post-rebuild ALTERs apply on the rebuilt table.
+    const db = buildFreshDb();
+    const accId = insertAccount(db);
+    insertJob(db, accId);
+
+    runAccountIdMigration(db);
+    runPostRebuildAlters(db);
+
+    expect(jobsColumns(db)).toContain('last_success_at');
+    expect((db.prepare('PRAGMA table_info(jobs)').all() as ColInfo[])
+      .find(c => c.name === 'account_id')?.notnull).toBe(0);
   });
 });

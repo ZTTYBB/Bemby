@@ -67,6 +67,14 @@
           <option v-for="opt in botUrlTplOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
         <input v-model="filterName" class="form-input" style="width:160px;height:30px;font-size:13px;padding:0 8px" :placeholder="t('jobs.filterPlaceholder')" />
+        <button
+          class="btn btn-sm"
+          :class="showLastSuccess ? 'btn-primary' : 'btn-ghost'"
+          :title="t('jobs.toggleLastSuccessHint')"
+          @click="showLastSuccess = !showLastSuccess"
+        >
+          <i class="fa-solid fa-clock-rotate-left"></i> {{ t('jobs.colLastSuccess') }}
+        </button>
         <button v-if="jobs.length" class="btn btn-sm btn-secondary" style="margin-left:auto" @click="toggleAllJobs">
           {{ allJobsSelected ? t('common.deselectAll') : t('common.selectAll') }}
         </button>
@@ -94,13 +102,14 @@
               <th class="th-sort" :class="sortKey === 'type' ? 'sort-active' : ''" @click="setSort('type')">{{ t('jobs.colType') }} <span class="sort-icon">{{ sortIcon('type') }}</span></th>
               <th class="th-sort col-hide-mobile" :class="sortKey === 'botUrl' ? 'sort-active' : ''" @click="setSort('botUrl')">{{ t('jobs.colBotUrlTpl') }} <span class="sort-icon">{{ sortIcon('botUrl') }}</span></th>
               <th class="th-sort col-hide-mobile" :class="sortKey === 'window' ? 'sort-active' : ''" @click="setSort('window')">{{ t('jobs.colWindow') }} <span class="sort-icon">{{ sortIcon('window') }}</span></th>
+              <th v-if="showLastSuccess" class="th-sort" :class="sortKey === 'lastSuccess' ? 'sort-active' : ''" @click="setSort('lastSuccess')">{{ t('jobs.colLastSuccess') }} <span class="sort-icon">{{ sortIcon('lastSuccess') }}</span></th>
               <th class="th-sort" :class="sortKey === 'enabled' ? 'sort-active' : ''" @click="setSort('enabled')">{{ t('jobs.colEnabled') }} <span class="sort-icon">{{ sortIcon('enabled') }}</span></th>
               <th>{{ t('common.actions') }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="!jobs.length">
-              <td colspan="7" class="empty">{{ t('jobs.noJobs') }}</td>
+              <td :colspan="showLastSuccess ? 8 : 7" class="empty">{{ t('jobs.noJobs') }}</td>
             </tr>
             <tr
               v-for="(j, idx) in jobs" :key="j.id"
@@ -118,6 +127,10 @@
                 <template v-else>{{ j.jobType === 'embywatch' ? j.botUsername : '@' + j.botUsername }}</template>
               </td>
               <td class="col-hide-mobile">{{ fmtWindow(j.scheduleWindowStart, j.scheduleWindowEnd) }}</td>
+              <td v-if="showLastSuccess">
+                <span v-if="j.lastSuccessAt" class="last-success" :title="fmtDateTimeFull(j.lastSuccessAt)">{{ fmtSince(j.lastSuccessAt) }}</span>
+                <span v-else class="last-success-never">{{ t('jobs.neverSucceeded') }}</span>
+              </td>
               <td>
                 <span
                   :class="j.enabled ? 'badge badge-green' : 'badge badge-grey'"
@@ -1125,6 +1138,7 @@ const botUrlTplOptions = computed(() => {
   return [...botVals, ...tplVals];
 });
 
+const showLastSuccess = usePersistedRef<boolean>('bemby:jobs:showLastSuccess', false);
 const sortKey = usePersistedRef<string>('bemby:jobs:sortKey', '');
 const sortDir = usePersistedRef<'asc' | 'desc'>('bemby:jobs:sortDir', 'asc');
 const actionMenuJob = ref<Job | null>(null);
@@ -1531,6 +1545,59 @@ function fmtDateTime(iso: string) {
 function fmtTime(iso: string) {
   const localeMap: Record<string, string> = { en: 'en-AU', zh: 'zh-CN' };
   return new Date(iso).toLocaleTimeString(localeMap[locale.value] ?? 'en-AU', { hour: '2-digit', minute: '2-digit' });
+}
+
+// Absolute timestamp including the year, for the last-success tooltip where the
+// relative label alone can be years old.
+function fmtDateTimeFull(iso: string) {
+  const localeMap: Record<string, string> = { en: 'en-AU', zh: 'zh-CN' };
+  return new Date(iso).toLocaleString(localeMap[locale.value] ?? 'en-AU', {
+    year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+// Elapsed time as at most two units: "3 days ago", "2 weeks 3 days ago",
+// "1 month 5 days ago". Months and years are calendar-aware, not 30/365-day
+// approximations, so "1 month ago" lands on the same day of the month.
+function fmtSince(iso: string) {
+  const then = new Date(iso);
+  const now = new Date();
+  const secs = Math.floor((now.getTime() - then.getTime()) / 1000);
+  if (!Number.isFinite(secs) || secs < 60) return t('jobs.since.justNow');
+
+  const unit = (n: number, key: string) =>
+    t(`jobs.since.${key}${n === 1 ? '' : 's'}`).replace('{n}', String(n));
+  const ago = (...parts: string[]) => t('jobs.since.ago').replace('{v}', parts.join(' '));
+
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return ago(unit(mins, 'minute'));
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return ago(unit(hours, 'hour'));
+  const days = Math.floor(hours / 24);
+  if (days < 7) return ago(unit(days, 'day'));
+
+  // Calendar months elapsed, clamped so the anchor never overshoots now
+  let months = (now.getFullYear() - then.getFullYear()) * 12 + now.getMonth() - then.getMonth();
+  const anchor = new Date(then);
+  anchor.setMonth(anchor.getMonth() + months);
+  if (anchor.getTime() > now.getTime()) {
+    months -= 1;
+    anchor.setMonth(anchor.getMonth() - 1);
+  }
+
+  if (months < 1) {
+    const weeks = Math.floor(days / 7);
+    const remDays = days % 7;
+    return remDays ? ago(unit(weeks, 'week'), unit(remDays, 'day')) : ago(unit(weeks, 'week'));
+  }
+
+  const remDays = Math.floor((now.getTime() - anchor.getTime()) / 86_400_000);
+  if (months < 12) {
+    return remDays ? ago(unit(months, 'month'), unit(remDays, 'day')) : ago(unit(months, 'month'));
+  }
+  const years = Math.floor(months / 12);
+  const remMonths = months % 12;
+  return remMonths ? ago(unit(years, 'year'), unit(remMonths, 'month')) : ago(unit(years, 'year'));
 }
 
 // Day header: "Today"/"Tomorrow" for the next two days, otherwise weekday + date.
@@ -2474,6 +2541,16 @@ tbody tr:nth-child(even):not(.row-selected) td {
   color: #999;
   text-align: center;
   padding: 16px 0;
+}
+
+.last-success {
+  font-size: 13px;
+  color: #555;
+  white-space: nowrap;
+}
+.last-success-never {
+  font-size: 13px;
+  color: #aaa;
 }
 
 .bulk-bar {

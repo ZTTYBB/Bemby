@@ -58,6 +58,8 @@ export type Job = {
   /** Upper bound of the run-every-days range; null means a fixed interval. */
   runEveryDaysMax?: number | null;
   retired?: string | null;
+  /** ISO timestamp of the last successful run; persisted so log purges don't lose it. */
+  lastSuccessAt?: string | null;
 };
 
 export type JobTemplate = {

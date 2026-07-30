@@ -36,6 +36,7 @@ type JobRow = {
   run_every_days: number;
   run_every_days_max: number | null;
   retired: string | null;
+  last_success_at: string | null;
   account_name?: string;
 };
 
@@ -106,6 +107,7 @@ function rowToJob(row: JobRow): Job & { accountName?: string } {
     runEveryDays: row.run_every_days ?? 1,
     runEveryDaysMax: row.run_every_days_max ?? null,
     retired: row.retired ?? null,
+    lastSuccessAt: row.last_success_at ?? null,
   };
 }
 
@@ -117,6 +119,8 @@ const JOB_SORTS: Record<string, string> = {
   window: "j.schedule_window_start",
   // asc shows enabled jobs first, matching the previous client-side sort
   enabled: "CASE WHEN j.enabled = 1 THEN 0 ELSE 1 END",
+  // asc puts never-succeeded jobs first, then oldest success
+  lastSuccess: "j.last_success_at",
 };
 
 router.get("/", (req, res) => {
@@ -469,6 +473,17 @@ router.post("/:id/run", async (req, res) => {
       db.prepare(
         "UPDATE job_logs SET status = 'success', message = ?, detail = ? WHERE id = ?",
       ).run(completedMessage(warnings), detail, logId);
+      // Durable stamp; job_logs is pruned by log_retention_days. Only moves
+      // forward so a slow run finishing after a later one can't rewind it.
+      // Isolated: a failure here must not demote an otherwise successful run.
+      try {
+        db.prepare(
+          `UPDATE jobs SET last_success_at = ?
+           WHERE id = ? AND (last_success_at IS NULL OR last_success_at < ?)`,
+        ).run(ranAt, job.id, ranAt);
+      } catch (e) {
+        console.warn(`[jobs] "${job.name}" last_success_at stamp failed:`, e);
+      }
       if (account?.sessionString) {
         const cfg = getNotifyConfig();
         if (cfg.events.includes("success") && cfg.username) {
