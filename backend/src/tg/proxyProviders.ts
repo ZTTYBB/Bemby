@@ -270,6 +270,8 @@ const CF_WINS_KEY = "cf_proxy_last_ok";
 // Cloudflare accepts a minority of exits, so a first run needs room to find one. A
 // refused attempt is cut short as soon as the page says so, keeping this affordable.
 const DEFAULT_CF_CANDIDATES = 8;
+/** Sanity ceiling for callers that offer the whole pool, however large it has grown. */
+export const CF_MAX_CANDIDATES = 200;
 
 function readCfWins(): Record<string, string> {
   try {
@@ -289,20 +291,6 @@ export function rememberCfProxy(host: string, proxyId: string): void {
   writeSetting(CF_WINS_KEY, JSON.stringify(wins));
 }
 
-/**
- * Ordered proxies to try for a Cloudflare challenge on `host`. Cloudflare accepts some
- * exit IPs and refuses others, so one configured proxy is often not enough -- the rest
- * of the pool is offered as fallbacks, led by whichever proxy last worked on that host.
- * The job's own proxy is kept first otherwise, so nothing changes when it works.
- */
-export function cfProxyCandidates(
-  primaryUrl: string | undefined,
-  host?: string,
-  max = DEFAULT_CF_CANDIDATES,
-): ProxyCandidate[] {
-  return cfProxyCandidatesFor({ primaryUrl, host, max });
-}
-
 /** Value of a pinned proxy id meaning "no proxy for the browser". */
 export const CF_PROXY_DIRECT = "direct";
 
@@ -312,6 +300,10 @@ export const CF_PROXY_DIRECT = "direct";
  * proxy, and `tryAll: false` keeps the run to that single exit rather than working
  * through the pool. A pinned exit always stays first -- the host's last winner only
  * leads when nothing was pinned.
+ *
+ * `exclude` drops exits that have already had their turn, so a retry moves further into
+ * the pool instead of cycling the same few -- which is also what lets a pool bigger than
+ * one attempt's window (imported proxies sit after the manually added ones) be covered.
  */
 export function cfProxyCandidatesFor(opts: {
   primaryUrl?: string;
@@ -321,9 +313,12 @@ export function cfProxyCandidatesFor(opts: {
   /** Fall through the rest of the pool when an exit is refused. Defaults to true. */
   tryAll?: boolean;
   max?: number;
+  /** Ids of exits already tried; each proxy is offered once. */
+  exclude?: Iterable<string>;
 }): ProxyCandidate[] {
   const { primaryUrl, host, proxyId, tryAll = true, max = DEFAULT_CF_CANDIDATES } = opts;
   const pool = readProxies();
+  const tried = new Set(opts.exclude ?? []);
 
   const pinned = proxyId && proxyId !== CF_PROXY_DIRECT ? pool.find((p) => p.id === proxyId) : undefined;
   const primary: ProxyCandidate = pinned
@@ -336,17 +331,20 @@ export function cfProxyCandidatesFor(opts: {
           url: primaryUrl,
         };
 
-  if (!tryAll) return [primary];
+  if (!tryAll) return tried.has(primary.id) ? [] : [primary];
 
   const rest: ProxyCandidate[] = pool
-    .filter((p) => p.url && p.url !== primary.url)
+    .filter((p) => p.url && p.url !== primary.url && !tried.has(p.id))
     .map((p) => ({ id: p.id, label: p.name, url: p.url }));
 
   // Lead with the proxy that cleared this host last time, wherever it sits in the pool
   const winnerId = host && !proxyId ? readCfWins()[host] : undefined;
   const winnerIndex = winnerId ? rest.findIndex((c) => c.id === winnerId) : -1;
+  const head = tried.has(primary.id) ? [] : [primary];
   const ordered =
-    winnerIndex >= 0 ? [rest[winnerIndex], primary, ...rest.filter((_, i) => i !== winnerIndex)] : [primary, ...rest];
+    winnerIndex >= 0
+      ? [rest[winnerIndex], ...head, ...rest.filter((_, i) => i !== winnerIndex)]
+      : [...head, ...rest];
 
   const seen = new Set<string>();
   return ordered
@@ -356,7 +354,7 @@ export function cfProxyCandidatesFor(opts: {
       seen.add(key);
       return true;
     })
-    .slice(0, Math.max(1, max));
+    .slice(0, Math.max(1, Math.min(max, CF_MAX_CANDIDATES)));
 }
 
 function readProxies(): BembyProxy[] {

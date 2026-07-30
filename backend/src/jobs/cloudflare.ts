@@ -94,6 +94,11 @@ export type CheckinPageResult = {
   proxyLabel?: string;
   /** How many exits were tried. */
   attempts?: number;
+  /**
+   * Exits that were used and did not get through. The accepted one is left out, so it
+   * stays available, while a retry skips the ones already known to be refused.
+   */
+  refusedProxyIds?: string[];
   /** Why the attempt is not ok, in plain words, for the job log. */
   reason?: string;
   /** Navigation/renderer trouble seen while loading (page crash, failed request). */
@@ -105,6 +110,34 @@ export type CheckinPageResult = {
   /** One line per exit tried, for the job log. */
   trace?: string[];
 };
+
+/**
+ * Browser state belonging to one job run rather than one attempt. A retry that offered
+ * the same refused exits again would just replay the same refusals, so the exits are
+ * remembered per host across every attempt of the run, and a budget started by an action
+ * keeps running for its retries instead of restarting with each one.
+ */
+export type CfRunState = {
+  /** Exits already refused, keyed by host. The accepted one is never in here. */
+  refused: Map<string, Set<string>>;
+  /** Deadlines the caller has started, keyed however the caller likes. */
+  deadlines: Map<string, number>;
+};
+
+export function newCfRunState(): CfRunState {
+  return { refused: new Map(), deadlines: new Map() };
+}
+
+/** The refused-exit set for `host`, created on first use. */
+export function cfRefusedFor(state: CfRunState, host: string): Set<string> {
+  const key = host || "*";
+  let set = state.refused.get(key);
+  if (!set) {
+    set = new Set();
+    state.refused.set(key, set);
+  }
+  return set;
+}
 
 export type LoadOptions = {
   /**
@@ -1101,6 +1134,7 @@ export async function loadCheckinUrl(
   let target = url;
   let last: CheckinPageResult | undefined;
   const trace: string[] = [];
+  const refusedProxyIds: string[] = [];
 
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
@@ -1110,7 +1144,9 @@ export async function loadCheckinUrl(
         console.log(`[cloudflare] budget spent after ${i} exit(s), giving up`);
         break;
       }
-      console.log(`[cloudflare] challenge refused, retrying via ${candidate.label}`);
+      console.log(
+        `[cloudflare] challenge refused, retrying via ${candidate.label} (${i + 1}/${candidates.length})`,
+      );
       // A signed Mini App URL ages, so mint a fresh one for this attempt when possible
       if (opts.refreshUrl) {
         const fresh = await opts.refreshUrl().catch(() => undefined);
@@ -1119,6 +1155,7 @@ export async function loadCheckinUrl(
     }
 
     const result = await attemptLoad(target, candidate.url, opts, deadline);
+    if (!result.ok) refusedProxyIds.push(candidate.id);
     trace.push(
       [
         `${candidate.label}: ${result.ok ? "ok" : "failed"}`,
@@ -1137,9 +1174,10 @@ export async function loadCheckinUrl(
       proxyLabel: candidate.label,
       attempts: i + 1,
       trace: [...trace],
+      refusedProxyIds: [...refusedProxyIds],
     };
     if (result.ok) return last;
   }
 
-  return { ...last!, trace: [...trace] };
+  return { ...last!, trace: [...trace], refusedProxyIds: [...refusedProxyIds] };
 }
