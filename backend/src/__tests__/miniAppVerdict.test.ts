@@ -45,3 +45,27 @@ describe("miniAppVerdict", () => {
     expect(miniAppVerdict({ ...CLEAN, inAppAction: "already done: 已签到" })).toEqual({ ok: true });
   });
 });
+
+describe("miniAppVerdict — an app asking to be verified", () => {
+  it("fails when the app still asks for a human check after the press", () => {
+    const v = miniAppVerdict({
+      challenged: false,
+      solved: true,
+      text: "每日签到\n请完成人机验证以进行签到\n取消",
+      inAppAction: "签到",
+    });
+    expect(v.ok).toBe(false);
+    expect(v.reason).toMatch(/human verification/);
+  });
+
+  it("passes once that wording is gone", () => {
+    expect(
+      miniAppVerdict({
+        challenged: true,
+        solved: true,
+        text: "签到成功！获得 5 猪币",
+        inAppAction: "签到",
+      }),
+    ).toEqual({ ok: true });
+  });
+});
