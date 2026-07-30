@@ -4,7 +4,12 @@ import { refreshScheduler, purgeOldLogs } from "../scheduler";
 import { SocksClient } from "socks";
 import { parseTgProxy } from "../jobs/runner";
 import { isBulkAccountManagementEnabled } from "../jobs/bulkAdd";
-import { installCfChromium, isChromiumInstalled, testBrowser } from "../jobs/cloudflare";
+import {
+  chromiumVersion,
+  installCfChromium,
+  isChromiumInstalled,
+  testBrowser,
+} from "../jobs/cloudflare";
 import {
   providersForClient,
   saveProviders,
@@ -90,8 +95,9 @@ function getClientSettings(): Record<string, string> {
   result.bulk_account_management = isBulkAccountManagementEnabled()
     ? "true"
     : "false";
-  // Whether the on-demand Cloudflare-solver browser is present
+  // Whether the on-demand Cloudflare-solver browser is present, and which build
   result.cf_chromium_installed = isChromiumInstalled() ? "true" : "false";
+  result.cf_chromium_version = chromiumVersion() ?? "";
   // Synthetic count so the client can show whether proxy importing is set up
   result.proxy_providers_count = String(providersForClient().length);
   return result;
@@ -131,12 +137,20 @@ router.put("/", (req, res) => {
   res.json(getClientSettings());
 });
 
-// POST /cf-solver/install -- install Chromium on demand into the data dir so the
-// Cloudflare "I am not a bot" solver can run. Long-running (downloads ~150MB).
+// POST /cf-solver/install -- download Chromium on demand into the data dir so the
+// Cloudflare "I am not a bot" solver can run. Long-running (~170MB). `force` downloads
+// again over an existing browser, which is how it gets updated (or replaced when an
+// earlier version installed a different build).
 let cfInstalling = false;
-router.post("/cf-solver/install", async (_req, res) => {
-  if (isChromiumInstalled()) {
-    res.json({ ok: true, installed: true, message: "Already installed" });
+router.post("/cf-solver/install", async (req, res) => {
+  const force = req.body?.force === true || req.query.force === "1";
+  if (isChromiumInstalled() && !force) {
+    res.json({
+      ok: true,
+      installed: true,
+      version: chromiumVersion(),
+      message: "Already installed",
+    });
     return;
   }
   if (cfInstalling) {
@@ -145,11 +159,16 @@ router.post("/cf-solver/install", async (_req, res) => {
   }
   cfInstalling = true;
   try {
-    const result = await installCfChromium();
+    const result = await installCfChromium(force);
     if (result.ok) {
       db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('cf_solver_enabled', 'true')").run();
     }
-    res.json({ ok: result.ok, installed: result.ok, output: result.output.slice(-1500) });
+    res.json({
+      ok: result.ok,
+      installed: result.ok,
+      version: result.ok ? chromiumVersion() : undefined,
+      output: result.output.slice(-1500),
+    });
   } catch (err: any) {
     res.status(500).json({ ok: false, message: err?.message ?? "Install failed" });
   } finally {

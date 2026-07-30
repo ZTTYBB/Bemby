@@ -129,15 +129,47 @@
             <strong :style="{ color: cfChromiumInstalled ? '#2e9e5b' : '#c47f17' }">
               {{ cfChromiumInstalled ? t("settings.cfSolver.stateInstalled") : t("settings.cfSolver.stateNotInstalled") }}
             </strong>
+            <span v-if="cfChromiumVersion" style="color: #888"> — {{ cfChromiumVersion }}</span>
           </p>
-          <button
-            class="btn btn-primary"
-            :disabled="cfInstalling || cfChromiumInstalled"
-            @click="installCfSolver"
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button
+              class="btn btn-primary"
+              :disabled="cfInstalling || cfTesting || cfChromiumInstalled"
+              @click="installCfSolver(false)"
+            >
+              <i class="fa-solid fa-download"></i>
+              {{ cfInstalling ? t("settings.cfSolver.installing") : t("settings.cfSolver.installBtn") }}
+            </button>
+            <button
+              v-if="cfChromiumInstalled"
+              class="btn btn-ghost"
+              :disabled="cfInstalling || cfTesting"
+              @click="installCfSolver(true)"
+            >
+              <i class="fa-solid fa-rotate"></i>
+              {{ cfInstalling ? t("settings.cfSolver.installing") : t("settings.cfSolver.reinstallBtn") }}
+            </button>
+            <button
+              v-if="cfChromiumInstalled"
+              class="btn btn-ghost"
+              :disabled="cfInstalling || cfTesting"
+              @click="testCfSolver"
+            >
+              <i class="fa-solid fa-flask"></i>
+              {{ cfTesting ? t("settings.cfSolver.testing") : t("settings.cfSolver.testBtn") }}
+            </button>
+          </div>
+          <div v-if="cfChromiumInstalled" style="font-size: 11px; color: #888; margin-top: 6px">
+            {{ t("settings.cfSolver.reinstallHint") }}
+          </div>
+          <div v-if="cfTestWarnings.length" class="error-msg" style="margin-top: 8px">
+            <div v-for="w in cfTestWarnings" :key="w">• {{ w }}</div>
+          </div>
+          <pre
+            v-if="cfTestReport"
+            style="font-size: 11px; margin-top: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap"
+            >{{ cfTestReport }}</pre
           >
-            <i class="fa-solid fa-download"></i>
-            {{ cfInstalling ? t("settings.cfSolver.installing") : t("settings.cfSolver.installBtn") }}
-          </button>
         </div>
       </div>
 
@@ -1578,19 +1610,27 @@ const notifyError = ref("");
 // Cloudflare "I am not a bot" solver: an optional headless browser installed on
 // demand into the data dir (keeps the image small).
 const cfChromiumInstalled = ref(false);
+const cfChromiumVersion = ref("");
 const cfInstalling = ref(false);
 const cfInstallMsg = ref("");
 const cfInstallError = ref("");
+const cfTesting = ref(false);
+const cfTestReport = ref("");
+const cfTestWarnings = ref<string[]>([]);
 
-async function installCfSolver() {
+/** `force` downloads the browser again over an existing one, updating it. */
+async function installCfSolver(force = false) {
   cfInstallMsg.value = "";
   cfInstallError.value = "";
   cfInstalling.value = true;
   try {
-    const res = await settingsApi.installCfSolver();
+    const res = await settingsApi.installCfSolver(force);
     if (res.ok) {
       cfChromiumInstalled.value = true;
-      cfInstallMsg.value = t("settings.cfSolver.installed");
+      cfChromiumVersion.value = res.version ?? "";
+      cfInstallMsg.value = res.version
+        ? `${t("settings.cfSolver.installed")} — ${res.version}`
+        : t("settings.cfSolver.installed");
     } else {
       cfInstallError.value = res.message || res.output || t("settings.cfSolver.failed");
     }
@@ -1598,6 +1638,34 @@ async function installCfSolver() {
     cfInstallError.value = e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.failed");
   } finally {
     cfInstalling.value = false;
+  }
+}
+
+// Launches the browser and reports what the page sees of itself, so one install can be
+// compared against another when a challenge passes in one place and not the other.
+async function testCfSolver() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfTestReport.value = "";
+  cfTestWarnings.value = [];
+  cfTesting.value = true;
+  try {
+    const res = await settingsApi.testCfSolver();
+    cfTestWarnings.value = res.warnings ?? [];
+    cfTestReport.value = JSON.stringify(
+      { ok: res.ok, version: res.version, executable: res.executable, ...res.env },
+      null,
+      2,
+    );
+    if (!res.ok) {
+      cfInstallError.value = res.error || t("settings.cfSolver.testFailed");
+    } else {
+      cfInstallMsg.value = t("settings.cfSolver.testPassed");
+    }
+  } catch (e: any) {
+    cfInstallError.value = e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.testFailed");
+  } finally {
+    cfTesting.value = false;
   }
 }
 
@@ -1938,6 +2006,7 @@ onMounted(async () => {
     form.ai_default_model_id = s.ai_default_model_id ?? "";
     form.ai_fallback_enabled = s.ai_fallback_enabled !== "false";
     cfChromiumInstalled.value = s.cf_chromium_installed === "true";
+    cfChromiumVersion.value = s.cf_chromium_version ?? "";
     notifyForm.username = s.notify_tg_username ?? "";
     try {
       if (s.notify_tg_events)

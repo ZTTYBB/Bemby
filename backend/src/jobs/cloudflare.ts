@@ -1,8 +1,17 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { spawn, spawnSync } from "node:child_process";
 import { SocksClient } from "socks";
 import { connect } from "puppeteer-real-browser";
 import {
@@ -20,18 +29,39 @@ type Page = Awaited<ReturnType<typeof connect>>["page"];
 // the browser exits from the same IP (and proxy, if set) as expected, so simply
 // loading the page registers the checkin server-side.
 
-// The image ships without a browser to stay small. When the user enables
-// Cloudflare solving, Chromium is installed on demand into the data dir (a
-// persistent volume) so it survives restarts. On Alpine the browser must be the
-// musl-native apk build, installed into an alternate root via a doas-gated script.
+// The image ships without a browser to stay small. When the user enables Cloudflare
+// solving, Chromium is downloaded on demand into the data dir (a persistent volume) so it
+// survives restarts. The download is Playwright's Chromium build -- the same one that
+// works on a developer machine -- which needs glibc, hence the Debian-based image. Older
+// installs put Alpine's musl apk build in an alternate root instead; that layout is still
+// resolved so an upgraded install keeps working until the browser is reinstalled.
 
 function dataDir(): string {
   return path.dirname(process.env.DB_PATH ?? path.resolve(process.cwd(), "data/bemby.db"));
 }
 
-/** Data-dir subfolder holding the on-demand Chromium install (alternate apk root). */
+/** Data-dir subfolder holding the on-demand Chromium download (Playwright layout). */
+export function cfBrowsersRoot(): string {
+  return path.join(dataDir(), "pw-browsers");
+}
+
+/** Legacy data-dir subfolder: the musl apk install used by the Alpine-based image. */
 export function cfChromiumRoot(): string {
   return path.join(dataDir(), "cf-chromium");
+}
+
+/** Newest Playwright Chromium in the data dir. Headed build only -- the shell cannot pass a challenge. */
+function downloadedChromium(): string | undefined {
+  try {
+    return readdirSync(cfBrowsersRoot())
+      .map((name) => /^chromium-(\d+)$/.exec(name))
+      .filter((m): m is RegExpExecArray => !!m)
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .map((m) => path.join(cfBrowsersRoot(), m[0], "chrome-linux/chrome"))
+      .find((exe) => existsSync(exe));
+  } catch {
+    return undefined;
+  }
 }
 
 /** Data-dir subfolder holding one browser profile per exit. */
@@ -168,15 +198,75 @@ const COUNTRY_LOCALE: Record<string, { tz: string; lang: string }> = {
 /** Cloudflare's own trace endpoint, which reports the country it sees the request from. */
 const TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace";
 
-/** Resolves the Chromium executable: explicit env, then the data-dir install, then a system browser. */
+/**
+ * Points fontconfig at the fonts inside the browser root.
+ *
+ * The root is an alternate apk root, not a chroot: the browser runs against the image's
+ * own filesystem and only finds its libraries there through LD_LIBRARY_PATH. Alpine's
+ * fonts.conf lists `/usr/share/fonts` as an absolute path, which in the image is empty --
+ * so the fonts the installer put in `<root>/usr/share/fonts` are invisible and the
+ * browser renders every glyph as a box. A browser with no fonts at all measures text
+ * like nothing else on the web, which is the sort of thing a challenge scores against.
+ *
+ * Written at launch rather than at install, so a root installed by an earlier version is
+ * fixed without reinstalling the browser.
+ */
+function ensureAltRootFonts(root: string): void {
+  const conf = path.join(root, "etc/fonts/local.conf");
+  const body = `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<!-- Written by Bemby: the browser root is not a chroot, so its font directories have
+     to be named absolutely for fontconfig to see them. -->
+<fontconfig>
+  <dir>${path.join(root, "usr/share/fonts")}</dir>
+  <cachedir>${path.join(root, "var/cache/fontconfig")}</cachedir>
+</fontconfig>
+`;
+  try {
+    if (!existsSync(path.join(root, "etc/fonts"))) return;
+    if (existsSync(conf) && readFileSync(conf, "utf8") === body) return;
+    mkdirSync(path.join(root, "var/cache/fontconfig"), { recursive: true });
+    writeFileSync(conf, body);
+    console.log(`[cloudflare] pointed fontconfig at ${path.join(root, "usr/share/fonts")}`);
+  } catch (err: any) {
+    console.warn(`[cloudflare] could not write ${conf}: ${err?.message ?? err}`);
+  }
+}
+
+/**
+ * True when this system runs musl rather than glibc, i.e. Alpine. The apk browser in the
+ * legacy root is a musl binary: on a glibc image it cannot be executed at all, so it must
+ * not be offered -- otherwise an upgraded install reports a browser it cannot launch and
+ * never downloads the one it can.
+ */
+function isMuslSystem(): boolean {
+  try {
+    const header = (process.report?.getReport() as any)?.header;
+    if (header && "glibcVersionRuntime" in header) return !header.glibcVersionRuntime;
+  } catch {
+    /* fall through to the file check */
+  }
+  return existsSync("/etc/alpine-release");
+}
+
+/**
+ * Resolves the Chromium executable: an explicit env path, then the downloaded build in
+ * the data dir, then a legacy apk root (Alpine only), then a system browser.
+ */
 export function chromiumExecutable(): string | undefined {
   const envPath = process.env.PUPPETEER_EXECUTABLE_PATH;
   if (envPath && existsSync(envPath)) return envPath;
+  const downloaded = downloadedChromium();
+  if (downloaded) return downloaded;
   const root = cfChromiumRoot();
   const candidates = [
-    path.join(root, "usr/lib/chromium/chrome"),
-    path.join(root, "usr/lib/chromium/chromium"),
-    path.join(root, "usr/bin/chromium-browser"),
+    ...(isMuslSystem()
+      ? [
+          path.join(root, "usr/lib/chromium/chrome"),
+          path.join(root, "usr/lib/chromium/chromium"),
+          path.join(root, "usr/bin/chromium-browser"),
+        ]
+      : []),
     "/usr/bin/chromium-browser",
     "/usr/bin/chromium",
   ];
@@ -187,26 +277,62 @@ export function isChromiumInstalled(): boolean {
   return !!chromiumExecutable();
 }
 
+/** Version of the resolved browser, e.g. "Chromium 151.0.7922.34". */
+export function chromiumVersion(): string | undefined {
+  const exe = chromiumExecutable();
+  if (!exe) return undefined;
+  try {
+    const out = spawnSync(exe, ["--version"], { encoding: "utf8", timeout: 15_000 });
+    return `${out.stdout ?? ""}`.trim().split("\n")[0] || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Playwright's browser installer, inside the app's own node_modules. */
+function playwrightCli(): string | undefined {
+  try {
+    return createRequire(__filename).resolve("playwright-core/cli.js");
+  } catch {
+    // Compiled and bundled layouts differ; fall back to the conventional location
+    const guess = path.resolve(process.cwd(), "node_modules/playwright-core/cli.js");
+    return existsSync(guess) ? guess : undefined;
+  }
+}
+
 /**
- * Installs Chromium into the data dir via the baked, doas-gated script
- * (`doas install-cf-chromium <root>`). Long-running (downloads ~150MB). Resolves
- * with the tail of the output; rejects on non-zero exit.
+ * Downloads Chromium into the data dir with Playwright's installer -- the same build a
+ * developer machine runs, which is the one that gets through a challenge. Long-running
+ * (~170MB), but needs no root: it writes to the data volume as the app's own user.
+ *
+ * `force` downloads again even when a browser is already there, which is how the browser
+ * is updated to whatever the installed Playwright version now ships.
  */
-export function installCfChromium(): Promise<{ ok: boolean; output: string }> {
+export function installCfChromium(force = false): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
-    // The doas + apk installer only exists in the Docker (Alpine) image.
-    if (!existsSync("/sbin/apk") && !existsSync("/usr/bin/apk")) {
+    const cli = playwrightCli();
+    if (!cli) {
       resolve({
         ok: false,
         output:
-          "On-demand install is only available in the Docker image. For local development, " +
-          "set PUPPETEER_EXECUTABLE_PATH to a Chromium binary in backend/.env and restart.",
+          "playwright-core is not installed next to the app, so the browser cannot be " +
+          "downloaded. For local development, set PUPPETEER_EXECUTABLE_PATH to a Chromium " +
+          "binary in backend/.env and restart.",
       });
       return;
     }
-    const root = cfChromiumRoot();
-    const proc = spawn("doas", ["/usr/local/bin/install-cf-chromium", root], {
+
+    const root = cfBrowsersRoot();
+    try {
+      mkdirSync(root, { recursive: true });
+    } catch (err: any) {
+      resolve({ ok: false, output: `Cannot write to ${root}: ${err?.message ?? err}` });
+      return;
+    }
+
+    const proc = spawn(process.execPath, [cli, "install", "chromium", ...(force ? ["--force"] : [])], {
       stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: root },
     });
     let out = "";
     const cap = (b: Buffer) => {
@@ -215,9 +341,31 @@ export function installCfChromium(): Promise<{ ok: boolean; output: string }> {
     };
     proc.stdout.on("data", cap);
     proc.stderr.on("data", cap);
-    proc.on("error", (err) => resolve({ ok: false, output: `${err.message}\n${out}` }));
-    proc.on("close", (code) => resolve({ ok: code === 0 && isChromiumInstalled(), output: out }));
+    proc.on("error", (err) => resolve({ ok: false, output: `${out}\n${err.message}` }));
+    proc.on("close", (code) => {
+      if (code === 0) pruneHeadlessShells(root);
+      const ok = code === 0 && isChromiumInstalled();
+      const version = ok ? chromiumVersion() : undefined;
+      resolve({ ok, output: version ? `${out}\n${version}` : out });
+    });
   });
+}
+
+/**
+ * Removes the headless shell that comes with the browser. Only the headed build is ever
+ * launched (a challenge is not passed headless), and the shell is ~110MB on a volume that
+ * also holds the user's data.
+ */
+function pruneHeadlessShells(root: string): void {
+  try {
+    for (const name of readdirSync(root)) {
+      if (/^chromium_headless_shell-/.test(name)) {
+        rmSync(path.join(root, name), { recursive: true, force: true });
+      }
+    }
+  } catch {
+    /* housekeeping only */
+  }
 }
 
 export type CheckinPageResult = {
@@ -516,6 +664,7 @@ async function launchBrowser(proxyUrl?: string): Promise<{
       .filter(Boolean)
       .join(":");
     process.env.FONTCONFIG_PATH = `${root}/etc/fonts`;
+    ensureAltRootFonts(root);
   }
 
   // A SOCKS proxy is reached through a loopback HTTP bridge (Chromium cannot
@@ -1072,9 +1221,96 @@ async function runInAppClicks(
 }
 
 /**
+ * What a challenge actually looks at: the browser's own account of itself. Read in one
+ * page so two installs (a dev machine and the container) can be compared line by line --
+ * a missing GL stack or a browser with no fonts is invisible from the outside but reads
+ * as automation from Cloudflare's side.
+ */
+const FINGERPRINT_PROBE = `(function () {
+  var out = {};
+  try {
+    out.ua = navigator.userAgent;
+    out.uaData = navigator.userAgentData
+      ? navigator.userAgentData.brands.map(function (b) { return b.brand + " " + b.version; }).join(", ")
+      : null;
+    out.platform = navigator.platform;
+    out.languages = (navigator.languages || []).join(",");
+    out.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    out.cores = navigator.hardwareConcurrency;
+    out.memoryGb = navigator.deviceMemory || null;
+    out.webdriver = navigator.webdriver;
+    out.screen = screen.width + "x" + screen.height + "@" + window.devicePixelRatio;
+    out.plugins = navigator.plugins.length;
+  } catch (e) { out.navError = String(e); }
+
+  // WebGL: a challenge reads the unmasked vendor/renderer. No GL stack at all is a
+  // stronger signal than any UA string.
+  try {
+    var c = document.createElement("canvas");
+    var gl = c.getContext("webgl") || c.getContext("experimental-webgl");
+    if (!gl) {
+      out.webgl = "unavailable";
+    } else {
+      var dbg = gl.getExtension("WEBGL_debug_renderer_info");
+      out.webgl = dbg
+        ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) + " / " + gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+        : gl.getParameter(gl.VENDOR) + " / " + gl.getParameter(gl.RENDERER);
+      out.webglVersion = gl.getParameter(gl.VERSION);
+    }
+    out.webgl2 = !!c.getContext("webgl2");
+  } catch (e) { out.webgl = "error: " + e; }
+
+  // Fonts, without fontconfig: a glyph the browser cannot draw measures the same as a
+  // private-use character, so equal widths mean the font is missing (tofu).
+  try {
+    var cv = document.createElement("canvas").getContext("2d");
+    var width = function (text, font) { cv.font = font; return cv.measureText(text).width; };
+    var missing = width("\\uE000\\uE000", "16px sans-serif");
+    out.latinOk = width("Bemby", "16px sans-serif") !== width("\\uE000\\uE000\\uE000\\uE000\\uE000", "16px sans-serif");
+    out.cjkOk = width("\\u7B7E\\u5230", "16px sans-serif") !== missing;
+    out.emojiOk = width("\\uD83C\\uDFAF", "16px sans-serif") !== width("\\uE000", "16px sans-serif");
+    out.fontFamilies = ["sans-serif", "DejaVu Sans", "FreeSans", "Noto Sans CJK SC", "Noto Color Emoji"]
+      .filter(function (f) { return document.fonts.check('16px "' + f + '"'); })
+      .join(", ") || "none";
+  } catch (e) { out.fontError = String(e); }
+
+  return out;
+})()`;
+
+export type BrowserEnvReport = Record<string, unknown>;
+
+/** Reads the probe and names the things a challenge is likely to hold against it. */
+export function envWarnings(env: BrowserEnvReport): string[] {
+  const out: string[] = [];
+  const webgl = String(env.webgl ?? "");
+  if (!webgl || webgl === "unavailable" || webgl.startsWith("error")) {
+    out.push(
+      "No WebGL: the browser has no GL stack, which a challenge reads as automation. " +
+        "Install mesa-gl/mesa-egl/mesa-gles (and vulkan-loader for SwiftShader) into the browser root.",
+    );
+  }
+  if (env.webgl2 === false) out.push("No WebGL2, which any current desktop Chrome has.");
+  if (env.latinOk === false) {
+    out.push(
+      "No usable fonts at all: fontconfig is not finding the installed ones. The browser " +
+        "root is not a chroot, so an absolute <dir> in fonts.conf points at the image, not the root.",
+    );
+  } else if (env.cjkOk === false) {
+    out.push("CJK glyphs are missing (font-noto-cjk not visible to fontconfig).");
+  }
+  if (env.emojiOk === false) out.push("Emoji glyphs are missing (font-noto-emoji not installed).");
+  if (env.webdriver === true) out.push("navigator.webdriver is true, which is a direct automation tell.");
+  if (typeof env.cores === "number" && env.cores <= 1) {
+    out.push(`hardwareConcurrency is ${env.cores}: a real desktop reports more.`);
+  }
+  return out;
+}
+
+/**
  * Launches the installed browser and checks that it actually renders: the same thing a
  * Mini App step depends on, told apart from a Cloudflare or network problem. Handy on a
  * server where the browser is an on-demand install and nothing else can be seen.
+ * `env` reports what the page sees of itself, for comparing one install against another.
  */
 export async function testBrowser(proxyUrl?: string): Promise<{
   ok: boolean;
@@ -1083,6 +1319,9 @@ export async function testBrowser(proxyUrl?: string): Promise<{
   renderedText?: string;
   screenshot?: string;
   error?: string;
+  env?: BrowserEnvReport;
+  /** Warnings about the environment that a challenge is likely to notice. */
+  warnings?: string[];
 }> {
   const executable = chromiumExecutable();
   if (!executable) return { ok: false, error: "Chromium is not installed" };
@@ -1099,10 +1338,15 @@ export async function testBrowser(proxyUrl?: string): Promise<{
     const renderedText = await page
       .evaluate(() => document.body?.innerText ?? "")
       .catch((err: any) => `evaluate failed: ${err?.message ?? err}`);
+    const env = (await page.evaluate(FINGERPRINT_PROBE).catch((err: any) => ({
+      probeError: err?.message ?? String(err),
+    }))) as BrowserEnvReport;
     return {
       ok: typeof renderedText === "string" && renderedText.includes("bemby browser ok"),
       executable,
       version,
+      env,
+      warnings: envWarnings(env),
       renderedText,
       screenshot: await screenshotOf(page),
     };
