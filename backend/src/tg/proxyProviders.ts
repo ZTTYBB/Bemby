@@ -282,6 +282,38 @@ function readCfWins(): Record<string, string> {
   }
 }
 
+const CF_GEO_KEY = "cf_exit_geo";
+
+/** Where an exit comes out, so the browser can present a matching locale and clock. */
+export type CfExitGeo = { loc: string; tz?: string; lang?: string };
+
+function readCfGeo(): Record<string, CfExitGeo> {
+  try {
+    const parsed = JSON.parse(readSetting(CF_GEO_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, CfExitGeo>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The known geography of an exit, looked up by its stable key. */
+export function cfExitGeo(exitKey: string): CfExitGeo | undefined {
+  return readCfGeo()[exitKey];
+}
+
+/**
+ * Remembers where an exit comes out. Looked up once per exit and kept, since the
+ * lookup costs a page load and a proxy's country does not move.
+ */
+export function rememberCfExitGeo(exitKey: string, geo: CfExitGeo): void {
+  if (!exitKey || !geo.loc) return;
+  const all = readCfGeo();
+  const known = all[exitKey];
+  if (known?.loc === geo.loc && known?.tz === geo.tz && known?.lang === geo.lang) return;
+  all[exitKey] = geo;
+  writeSetting(CF_GEO_KEY, JSON.stringify(all));
+}
+
 /** Records which proxy cleared a challenge on a host, so the next run starts there. */
 export function rememberCfProxy(host: string, proxyId: string): void {
   if (!host) return;

@@ -1,10 +1,16 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import net from "node:net";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { SocksClient } from "socks";
 import { connect } from "puppeteer-real-browser";
-import type { ProxyCandidate } from "../tg/proxyProviders";
+import {
+  cfExitGeo,
+  rememberCfExitGeo,
+  type CfExitGeo,
+  type ProxyCandidate,
+} from "../tg/proxyProviders";
 type Browser = Awaited<ReturnType<typeof connect>>["browser"];
 type Page = Awaited<ReturnType<typeof connect>>["page"];
 
@@ -19,11 +25,148 @@ type Page = Awaited<ReturnType<typeof connect>>["page"];
 // persistent volume) so it survives restarts. On Alpine the browser must be the
 // musl-native apk build, installed into an alternate root via a doas-gated script.
 
+function dataDir(): string {
+  return path.dirname(process.env.DB_PATH ?? path.resolve(process.cwd(), "data/bemby.db"));
+}
+
 /** Data-dir subfolder holding the on-demand Chromium install (alternate apk root). */
 export function cfChromiumRoot(): string {
-  const dataDir = path.dirname(process.env.DB_PATH ?? path.resolve(process.cwd(), "data/bemby.db"));
-  return path.join(dataDir, "cf-chromium");
+  return path.join(dataDir(), "cf-chromium");
 }
+
+/** Data-dir subfolder holding one browser profile per exit. */
+function cfProfilesRoot(): string {
+  return path.join(dataDir(), "cf-profiles");
+}
+
+/**
+ * Stable id for an exit, used to name its profile and remember its geography. The proxy
+ * URL is hashed rather than stored: it carries credentials, and this ends up on disk.
+ */
+function exitKey(proxyUrl?: string): string {
+  return proxyUrl ? createHash("sha1").update(proxyUrl).digest("hex").slice(0, 12) : "direct";
+}
+
+// Profiles are kept for the exits used most recently; a Chromium profile is tens of MB,
+// and a large proxy pool would otherwise fill the data volume.
+const MAX_PROFILES = 12;
+// One Chromium at a time per profile: two sharing a user-data-dir corrupt it, and jobs
+// can run concurrently. The loser of the race gets a throwaway profile instead.
+const profilesInUse = new Set<string>();
+
+// Chromium writes inside Default/, which leaves the profile's own mtime at creation
+// time, so last use is recorded here instead.
+const USED_MARKER = ".bemby-last-used";
+
+function lastUsedAt(dir: string): number {
+  try {
+    return statSync(path.join(dir, USED_MARKER)).mtimeMs;
+  } catch {
+    try {
+      return statSync(dir).mtimeMs;
+    } catch {
+      return 0;
+    }
+  }
+}
+
+/** Drops the least recently used profiles, leaving the newest MAX_PROFILES in place. */
+function pruneProfiles(root: string): void {
+  try {
+    const dirs = readdirSync(root)
+      .filter((name) => !profilesInUse.has(name))
+      .map((name) => ({ full: path.join(root, name), usedAt: lastUsedAt(path.join(root, name)) }))
+      .sort((a, b) => b.usedAt - a.usedAt);
+    for (const stale of dirs.slice(MAX_PROFILES)) {
+      rmSync(stale.full, { recursive: true, force: true });
+    }
+  } catch {
+    /* housekeeping only */
+  }
+}
+
+/**
+ * A profile directory for this exit, so cookies -- above all the cf_clearance a solved
+ * challenge issues -- outlive the browser. Without one every attempt arrives as a
+ * first-time visitor, which is exactly what a managed challenge is looking for.
+ *
+ * Returns no directory when the profile is already open elsewhere, leaving Chromium to
+ * use a throwaway one rather than two browsers writing the same profile.
+ */
+function claimProfile(key: string): { dir?: string; release: () => void } {
+  if (profilesInUse.has(key)) return { release: () => {} };
+  const dir = path.join(cfProfilesRoot(), key);
+  try {
+    mkdirSync(dir, { recursive: true });
+    // A browser that was killed leaves these behind, and Chromium then refuses the
+    // profile as "already in use"
+    for (const lock of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+      rmSync(path.join(dir, lock), { force: true });
+    }
+    writeFileSync(path.join(dir, USED_MARKER), "");
+    profilesInUse.add(key);
+    pruneProfiles(cfProfilesRoot());
+    return { dir, release: () => profilesInUse.delete(key) };
+  } catch (err: any) {
+    console.warn(`[cloudflare] no persistent profile (${err?.message ?? err})`);
+    return { release: () => {} };
+  }
+}
+
+// Primary timezone and locale per country, for aligning the browser with its exit IP: a
+// residential address in Japan reporting UTC and en-US is a cheap signal to check.
+// Countries not listed are left alone rather than guessed at.
+const COUNTRY_LOCALE: Record<string, { tz: string; lang: string }> = {
+  AE: { tz: "Asia/Dubai", lang: "ar-AE" },
+  AR: { tz: "America/Argentina/Buenos_Aires", lang: "es-AR" },
+  AT: { tz: "Europe/Vienna", lang: "de-AT" },
+  AU: { tz: "Australia/Sydney", lang: "en-AU" },
+  BE: { tz: "Europe/Brussels", lang: "nl-BE" },
+  BR: { tz: "America/Sao_Paulo", lang: "pt-BR" },
+  CA: { tz: "America/Toronto", lang: "en-CA" },
+  CH: { tz: "Europe/Zurich", lang: "de-CH" },
+  CL: { tz: "America/Santiago", lang: "es-CL" },
+  CN: { tz: "Asia/Shanghai", lang: "zh-CN" },
+  CZ: { tz: "Europe/Prague", lang: "cs-CZ" },
+  DE: { tz: "Europe/Berlin", lang: "de-DE" },
+  DK: { tz: "Europe/Copenhagen", lang: "da-DK" },
+  EE: { tz: "Europe/Tallinn", lang: "et-EE" },
+  ES: { tz: "Europe/Madrid", lang: "es-ES" },
+  FI: { tz: "Europe/Helsinki", lang: "fi-FI" },
+  FR: { tz: "Europe/Paris", lang: "fr-FR" },
+  GB: { tz: "Europe/London", lang: "en-GB" },
+  HK: { tz: "Asia/Hong_Kong", lang: "zh-HK" },
+  HU: { tz: "Europe/Budapest", lang: "hu-HU" },
+  ID: { tz: "Asia/Jakarta", lang: "id-ID" },
+  IE: { tz: "Europe/Dublin", lang: "en-IE" },
+  IL: { tz: "Asia/Jerusalem", lang: "he-IL" },
+  IN: { tz: "Asia/Kolkata", lang: "en-IN" },
+  IT: { tz: "Europe/Rome", lang: "it-IT" },
+  JP: { tz: "Asia/Tokyo", lang: "ja-JP" },
+  KR: { tz: "Asia/Seoul", lang: "ko-KR" },
+  MX: { tz: "America/Mexico_City", lang: "es-MX" },
+  MY: { tz: "Asia/Kuala_Lumpur", lang: "ms-MY" },
+  NL: { tz: "Europe/Amsterdam", lang: "nl-NL" },
+  NO: { tz: "Europe/Oslo", lang: "nb-NO" },
+  NZ: { tz: "Pacific/Auckland", lang: "en-NZ" },
+  PH: { tz: "Asia/Manila", lang: "en-PH" },
+  PL: { tz: "Europe/Warsaw", lang: "pl-PL" },
+  PT: { tz: "Europe/Lisbon", lang: "pt-PT" },
+  RO: { tz: "Europe/Bucharest", lang: "ro-RO" },
+  RU: { tz: "Europe/Moscow", lang: "ru-RU" },
+  SE: { tz: "Europe/Stockholm", lang: "sv-SE" },
+  SG: { tz: "Asia/Singapore", lang: "en-SG" },
+  TH: { tz: "Asia/Bangkok", lang: "th-TH" },
+  TR: { tz: "Europe/Istanbul", lang: "tr-TR" },
+  TW: { tz: "Asia/Taipei", lang: "zh-TW" },
+  UA: { tz: "Europe/Kyiv", lang: "uk-UA" },
+  US: { tz: "America/New_York", lang: "en-US" },
+  VN: { tz: "Asia/Ho_Chi_Minh", lang: "vi-VN" },
+  ZA: { tz: "Africa/Johannesburg", lang: "en-ZA" },
+};
+
+/** Cloudflare's own trace endpoint, which reports the country it sees the request from. */
+const TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace";
 
 /** Resolves the Chromium executable: explicit env, then the data-dir install, then a system browser. */
 export function chromiumExecutable(): string | undefined {
@@ -336,9 +479,17 @@ function startSocksBridge(url: URL): Promise<SocksBridge> {
 // Launches a real (rebrowser-patched) Chromium via puppeteer-real-browser: headed
 // under an auto-managed Xvfb display with a real cursor, and turnstile:true so it
 // auto-clicks Cloudflare Turnstile. This is the realistic path to pass Turnstile.
-async function launchBrowser(
-  proxyUrl?: string,
-): Promise<{ browser: Browser; page: Page; closeBridge?: () => void }> {
+// The profile is kept per exit so its cookies (cf_clearance included) carry over, and
+// the browser's language is set to match where that exit comes out.
+async function launchBrowser(proxyUrl?: string): Promise<{
+  browser: Browser;
+  page: Page;
+  cleanup: () => void;
+  /** Stable id of the exit this browser goes out through. */
+  key: string;
+  /** What is known about where it comes out, if anything yet. */
+  geo?: CfExitGeo;
+}> {
   const executablePath = chromiumExecutable();
   if (!executablePath) {
     throw new Error(
@@ -382,19 +533,84 @@ async function launchBrowser(
     }
   }
 
+  const key = exitKey(proxyUrl);
+  const geo = cfExitGeo(key);
+  const profile = claimProfile(key);
+
   try {
     const launched = await connect({
       headless: false,
       turnstile: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--window-size=1280,800"],
-      customConfig: { chromePath: executablePath },
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--window-size=1280,800",
+        // A profile that is reused must not reopen the last session or offer to restore
+        // a crashed one, either of which would leave a dialog over the page
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--hide-crash-restore-bubble",
+        // Language has to be set at launch to stay consistent: this covers both
+        // navigator.language(s) and the Accept-Language header
+        ...(geo?.lang ? [`--lang=${geo.lang}`, `--accept-lang=${geo.lang}`] : []),
+      ],
+      customConfig: {
+        chromePath: executablePath,
+        ...(profile.dir ? { userDataDir: profile.dir } : {}),
+      },
       proxy,
     });
-    return { ...launched, closeBridge: bridge?.close };
+    return {
+      ...launched,
+      key,
+      geo,
+      cleanup: () => {
+        bridge?.close();
+        profile.release();
+      },
+    };
   } catch (err) {
     bridge?.close();
+    profile.release();
     throw err;
   }
+}
+
+/**
+ * Asks Cloudflare where this exit comes out and applies the matching clock, so the
+ * browser's timezone lines up with its IP. Looked up once per exit and remembered; the
+ * language it implies is applied from the next launch, which is where it has to be set.
+ */
+async function alignWithExit(
+  page: Page,
+  key: string,
+  known: CfExitGeo | undefined,
+  deadline: number,
+): Promise<CfExitGeo | undefined> {
+  let geo = known;
+  if (!geo) {
+    try {
+      await page.goto(TRACE_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: Math.max(5_000, capped(15_000, deadline)),
+      });
+      const body = await page.evaluate(() => document.body?.innerText ?? "");
+      const loc = /(?:^|\n)loc=([A-Z]{2})/.exec(body)?.[1];
+      if (loc) {
+        geo = { loc, ...(COUNTRY_LOCALE[loc] ?? {}) };
+        rememberCfExitGeo(key, geo);
+        console.log(
+          `[cloudflare] exit ${key} comes out in ${loc}` +
+            (geo.tz ? ` -- using ${geo.tz} / ${geo.lang}` : " -- no locale mapped"),
+        );
+      }
+    } catch (err: any) {
+      console.warn(`[cloudflare] exit lookup failed: ${err?.message ?? err}`);
+    }
+  }
+  if (geo?.tz) await page.emulateTimezone(geo.tz).catch(() => {});
+  return geo;
 }
 
 // Full-page Cloudflare interstitial ("Just a moment...").
@@ -872,11 +1088,11 @@ export async function testBrowser(proxyUrl?: string): Promise<{
   if (!executable) return { ok: false, error: "Chromium is not installed" };
 
   let browser: Browser | undefined;
-  let closeBridge: (() => void) | undefined;
+  let cleanup: (() => void) | undefined;
   try {
     const launched = await launchBrowser(proxyUrl);
     browser = launched.browser;
-    closeBridge = launched.closeBridge;
+    cleanup = launched.cleanup;
     const page = launched.page;
     const version = await browser.version().catch(() => undefined);
     await page.setContent("<h1 id=probe>bemby browser ok</h1>").catch(() => {});
@@ -894,7 +1110,7 @@ export async function testBrowser(proxyUrl?: string): Promise<{
     return { ok: false, executable, error: err?.message ?? String(err) };
   } finally {
     await browser?.close().catch(() => {});
-    closeBridge?.();
+    cleanup?.();
   }
 }
 
@@ -924,11 +1140,14 @@ async function attemptLoad(
     }
   })();
   let browser: Browser | undefined;
-  let closeBridge: (() => void) | undefined;
+  let cleanup: (() => void) | undefined;
   // Renderer trouble the page reports on its own: a crashed tab or a main request
   // that never arrived both leave a blank page that otherwise looks challenge-free.
   const troubles: string[] = [];
+  // Trouble from the exit probe belongs to the probe, not to the page being judged
+  let probing = false;
   const note = (msg: string) => {
+    if (probing) return;
     // A challenge page aborts its own load on the way to the destination, so an
     // aborted request says nothing about whether the page came up
     if (/ERR_ABORTED/i.test(msg)) return;
@@ -937,7 +1156,7 @@ async function attemptLoad(
   try {
     const launched = await launchBrowser(proxyUrl);
     browser = launched.browser;
-    closeBridge = launched.closeBridge;
+    cleanup = launched.cleanup;
     const page = launched.page;
 
     page.on("error", (err) => note(`page crashed: ${err?.message ?? err}`));
@@ -957,6 +1176,11 @@ async function attemptLoad(
     if (opts.miniApp) {
       await page.evaluateOnNewDocument(WEBVIEW_PROXY_SHIM).catch(() => {});
     }
+
+    // Clock and language to match the exit IP, before anything on the target is loaded
+    probing = true;
+    await alignWithExit(page, launched.key, launched.geo, budgetDeadline);
+    probing = false;
 
     await page
       .goto(url, {
@@ -1101,7 +1325,7 @@ async function attemptLoad(
     return { ok: false, challenged: false, text: "", finalHost, reason: msg, navError: msg };
   } finally {
     await browser?.close().catch(() => {});
-    closeBridge?.();
+    cleanup?.();
   }
 }
 
