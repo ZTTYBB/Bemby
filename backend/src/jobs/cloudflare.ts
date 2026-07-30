@@ -1279,31 +1279,46 @@ const FINGERPRINT_PROBE = `(function () {
 
 export type BrowserEnvReport = Record<string, unknown>;
 
-/** Reads the probe and names the things a challenge is likely to hold against it. */
-export function envWarnings(env: BrowserEnvReport): string[] {
-  const out: string[] = [];
+/**
+ * Reads the probe. `warnings` are things that stop the browser being useful or are a
+ * direct automation tell; `notes` are differences worth seeing when comparing two
+ * installs but which are not known to fail on their own -- a working setup passes
+ * challenges with no GL stack at all, so that belongs in notes, not warnings.
+ */
+export function envReview(env: BrowserEnvReport): { warnings: string[]; notes: string[] } {
+  const warnings: string[] = [];
+  const notes: string[] = [];
+
+  if (env.probeError) warnings.push(`The page could not be read: ${env.probeError}`);
+  if (env.webdriver === true) {
+    warnings.push("navigator.webdriver is true, which is a direct automation tell.");
+  }
+  if (env.latinOk === false) {
+    warnings.push(
+      "No usable fonts at all: fontconfig is finding none of the installed ones, so every " +
+        "glyph is a box and text measures unlike any real browser.",
+    );
+  }
+  if (typeof env.cores === "number" && env.cores <= 1) {
+    warnings.push(`hardwareConcurrency is ${env.cores}: a real desktop reports more.`);
+  }
+
   const webgl = String(env.webgl ?? "");
   if (!webgl || webgl === "unavailable" || webgl.startsWith("error")) {
-    out.push(
-      "No WebGL: the browser has no GL stack, which a challenge reads as automation. " +
-        "Install mesa-gl/mesa-egl/mesa-gles (and vulkan-loader for SwiftShader) into the browser root.",
+    notes.push(
+      "No WebGL. Worth comparing between installs, but not a blocker on its own: " +
+        "challenges are passed on setups that report none.",
     );
   }
-  if (env.webgl2 === false) out.push("No WebGL2, which any current desktop Chrome has.");
-  if (env.latinOk === false) {
-    out.push(
-      "No usable fonts at all: fontconfig is not finding the installed ones. The browser " +
-        "root is not a chroot, so an absolute <dir> in fonts.conf points at the image, not the root.",
-    );
-  } else if (env.cjkOk === false) {
-    out.push("CJK glyphs are missing (font-noto-cjk not visible to fontconfig).");
+  if (env.webgl2 === false) notes.push("No WebGL2.");
+  if (env.latinOk !== false && env.cjkOk === false) {
+    notes.push("CJK glyphs are missing, so Chinese text renders as boxes (matching still works).");
   }
-  if (env.emojiOk === false) out.push("Emoji glyphs are missing (font-noto-emoji not installed).");
-  if (env.webdriver === true) out.push("navigator.webdriver is true, which is a direct automation tell.");
-  if (typeof env.cores === "number" && env.cores <= 1) {
-    out.push(`hardwareConcurrency is ${env.cores}: a real desktop reports more.`);
+  if (env.emojiOk === false) notes.push("Emoji glyphs are missing.");
+  if (env.uaData === null) {
+    notes.push("No User-Agent Client Hints: expected off a secure origin, a real gap on one.");
   }
-  return out;
+  return { warnings, notes };
 }
 
 /**
@@ -1320,8 +1335,12 @@ export async function testBrowser(proxyUrl?: string): Promise<{
   screenshot?: string;
   error?: string;
   env?: BrowserEnvReport;
-  /** Warnings about the environment that a challenge is likely to notice. */
+  /** Things that stop the browser being useful, or read as automation outright. */
   warnings?: string[];
+  /** Differences worth comparing between installs, none fatal on its own. */
+  notes?: string[];
+  /** Country the exit came out in, which also proves TLS and the proxy work. */
+  exitCountry?: string;
 }> {
   const executable = chromiumExecutable();
   if (!executable) return { ok: false, error: "Chromium is not installed" };
@@ -1338,15 +1357,31 @@ export async function testBrowser(proxyUrl?: string): Promise<{
     const renderedText = await page
       .evaluate(() => document.body?.innerText ?? "")
       .catch((err: any) => `evaluate failed: ${err?.message ?? err}`);
+    // Read the fingerprint off a real https page: client hints and anything else gated on
+    // a secure context do not exist on about:blank, and reporting them as absent there
+    // would send someone chasing a difference that is only in the probe.
+    let exitCountry: string | undefined;
+    const secure = await page
+      .goto(TRACE_URL, { waitUntil: "domcontentloaded", timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (secure) {
+      const trace = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+      exitCountry = /(?:^|\n)loc=([A-Z]{2})/.exec(trace)?.[1];
+    }
     const env = (await page.evaluate(FINGERPRINT_PROBE).catch((err: any) => ({
       probeError: err?.message ?? String(err),
     }))) as BrowserEnvReport;
+    if (!secure) env.secureOrigin = false;
+    const review = envReview(env);
     return {
       ok: typeof renderedText === "string" && renderedText.includes("bemby browser ok"),
       executable,
       version,
       env,
-      warnings: envWarnings(env),
+      exitCountry,
+      warnings: review.warnings,
+      notes: review.notes,
       renderedText,
       screenshot: await screenshotOf(page),
     };
