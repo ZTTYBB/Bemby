@@ -385,6 +385,12 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       maxRetries?: number;
+      /** Budget for the browser part, across every proxy tried. 0/blank uses the default. */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy id, or "direct". Blank uses the job proxy. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. */
+      tryAllProxies?: boolean;
     }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
 
@@ -437,6 +443,20 @@ export type CustomStepLog = {
   jobAttempt?: number;
   /** 1-based action attempt number (only set when action maxRetries > 0) */
   actionAttempt?: number;
+  // Browser (Cloudflare / Mini App) fields
+  cfHost?: string;
+  cfChallenged?: boolean;
+  cfPassed?: boolean;
+  cfMiniApp?: boolean;
+  cfMiniAppSigned?: boolean;
+  cfMiniAppAction?: string;
+  cfProxy?: string;
+  cfAttempts?: number;
+  cfPageTitle?: string;
+  cfNavError?: string;
+  cfTrace?: string[];
+  /** Screenshot of the page the browser ended up on. */
+  cfScreenshot?: string;
 };
 
 export type Job = {

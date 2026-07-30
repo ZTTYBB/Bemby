@@ -94,6 +94,16 @@ export type CheckinPageResult = {
   proxyLabel?: string;
   /** How many exits were tried. */
   attempts?: number;
+  /** Why the attempt is not ok, in plain words, for the job log. */
+  reason?: string;
+  /** Navigation/renderer trouble seen while loading (page crash, failed request). */
+  navError?: string;
+  /** Title of the final page: tells a real app apart from a blank or crashed tab. */
+  pageTitle?: string;
+  /** data: URI screenshot of the final page, so a headless-only failure is visible. */
+  screenshot?: string;
+  /** One line per exit tried, for the job log. */
+  trace?: string[];
 };
 
 export type LoadOptions = {
@@ -118,6 +128,14 @@ export type LoadOptions = {
   proxyCandidates?: ProxyCandidate[];
   /** Re-mints the URL between attempts (signed Mini App init data ages). */
   refreshUrl?: () => Promise<string>;
+  /**
+   * Budget for the whole load, across every exit tried. Each internal wait is
+   * clamped to what is left of it, so the step cannot run on indefinitely.
+   * Defaults to DEFAULT_BUDGET_MS.
+   */
+  maxWaitMs?: number;
+  /** Keep a screenshot of the final page on the result (diagnostics). */
+  screenshot?: boolean;
 };
 
 const NAV_TIMEOUT_MS = 45_000;
@@ -134,6 +152,70 @@ const CONFIRM_TIMEOUT_MS = 20_000;
 // A Mini App is a single-page app: give it time to boot before judging the page.
 const APP_READY_TIMEOUT_MS = 25_000;
 const READY_POLL_MS = 500;
+// Whole-load budget when the caller sets none: enough for a few exits to be tried.
+const DEFAULT_BUDGET_MS = 300_000;
+// Below this there is no point starting another exit.
+const MIN_ATTEMPT_MS = 10_000;
+// A page holding less text than this rendered nothing worth reading.
+const BLANK_TEXT_LEN = 10;
+
+/**
+ * Decides whether a Mini App pass actually did anything. A page that rendered nothing,
+ * or one where the step the caller asked for was never carried out, is a failure even
+ * though no challenge stood in the way -- reporting it as success logs a checkin that
+ * never happened.
+ */
+export function miniAppVerdict(state: {
+  /** A Cloudflare challenge was seen (and, per `solved`, how it went). */
+  challenged: boolean;
+  /** Verdict so far: the challenge cleared, or there was none. */
+  solved: boolean;
+  /** Visible text of the final page. */
+  text: string;
+  /** In-app steps that were carried out, if any. */
+  inAppAction?: string;
+  /** Why the in-app steps stopped short, if they did. */
+  inAppFailure?: string;
+  /** Navigation or renderer trouble seen on the way. */
+  navError?: string;
+}): { ok: boolean; reason?: string } {
+  const { challenged, solved, text, inAppAction, inAppFailure, navError } = state;
+
+  if (!challenged && text.trim().length < BLANK_TEXT_LEN && !inAppAction) {
+    return {
+      ok: false,
+      reason: navError
+        ? `the app page never rendered (${navError})`
+        : "the app page came up blank -- the browser reached no readable content",
+    };
+  }
+  if (solved && inAppFailure) return { ok: false, reason: inAppFailure };
+  if (!solved) {
+    return {
+      ok: false,
+      reason: challenged
+        ? 'Could not pass the Cloudflare "I am not a bot" challenge'
+        : (navError ?? "the app page could not be loaded"),
+    };
+  }
+  return { ok: true };
+}
+
+/** Millis left before `deadline`, never negative. */
+function msLeft(deadline: number): number {
+  return Math.max(0, deadline - Date.now());
+}
+
+/** `ms`, cut down to what is left of the budget. */
+function capped(ms: number, deadline: number): number {
+  return Math.min(ms, msLeft(deadline));
+}
+
+/** Sleeps `ms`, or until the budget runs out. */
+function sleep(ms: number, deadline?: number): Promise<void> {
+  const wait = deadline ? capped(ms, deadline) : ms;
+  return new Promise((r) => setTimeout(r, Math.max(0, wait)));
+}
 
 // Builds the http(s)/socks proxy option puppeteer-real-browser expects.
 function proxyOption(proxyUrl?: string): { host: string; port: number; username?: string; password?: string } | undefined {
@@ -511,8 +593,8 @@ const LOADING_RE = /loading|加载|加載|載入|please wait|请稍候|請稍候
  * challenge it is about to render nor the controls to press. Returns as soon as a
  * challenge shows up, or once the rendered text has stopped changing.
  */
-async function waitForAppReady(page: Page): Promise<void> {
-  const deadline = Date.now() + APP_READY_TIMEOUT_MS;
+async function waitForAppReady(page: Page, budgetDeadline: number): Promise<void> {
+  const deadline = Math.min(Date.now() + APP_READY_TIMEOUT_MS, budgetDeadline);
   let previous = "";
   while (Date.now() < deadline) {
     if ((await hasTurnstile(page)) || (await isInterstitial(page))) return;
@@ -520,7 +602,7 @@ async function waitForAppReady(page: Page): Promise<void> {
     const booting = !text || text.length < 40 || LOADING_RE.test(text);
     if (!booting && text === previous) return;
     previous = text;
-    await new Promise((r) => setTimeout(r, READY_POLL_MS));
+    await sleep(READY_POLL_MS, deadline);
   }
 }
 
@@ -681,16 +763,23 @@ async function fillInAppAnswer(page: Page, answer: string): Promise<boolean> {
  * Runs the configured in-app steps in order, letting the app settle between them so
  * each step can render what the next one needs (press checkin, answer its captcha,
  * confirm). Stops at the first step that cannot be carried out, and reports how far
- * it got.
+ * it got. `ok` is false when a step the caller asked for could not be carried out,
+ * so a page where nothing was pressed is not mistaken for a completed checkin.
  */
 async function runInAppClicks(
   page: Page,
   steps: string[],
+  deadline: number,
   solveQuestion?: (question: string) => Promise<string>,
-): Promise<string | undefined> {
+): Promise<{ trace?: string; ok: boolean; failure?: string }> {
   const done: string[] = [];
+  let failure: string | undefined;
 
   for (const step of steps.length ? steps : [undefined]) {
+    if (msLeft(deadline) <= 0) {
+      failure = "ran out of time before the in-app steps finished";
+      break;
+    }
     if (step === "{input}" || step === "{aiInput}") {
       const question = await inAppQuestion(page);
       let answer: string | undefined;
@@ -701,14 +790,16 @@ async function runInAppClicks(
       }
       if (!answer) {
         done.push(`${step} unanswered`);
+        failure = `${step} could not be answered`;
         break;
       }
       if (!(await fillInAppAnswer(page, answer))) {
         done.push(`${step} has no field to fill`);
+        failure = `${step} found no input to fill`;
         break;
       }
       done.push(`${step}="${answer}"`);
-      await new Promise((r) => setTimeout(r, IN_APP_STEP_MS));
+      await sleep(IN_APP_STEP_MS, deadline);
       continue;
     }
 
@@ -716,16 +807,73 @@ async function runInAppClicks(
     if (!outcome) {
       // A label that never appears is worth reporting: the app may have changed
       if (step) done.push(`"${step}" not found`);
+      failure = step
+        ? `"${step}" is not on the app page`
+        : "no checkin control was found in the app";
       break;
     }
     done.push(outcome);
-    await new Promise((r) => setTimeout(r, IN_APP_STEP_MS));
+    await sleep(IN_APP_STEP_MS, deadline);
     if (outcome.startsWith("already done")) break;
   }
 
   // Let the last step's request round-trip before the page text is scraped
-  if (done.length) await new Promise((r) => setTimeout(r, IN_APP_SETTLE_MS));
-  return done.length ? done.join(" → ") : undefined;
+  if (done.length) await sleep(IN_APP_SETTLE_MS, deadline);
+  return { trace: done.length ? done.join(" → ") : undefined, ok: !failure, failure };
+}
+
+/**
+ * Launches the installed browser and checks that it actually renders: the same thing a
+ * Mini App step depends on, told apart from a Cloudflare or network problem. Handy on a
+ * server where the browser is an on-demand install and nothing else can be seen.
+ */
+export async function testBrowser(proxyUrl?: string): Promise<{
+  ok: boolean;
+  executable?: string;
+  version?: string;
+  renderedText?: string;
+  screenshot?: string;
+  error?: string;
+}> {
+  const executable = chromiumExecutable();
+  if (!executable) return { ok: false, error: "Chromium is not installed" };
+
+  let browser: Browser | undefined;
+  let closeBridge: (() => void) | undefined;
+  try {
+    const launched = await launchBrowser(proxyUrl);
+    browser = launched.browser;
+    closeBridge = launched.closeBridge;
+    const page = launched.page;
+    const version = await browser.version().catch(() => undefined);
+    await page.setContent("<h1 id=probe>bemby browser ok</h1>").catch(() => {});
+    const renderedText = await page
+      .evaluate(() => document.body?.innerText ?? "")
+      .catch((err: any) => `evaluate failed: ${err?.message ?? err}`);
+    return {
+      ok: typeof renderedText === "string" && renderedText.includes("bemby browser ok"),
+      executable,
+      version,
+      renderedText,
+      screenshot: await screenshotOf(page),
+    };
+  } catch (err: any) {
+    return { ok: false, executable, error: err?.message ?? String(err) };
+  } finally {
+    await browser?.close().catch(() => {});
+    closeBridge?.();
+  }
+}
+
+/** JPEG of what the browser is looking at, small enough to keep in a job log. */
+async function screenshotOf(page: Page): Promise<string | undefined> {
+  const shot = await page
+    .screenshot({ type: "jpeg", quality: 45, encoding: "base64" })
+    .catch(() => undefined);
+  if (typeof shot !== "string" || !shot) return undefined;
+  // Job logs are stored as JSON in SQLite; an oversized image is not worth keeping
+  if (shot.length > 700_000) return undefined;
+  return `data:image/jpeg;base64,${shot}`;
 }
 
 /** One load-and-solve pass through a single exit (the proxy, or direct). */
@@ -733,6 +881,7 @@ async function attemptLoad(
   url: string,
   proxyUrl: string | undefined,
   opts: LoadOptions,
+  budgetDeadline: number,
 ): Promise<CheckinPageResult> {
   const finalHost = (() => {
     try {
@@ -743,11 +892,26 @@ async function attemptLoad(
   })();
   let browser: Browser | undefined;
   let closeBridge: (() => void) | undefined;
+  // Renderer trouble the page reports on its own: a crashed tab or a main request
+  // that never arrived both leave a blank page that otherwise looks challenge-free.
+  const troubles: string[] = [];
+  const note = (msg: string) => {
+    // A challenge page aborts its own load on the way to the destination, so an
+    // aborted request says nothing about whether the page came up
+    if (/ERR_ABORTED/i.test(msg)) return;
+    if (troubles.length < 5 && !troubles.includes(msg)) troubles.push(msg);
+  };
   try {
     const launched = await launchBrowser(proxyUrl);
     browser = launched.browser;
     closeBridge = launched.closeBridge;
     const page = launched.page;
+
+    page.on("error", (err) => note(`page crashed: ${err?.message ?? err}`));
+    page.on("pageerror", (err: Error) => note(`page script error: ${err?.message ?? err}`));
+    page.on("requestfailed", (req: any) => {
+      if (req?.isNavigationRequest?.()) note(`request failed: ${req.failure()?.errorText}`);
+    });
 
     // In dev the backend runs via tsx/esbuild, which wraps functions passed to
     // page.evaluate() with a __name() helper that doesn't exist in the browser.
@@ -761,16 +925,23 @@ async function attemptLoad(
       await page.evaluateOnNewDocument(WEBVIEW_PROXY_SHIM).catch(() => {});
     }
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS }).catch(() => {
-      // The challenge page may abort/redirect mid-load; the poll below is the
-      // real signal, so a goto rejection isn't fatal.
-    });
+    await page
+      .goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: Math.max(5_000, capped(NAV_TIMEOUT_MS, budgetDeadline)),
+      })
+      .catch((err: any) => {
+        // The challenge page may abort/redirect mid-load; the poll below is the
+        // real signal, so a goto rejection isn't fatal -- but it is recorded, since
+        // a page that never loaded looks exactly like one with no challenge on it.
+        note(`navigation: ${err?.message ?? err}`);
+      });
 
     // Compare without the fragment: a Mini App rewriting its hash route is not the
     // portal navigating away, and counting it would call the challenge solved at once.
     const withoutHash = (u: string) => u.split("#")[0];
     const startUrl = withoutHash(page.url());
-    if (opts.miniApp) await waitForAppReady(page);
+    if (opts.miniApp) await waitForAppReady(page, budgetDeadline);
 
     // Works a challenge that is on the page right now. Returns null when there is
     // none, so callers can tell "nothing to do" from "tried and failed".
@@ -783,7 +954,7 @@ async function attemptLoad(
       if (!interstitial && !widget && (await hasTurnstileScript(page))) {
         if (await clickVerifyButton(page)) {
           for (let i = 0; i < 6 && !widget; i++) {
-            await new Promise((r) => setTimeout(r, READY_POLL_MS));
+            await sleep(READY_POLL_MS, budgetDeadline);
             widget = await hasTurnstileWidget(page);
           }
         }
@@ -794,10 +965,10 @@ async function attemptLoad(
       if (widget) await clickVerifyButton(page);
 
       const challengeStart = Date.now();
-      const deadline = challengeStart + CHALLENGE_TIMEOUT_MS;
+      const deadline = Math.min(challengeStart + CHALLENGE_TIMEOUT_MS, budgetDeadline);
       let widgetClicks = 0;
       while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, POLL_MS));
+        await sleep(POLL_MS, deadline);
         // Strongest signal: a Turnstile token was issued.
         if (await turnstileToken(page)) return true;
         // Nudge a widget that is sitting there unsolved: it may be an interactive
@@ -834,12 +1005,20 @@ async function attemptLoad(
       }
     }
 
-    await new Promise((r) => setTimeout(r, SETTLE_MS));
+    await sleep(SETTLE_MS, budgetDeadline);
 
     // A Mini App checkin is a tap inside the app, not the page load itself.
     let inAppAction: string | undefined;
+    let inAppFailure: string | undefined;
     if (opts.miniApp && solved) {
-      inAppAction = await runInAppClicks(page, opts.inAppClicks ?? [], opts.solveQuestion);
+      const clicks = await runInAppClicks(
+        page,
+        opts.inAppClicks ?? [],
+        budgetDeadline,
+        opts.solveQuestion,
+      );
+      inAppAction = clicks.trace;
+      inAppFailure = clicks.failure;
 
       const after = await solveChallenge();
       if (after !== null) {
@@ -853,15 +1032,32 @@ async function attemptLoad(
     // the browser while the request is still in flight.
     let text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
     if (solved && challenged && !SUCCESS_RE.test(text)) {
-      const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
+      const deadline = Math.min(Date.now() + CONFIRM_TIMEOUT_MS, budgetDeadline);
       while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, POLL_MS));
+        await sleep(POLL_MS, deadline);
         text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
         if (SUCCESS_RE.test(text)) break;
       }
     }
 
-    return { ok: solved, challenged, text, finalHost, inAppAction };
+    const pageTitle = (await page.title().catch(() => "")) || undefined;
+    const navError = troubles.length ? troubles.join("; ") : undefined;
+
+    const verdict = opts.miniApp
+      ? miniAppVerdict({ challenged, solved, text, inAppAction, inAppFailure, navError })
+      : { ok: solved, reason: undefined as string | undefined };
+
+    return {
+      ok: verdict.ok,
+      challenged,
+      text,
+      finalHost,
+      inAppAction,
+      reason: verdict.reason,
+      navError,
+      pageTitle,
+      screenshot: opts.screenshot ? await screenshotOf(page) : undefined,
+    };
   } catch (err: any) {
     const msg = err?.message ?? String(err);
     if (/not installed|executablePath|ENOENT|Could not find|Failed to launch/i.test(msg)) {
@@ -869,7 +1065,7 @@ async function attemptLoad(
     } else {
       console.error(`[cloudflare] Failed to load ${finalHost}: ${msg}`);
     }
-    return { ok: false, challenged: false, text: "", finalHost };
+    return { ok: false, challenged: false, text: "", finalHost, reason: msg, navError: msg };
   } finally {
     await browser?.close().catch(() => {});
     closeBridge?.();
@@ -886,6 +1082,9 @@ async function attemptLoad(
  * challenge moves on to the next -- a page that loads with no challenge, or one that
  * clears it, is done. `opts.refreshUrl` re-mints the address between attempts, which a
  * signed Mini App URL needs since its init data ages.
+ *
+ * `opts.maxWaitMs` bounds the whole thing: exits are tried only while budget remains,
+ * so a hunt through a large pool cannot run for an unbounded stretch.
  */
 export async function loadCheckinUrl(
   url: string,
@@ -896,12 +1095,21 @@ export async function loadCheckinUrl(
     ? opts.proxyCandidates
     : [{ id: proxyUrl ? "job" : "direct", label: proxyUrl ? "job proxy" : "direct", url: proxyUrl }];
 
+  const budget = opts.maxWaitMs && opts.maxWaitMs > 0 ? opts.maxWaitMs : DEFAULT_BUDGET_MS;
+  const deadline = Date.now() + budget;
+
   let target = url;
   let last: CheckinPageResult | undefined;
+  const trace: string[] = [];
 
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
     if (i > 0) {
+      if (msLeft(deadline) < MIN_ATTEMPT_MS) {
+        trace.push(`out of time after ${i} exit(s) (budget ${Math.round(budget / 1000)}s)`);
+        console.log(`[cloudflare] budget spent after ${i} exit(s), giving up`);
+        break;
+      }
       console.log(`[cloudflare] challenge refused, retrying via ${candidate.label}`);
       // A signed Mini App URL ages, so mint a fresh one for this attempt when possible
       if (opts.refreshUrl) {
@@ -910,15 +1118,28 @@ export async function loadCheckinUrl(
       }
     }
 
-    const result = await attemptLoad(target, candidate.url, opts);
+    const result = await attemptLoad(target, candidate.url, opts, deadline);
+    trace.push(
+      [
+        `${candidate.label}: ${result.ok ? "ok" : "failed"}`,
+        result.challenged ? "challenged" : undefined,
+        result.pageTitle ? `title="${result.pageTitle}"` : undefined,
+        `text ${result.text.trim().length} chars`,
+        result.inAppAction ? `in-app: ${result.inAppAction}` : undefined,
+        result.reason,
+      ]
+        .filter(Boolean)
+        .join(" | "),
+    );
     last = {
       ...result,
       proxyId: candidate.id,
       proxyLabel: candidate.label,
       attempts: i + 1,
+      trace: [...trace],
     };
     if (result.ok) return last;
   }
 
-  return last!;
+  return { ...last!, trace: [...trace] };
 }

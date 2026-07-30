@@ -23,7 +23,7 @@ import {
 } from "./checkin";
 import { loadCheckinUrl, type LoadOptions } from "./cloudflare";
 import { openableButtonUrl, webButtonOf, type WebButton } from "../tg/miniApp";
-import { cfProxyCandidates, rememberCfProxy } from "../tg/proxyProviders";
+import { cfProxyCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
 import type { CustomConfig, CustomStepLog } from "../types";
 
 export type CustomJobLog = {
@@ -56,6 +56,8 @@ async function passCloudflare(
   const cf = await loadCheckinUrl(url, webProxyUrl, {
     miniApp,
     ...extra,
+    // A Mini App runs entirely inside the browser, so keep what it saw
+    screenshot: miniApp,
     // Cloudflare refuses some exit IPs outright, so the rest of the pool stands by
     proxyCandidates: cfProxyCandidates(webProxyUrl, host),
   });
@@ -67,7 +69,12 @@ async function passCloudflare(
   step.cfPassed = cf.ok;
   step.cfMiniApp = miniApp || undefined;
   step.cfMiniAppAction = cf.inAppAction;
-  if (!cf.ok) throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
+  step.cfPageTitle = cf.pageTitle;
+  step.cfNavError = cf.navError;
+  step.cfTrace = cf.trace;
+  step.cfScreenshot = cf.screenshot;
+  if (!cf.ok)
+    throw new Error(cf.reason ?? 'Could not pass the Cloudflare "I am not a bot" challenge');
   return cf.text;
 }
 
@@ -2330,6 +2337,9 @@ export async function runCustom(
                 const cf = await loadCheckinUrl(url, webProxyUrl, {
                   miniApp: true,
                   inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
+                  maxWaitMs: action.maxWaitMs,
+                  // The browser side is invisible from here, so keep what it saw
+                  screenshot: true,
                   solveQuestion: async (question) => {
                     const prompt =
                       `A Telegram Mini App is asking a verification question before it will ` +
@@ -2340,8 +2350,14 @@ export async function runCustom(
                     step.aiResponse = response;
                     return response;
                   },
-                  // Cloudflare judges the exit IP too, so let the rest of the pool try
-                  proxyCandidates: cfProxyCandidates(webProxyUrl, cfHost),
+                  // Cloudflare judges the exit IP too, so the action can pin an exit of
+                  // its own and decide whether the rest of the pool stands by
+                  proxyCandidates: cfProxyCandidatesFor({
+                    primaryUrl: webProxyUrl,
+                    host: cfHost,
+                    proxyId: action.proxyId,
+                    tryAll: action.tryAllProxies ?? true,
+                  }),
                   // Init data ages, so each attempt gets a freshly signed URL
                   refreshUrl: async () =>
                     (await openableButtonUrl(client, hit!.web, target, hit!.msg)).url,
@@ -2352,14 +2368,20 @@ export async function runCustom(
                 step.cfMiniAppAction = cf.inAppAction;
                 step.cfProxy = cf.proxyLabel;
                 step.cfAttempts = cf.attempts;
+                step.cfPageTitle = cf.pageTitle;
+                step.cfNavError = cf.navError;
+                step.cfTrace = cf.trace;
+                step.cfScreenshot = cf.screenshot;
                 if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
                 step.responseHtml = escapeHtml(cf.text.slice(0, 2000)).replace(/\n/g, "<br>");
                 if (!cf.ok) {
-                  throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
+                  throw new Error(
+                    cf.reason ?? 'Could not pass the Cloudflare "I am not a bot" challenge',
+                  );
                 }
                 step.result = cf.inAppAction
                   ? `Opened "${hit.web.text}", pressed "${cf.inAppAction}"`
-                  : `Opened "${hit.web.text}"`;
+                  : `Opened "${hit.web.text}" (nothing pressed inside the app)`;
 
                 if (action.failContains && cf.text.includes(action.failContains)) {
                   throw new Error(`Page indicates failure: "${action.failContains}" detected`);
