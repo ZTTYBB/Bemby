@@ -987,6 +987,8 @@ export type Settings = {
   cf_solver_enabled?: string;
   /** Server-computed: "true" when the Cloudflare-solver browser is installed. */
   cf_chromium_installed?: string;
+  /** Server-computed: version of that browser, e.g. "Chromium 151.0.7922.34". */
+  cf_chromium_version?: string;
   proxy_providers_count?: string;
 };
 
@@ -998,11 +1000,29 @@ export const settingsApi = {
     api
       .post<{ ok: boolean; error?: string }>("/settings/test-proxy", { url })
       .then((r) => r.data),
-  installCfSolver: () =>
+  /** `force` downloads the browser again over an existing one, i.e. updates it. */
+  installCfSolver: (force = false) =>
     api
-      .post<{ ok: boolean; installed?: boolean; output?: string; message?: string }>(
-        "/settings/cf-solver/install",
-      )
+      .post<{
+        ok: boolean;
+        installed?: boolean;
+        version?: string;
+        output?: string;
+        message?: string;
+      }>("/settings/cf-solver/install", { force })
+      .then((r) => r.data),
+  /** Launches the installed browser and reports what the page sees of itself. */
+  testCfSolver: () =>
+    api
+      .post<{
+        ok: boolean;
+        executable?: string;
+        version?: string;
+        renderedText?: string;
+        error?: string;
+        env?: Record<string, unknown>;
+        warnings?: string[];
+      }>("/settings/cf-solver/test")
       .then((r) => r.data),
   getProxyProviders: () =>
     api

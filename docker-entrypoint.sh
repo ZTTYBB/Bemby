@@ -10,7 +10,7 @@ if [ "$(id -u)" = "0" ]; then
   # DB error rather than us aborting the boot here. Data is never modified.
   chown -R node:node /app/data 2>/dev/null || \
     echo "docker-entrypoint: could not chown /app/data (continuing as node)"
-  exec su-exec node "$@"
+  exec gosu node "$@"
 fi
 
 exec "$@"
