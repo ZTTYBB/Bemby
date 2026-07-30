@@ -62,7 +62,8 @@ const SCHEMA = `
     template_id           INTEGER REFERENCES job_templates(id) ON DELETE SET NULL,
     run_every_days        INTEGER NOT NULL DEFAULT 1,
     run_every_days_max    INTEGER,
-    retired               TEXT
+    retired               TEXT,
+    last_success_at       TEXT
   );
   CREATE TABLE IF NOT EXISTS job_logs (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,

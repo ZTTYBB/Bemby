@@ -319,6 +319,17 @@ export async function executeJob(
     db.prepare(
       "UPDATE job_logs SET status = 'success', message = 'Completed', detail = ? WHERE id = ?",
     ).run(detail, logId);
+    // Durable stamp; job_logs is pruned by log_retention_days. Only moves
+    // forward so a slow run finishing after a later one can't rewind it.
+    // Isolated: a failure here must not demote an otherwise successful run.
+    try {
+      db.prepare(
+        `UPDATE jobs SET last_success_at = ?
+         WHERE id = ? AND (last_success_at IS NULL OR last_success_at < ?)`,
+      ).run(ranAt, job.id, ranAt);
+    } catch (e) {
+      console.warn(`[scheduler] "${job.name}" last_success_at stamp failed:`, e);
+    }
     console.log(`[scheduler] "${job.name}" completed`);
     if (account?.sessionString) {
       const cfg = getNotifyConfig();

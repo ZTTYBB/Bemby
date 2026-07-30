@@ -481,6 +481,8 @@ export type Job = {
   runEveryDays: number;
   runEveryDaysMax?: number | null;
   retired?: string | null;
+  /** ISO timestamp of the last successful run; null when it has never succeeded */
+  lastSuccessAt?: string | null;
 };
 
 export type JobTemplate = {
