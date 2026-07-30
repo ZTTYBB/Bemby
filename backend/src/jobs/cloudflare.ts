@@ -14,6 +14,7 @@ import { createRequire } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
 import { SocksClient } from "socks";
 import { connect } from "puppeteer-real-browser";
+import { cfTuning } from "./cfTuning";
 import {
   cfExitGeo,
   rememberCfExitGeo,
@@ -77,9 +78,8 @@ function exitKey(proxyUrl?: string): string {
   return proxyUrl ? createHash("sha1").update(proxyUrl).digest("hex").slice(0, 12) : "direct";
 }
 
-// Profiles are kept for the exits used most recently; a Chromium profile is tens of MB,
-// and a large proxy pool would otherwise fill the data volume.
-const MAX_PROFILES = 12;
+// Profiles are kept for the exits used most recently (cfTuning.maxProfiles): a Chromium
+// profile is tens of MB, and a large proxy pool would otherwise fill the data volume.
 // One Chromium at a time per profile: two sharing a user-data-dir corrupt it, and jobs
 // can run concurrently. The loser of the race gets a throwaway profile instead.
 const profilesInUse = new Set<string>();
@@ -100,14 +100,15 @@ function lastUsedAt(dir: string): number {
   }
 }
 
-/** Drops the least recently used profiles, leaving the newest MAX_PROFILES in place. */
+/** Drops the least recently used profiles, keeping the newest maxProfiles of them. */
 function pruneProfiles(root: string): void {
+  const tune = cfTuning();
   try {
     const dirs = readdirSync(root)
       .filter((name) => !profilesInUse.has(name))
       .map((name) => ({ full: path.join(root, name), usedAt: lastUsedAt(path.join(root, name)) }))
       .sort((a, b) => b.usedAt - a.usedAt);
-    for (const stale of dirs.slice(MAX_PROFILES)) {
+    for (const stale of dirs.slice(tune.maxProfiles)) {
       rmSync(stale.full, { recursive: true, force: true });
     }
   } catch {
@@ -461,39 +462,15 @@ export type LoadOptions = {
   /**
    * Budget for the whole load, across every exit tried. Each internal wait is
    * clamped to what is left of it, so the step cannot run on indefinitely.
-   * Defaults to DEFAULT_BUDGET_MS.
+   * Defaults to the budget configured in Settings.
    */
   maxWaitMs?: number;
   /** Keep a screenshot of the final page on the result (diagnostics). */
   screenshot?: boolean;
 };
 
-const NAV_TIMEOUT_MS = 45_000;
-const CHALLENGE_TIMEOUT_MS = 45_000;
-const POLL_MS = 1_000;
-// Let a post-challenge redirect/render settle before scraping text.
-const SETTLE_MS = 1_500;
-// Let the Mini App's checkin request round-trip before scraping its result text.
-const IN_APP_SETTLE_MS = 4_000;
-// Between in-app steps: enough for a dialog to be raised or a list to re-render.
-const IN_APP_STEP_MS = 1_200;
-// After a widget challenge: how long to wait for the site to confirm the outcome.
-const CONFIRM_TIMEOUT_MS = 20_000;
-// A Mini App is a single-page app: give it time to boot before judging the page.
-const APP_READY_TIMEOUT_MS = 25_000;
-const READY_POLL_MS = 500;
-// Whole-load budget when the caller sets none: enough for a few exits to be tried.
-const DEFAULT_BUDGET_MS = 300_000;
-// Below this there is no point starting another exit.
-const MIN_ATTEMPT_MS = 10_000;
-// A page holding less text than this rendered nothing worth reading.
-const BLANK_TEXT_LEN = 10;
-// How long to keep looking for a verification the app raises after the checkin click.
-const POST_CLICK_CHALLENGE_MS = 20_000;
-// Ceiling for a single CDP call. Puppeteer's own default is three minutes, long enough
-// for one wedged call to spend a whole step's budget.
-const PROTOCOL_TIMEOUT_MS = 30_000;
-
+// Every timing and limit the browser side runs on lives in cfTuning, so it can be
+// adjusted in Settings; the values there default to what this solver shipped with.
 /**
  * Decides whether a Mini App pass actually did anything. A page that rendered nothing,
  * or one where the step the caller asked for was never carried out, is a failure even
@@ -513,10 +490,13 @@ export function miniAppVerdict(state: {
   inAppFailure?: string;
   /** Navigation or renderer trouble seen on the way. */
   navError?: string;
+  /** Overrides the configured "a page this short rendered nothing" length. */
+  blankTextLen?: number;
 }): { ok: boolean; reason?: string } {
   const { challenged, solved, text, inAppAction, inAppFailure, navError } = state;
+  const blankLen = state.blankTextLen ?? cfTuning().blankTextLen;
 
-  if (!challenged && text.trim().length < BLANK_TEXT_LEN && !inAppAction) {
+  if (!challenged && text.trim().length < blankLen && !inAppAction) {
     return {
       ok: false,
       reason: navError
@@ -659,6 +639,7 @@ async function launchBrowser(proxyUrl?: string): Promise<{
   /** What is known about where it comes out, if anything yet. */
   geo?: CfExitGeo;
 }> {
+  const tune = cfTuning();
   const executablePath = chromiumExecutable();
   if (!executablePath) {
     throw new Error(
@@ -739,7 +720,7 @@ async function launchBrowser(proxyUrl?: string): Promise<{
       },
       // A CDP call against a wedged renderer otherwise waits out puppeteer's 3-minute
       // default, which would swallow the whole step budget in one call
-      connectOption: { protocolTimeout: PROTOCOL_TIMEOUT_MS },
+      connectOption: { protocolTimeout: tune.protocolTimeoutMs },
       proxy,
     });
     // A reused profile reopens the tabs the last session left behind, and they pile up
@@ -1120,10 +1101,11 @@ async function clickCapWidget(page: Page): Promise<boolean> {
  * app's own success wording counts as much as the widget's state.
  */
 async function solveCap(page: Page, deadline: number): Promise<boolean> {
+  const tune = cfTuning();
   if (!(await clickCapWidget(page))) return false;
   let clicks = 1;
   while (Date.now() < deadline) {
-    await sleep(POLL_MS, deadline);
+    await sleep(tune.pollMs, deadline);
     const state = await capState(page);
     const body = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
     if (state.solved || SUCCESS_RE.test(body)) return true;
@@ -1131,7 +1113,7 @@ async function solveCap(page: Page, deadline: number): Promise<boolean> {
     // Gone from the page altogether: the app took it and closed the dialog
     if (!state.asking && !VERIFY_REQUIRED_RE.test(body)) return true;
     // Nudge it a couple of times in case the first press missed the checkbox
-    if (state.asking && clicks < 3 && Date.now() > deadline - CHALLENGE_TIMEOUT_MS + clicks * 8_000) {
+    if (state.asking && clicks < 3 && Date.now() > deadline - tune.challengeTimeoutMs + clicks * 8_000) {
       clicks++;
       await clickCapWidget(page);
     }
@@ -1170,7 +1152,8 @@ const LOADING_RE = /loading|加载|加載|載入|please wait|请稍候|請稍候
  * challenge shows up, or once the rendered text has stopped changing.
  */
 async function waitForAppReady(page: Page, budgetDeadline: number): Promise<void> {
-  const deadline = Math.min(Date.now() + APP_READY_TIMEOUT_MS, budgetDeadline);
+  const tune = cfTuning();
+  const deadline = Math.min(Date.now() + tune.appReadyTimeoutMs, budgetDeadline);
   let previous = "";
   while (Date.now() < deadline) {
     if ((await hasTurnstile(page)) || (await isInterstitial(page))) return;
@@ -1178,7 +1161,7 @@ async function waitForAppReady(page: Page, budgetDeadline: number): Promise<void
     const booting = !text || text.length < 40 || LOADING_RE.test(text);
     if (!booting && text === previous) return;
     previous = text;
-    await sleep(READY_POLL_MS, deadline);
+    await sleep(tune.readyPollMs, deadline);
   }
 }
 
@@ -1448,6 +1431,7 @@ async function runInAppClicks(
   deadline: number,
   solveQuestion?: (question: string) => Promise<string>,
 ): Promise<{ trace?: string; ok: boolean; failure?: string }> {
+  const tune = cfTuning();
   const done: string[] = [];
   let failure: string | undefined;
 
@@ -1475,7 +1459,7 @@ async function runInAppClicks(
         break;
       }
       done.push(`${step}="${answer}"`);
-      await sleep(IN_APP_STEP_MS, deadline);
+      await sleep(tune.inAppStepMs, deadline);
       continue;
     }
 
@@ -1491,7 +1475,7 @@ async function runInAppClicks(
       break;
     }
     done.push(click.outcome);
-    await sleep(IN_APP_STEP_MS, deadline);
+    await sleep(tune.inAppStepMs, deadline);
 
     // Pressing plain text is a guess. If the app did not react to it, nothing happened,
     // and reporting success would log a checkin that was never made.
@@ -1508,7 +1492,7 @@ async function runInAppClicks(
   }
 
   // Let the last step's request round-trip before the page text is scraped
-  if (done.length) await sleep(IN_APP_SETTLE_MS, deadline);
+  if (done.length) await sleep(tune.inAppSettleMs, deadline);
   return { trace: done.length ? done.join(" → ") : undefined, ok: !failure, failure };
 }
 
@@ -1703,6 +1687,7 @@ async function attemptLoad(
   opts: LoadOptions,
   budgetDeadline: number,
 ): Promise<CheckinPageResult> {
+  const tune = cfTuning();
   const finalHost = (() => {
     try {
       return new URL(url).host;
@@ -1756,7 +1741,7 @@ async function attemptLoad(
     await page
       .goto(url, {
         waitUntil: "domcontentloaded",
-        timeout: Math.max(5_000, capped(NAV_TIMEOUT_MS, budgetDeadline)),
+        timeout: Math.max(5_000, capped(tune.navTimeoutMs, budgetDeadline)),
       })
       .catch((err: any) => {
         // The challenge page may abort/redirect mid-load; the poll below is the
@@ -1779,7 +1764,7 @@ async function attemptLoad(
 
       // Not every app uses Turnstile: a Cap checkbox is solved in the browser instead.
       if (!interstitial && !widget && (await hasCapWidget(page))) {
-        return solveCap(page, Math.min(Date.now() + CHALLENGE_TIMEOUT_MS, budgetDeadline));
+        return solveCap(page, Math.min(Date.now() + tune.challengeTimeoutMs, budgetDeadline));
       }
 
       // A verify portal may load the Turnstile script and only render the widget once
@@ -1787,7 +1772,7 @@ async function attemptLoad(
       if (!interstitial && !widget && (await hasTurnstileScript(page))) {
         if (await clickVerifyButton(page)) {
           for (let i = 0; i < 6 && !widget; i++) {
-            await sleep(READY_POLL_MS, budgetDeadline);
+            await sleep(tune.readyPollMs, budgetDeadline);
             widget = await hasTurnstileWidget(page);
           }
         }
@@ -1798,10 +1783,10 @@ async function attemptLoad(
       if (widget) await clickVerifyButton(page);
 
       const challengeStart = Date.now();
-      const deadline = Math.min(challengeStart + CHALLENGE_TIMEOUT_MS, budgetDeadline);
+      const deadline = Math.min(challengeStart + tune.challengeTimeoutMs, budgetDeadline);
       let widgetClicks = 0;
       while (Date.now() < deadline) {
-        await sleep(POLL_MS, deadline);
+        await sleep(tune.pollMs, deadline);
         // Strongest signal: a Turnstile token was issued.
         if (await turnstileToken(page)) return true;
         // Nudge a widget that is sitting there unsolved: it may be an interactive
@@ -1838,7 +1823,7 @@ async function attemptLoad(
       }
     }
 
-    await sleep(SETTLE_MS, budgetDeadline);
+    await sleep(tune.settleMs, budgetDeadline);
 
     // A Mini App checkin is a tap inside the app, not the page load itself.
     let inAppAction: string | undefined;
@@ -1856,14 +1841,14 @@ async function attemptLoad(
       // A verification the app raises only once the checkin is pressed needs a moment to
       // render. Asking once, immediately, sees nothing there and calls the step done --
       // so while the app says it wants one, keep looking for it.
-      const challengeBy = Math.min(Date.now() + POST_CLICK_CHALLENGE_MS, budgetDeadline);
+      const challengeBy = Math.min(Date.now() + tune.postClickChallengeMs, budgetDeadline);
       let after: boolean | null = null;
       for (;;) {
         after = await solveChallenge();
         if (after !== null) break;
         const body = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
         if (!VERIFY_REQUIRED_RE.test(body) || Date.now() >= challengeBy) break;
-        await sleep(POLL_MS, challengeBy);
+        await sleep(tune.pollMs, challengeBy);
       }
       if (after !== null) {
         challenged = true;
@@ -1876,9 +1861,9 @@ async function attemptLoad(
     // the browser while the request is still in flight.
     let text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
     if (solved && challenged && !SUCCESS_RE.test(text)) {
-      const deadline = Math.min(Date.now() + CONFIRM_TIMEOUT_MS, budgetDeadline);
+      const deadline = Math.min(Date.now() + tune.confirmTimeoutMs, budgetDeadline);
       while (Date.now() < deadline) {
-        await sleep(POLL_MS, deadline);
+        await sleep(tune.pollMs, deadline);
         text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
         if (SUCCESS_RE.test(text)) break;
       }
@@ -1946,11 +1931,12 @@ export async function loadCheckinUrl(
   proxyUrl?: string,
   opts: LoadOptions = {},
 ): Promise<CheckinPageResult> {
+  const tune = cfTuning();
   const candidates: ProxyCandidate[] = opts.proxyCandidates?.length
     ? opts.proxyCandidates
     : [{ id: proxyUrl ? "job" : "direct", label: proxyUrl ? "job proxy" : "direct", url: proxyUrl }];
 
-  const budget = opts.maxWaitMs && opts.maxWaitMs > 0 ? opts.maxWaitMs : DEFAULT_BUDGET_MS;
+  const budget = opts.maxWaitMs && opts.maxWaitMs > 0 ? opts.maxWaitMs : tune.budgetMs;
   const deadline = Date.now() + budget;
 
   let target = url;
@@ -1961,7 +1947,7 @@ export async function loadCheckinUrl(
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
     if (i > 0) {
-      if (msLeft(deadline) < MIN_ATTEMPT_MS) {
+      if (msLeft(deadline) < tune.minAttemptMs) {
         trace.push(`out of time after ${i} exit(s) (budget ${Math.round(budget / 1000)}s)`);
         console.log(`[cloudflare] budget spent after ${i} exit(s), giving up`);
         break;

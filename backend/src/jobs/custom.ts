@@ -29,13 +29,9 @@ import {
   type LoadOptions,
 } from "./cloudflare";
 import { openableButtonUrl, webButtonOf, type WebButton } from "../tg/miniApp";
-import { CF_MAX_CANDIDATES, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
+import { cfMaxCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
+import { cfTuning } from "./cfTuning";
 import type { CustomConfig, CustomStepLog } from "../types";
-
-// Browser time a Mini App action gets across all its attempts when none is configured.
-const MINI_APP_BUDGET_MS = 300_000;
-// Below this there is no point launching the browser again.
-const MIN_MINI_APP_MS = 15_000;
 
 export type CustomJobLog = {
   steps: CustomStepLog[];
@@ -2362,13 +2358,14 @@ export async function runCustom(
                 })();
 
                 // The budget covers this action's whole browser life, retries included
+                const tune = cfTuning();
                 const budgetMs =
-                  action.maxWaitMs && action.maxWaitMs > 0 ? action.maxWaitMs : MINI_APP_BUDGET_MS;
+                  action.maxWaitMs && action.maxWaitMs > 0 ? action.maxWaitMs : tune.budgetMs;
                 const budgetKey = `mini:${i}`;
                 const actionDeadline = cfRun.deadlines.get(budgetKey) ?? Date.now() + budgetMs;
                 cfRun.deadlines.set(budgetKey, actionDeadline);
                 const budgetLeft = actionDeadline - Date.now();
-                if (budgetLeft < MIN_MINI_APP_MS) {
+                if (budgetLeft < tune.minActionMs) {
                   throw new Error(
                     `Browser time for this action is spent (${Math.round(budgetMs / 1000)}s budget)`,
                   );
@@ -2383,7 +2380,7 @@ export async function runCustom(
                   // An exit that was already refused this run is not offered again, so a
                   // retry moves further into the pool instead of replaying the same few
                   exclude: refused,
-                  max: action.tryAllProxies === false ? 1 : CF_MAX_CANDIDATES,
+                  max: action.tryAllProxies === false ? 1 : cfMaxCandidates(),
                 });
                 if (!candidates.length) {
                   throw new Error(

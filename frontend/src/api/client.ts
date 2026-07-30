@@ -1012,6 +1012,12 @@ export type Settings = {
   cf_chromium_installed?: string;
   /** Server-computed: version of that browser, e.g. "Chromium 151.0.7922.34". */
   cf_chromium_version?: string;
+  /** JSON: the browser timings and limits in force. */
+  cf_tuning?: string;
+  /** Server-computed JSON: the values the solver ships with. */
+  cf_tuning_defaults?: string;
+  /** Server-computed JSON: `{min,max}` each timing is held to. */
+  cf_tuning_limits?: string;
   proxy_providers_count?: string;
 };
 
