@@ -577,6 +577,9 @@ const zh = {
     anyBtnOption: "{anyBtn} — 随机",
     noApiKey: "未配置密钥",
     aiKeyWarning: "未配置 AI API 密钥，请前往设置页面配置。",
+    noCfBrowser: "未安装浏览器",
+    cfBrowserWarning:
+      "此功能需要 Cloudflare 解决器的浏览器与字体，请先前往 设置 → Cloudflare 验证 下载安装。",
     aiHintLabel: "AI 提示（可选）",
     aiHintPlaceholder: "例如：签到、查询信息、获取服务器状态…",
     aiHintHint: "可选：描述要做的事，AI 会据此选择按钮（留空则通用识别）",
@@ -1803,6 +1806,9 @@ const en: typeof zh = {
     anyBtnOption: "{anyBtn} — random",
     noApiKey: "no API key",
     aiKeyWarning: "AI API key not configured — set it in Settings.",
+    noCfBrowser: "browser not installed",
+    cfBrowserWarning:
+      "This needs the Cloudflare solver's browser and fonts. Install them under Settings → Cloudflare challenge first.",
     aiHintLabel: "AI hint (optional)",
     aiHintPlaceholder: "e.g. checkin, get server info, query balance…",
     aiHintHint:

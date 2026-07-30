@@ -387,7 +387,7 @@
                   <option value="enter_captcha" :disabled="aiKeyMissing">{{ t('jobs.custom.actionEnterCaptcha') }}{{ aiKeyMissing ? ' (' + t('jobs.noApiKey') + ')' : '' }}</option>
                   <option value="join_group">{{ t('jobs.custom.actionJoinGroup') }}</option>
                   <option value="subscribe_channel">{{ t('jobs.custom.actionSubscribeChannel') }}</option>
-                  <option value="open_mini_app">{{ t('jobs.custom.actionOpenMiniApp') }}</option>
+                  <option value="open_mini_app" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenMiniApp') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
                 </select>
                 <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === 0" @click="moveUp(i)"><i class="fa-solid fa-arrow-up"></i></button>
                 <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === customActions.length - 1" @click="moveDown(i)"><i class="fa-solid fa-arrow-down"></i></button>
@@ -531,10 +531,11 @@
                 </div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
                   <label class="form-checkbox-label">
-                    <input type="checkbox" v-model="action.cfChallenge" />
+                    <input type="checkbox" v-model="action.cfChallenge" :disabled="cfBrowserMissing" />
                     {{ t('jobs.custom.labelCfChallenge') }}
                   </label>
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+                  <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
                 </div>
               </div>
 
@@ -588,10 +589,11 @@
                 </div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
                   <label class="form-checkbox-label">
-                    <input type="checkbox" v-model="action.cfChallenge" />
+                    <input type="checkbox" v-model="action.cfChallenge" :disabled="cfBrowserMissing" />
                     {{ t('jobs.custom.labelCfChallenge') }}
                   </label>
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+                  <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
                 </div>
               </div>
 
@@ -871,10 +873,11 @@
           </div>
           <div class="form-group">
             <label class="form-checkbox-label">
-              <input type="checkbox" v-model="checkinCfChallenge" :disabled="!!form.templateId" />
+              <input type="checkbox" v-model="checkinCfChallenge" :disabled="!!form.templateId || cfBrowserMissing" />
               {{ t('jobs.custom.labelCfChallenge') }}
             </label>
             <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+            <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
           </div>
         </template>
 
@@ -1292,6 +1295,13 @@ const autoregCfg = reactive<AutoregCfgForm>(defaultAutoregCfg());
 const formError = ref('');
 const saving = ref(false);
 const aiKeyMissing = computed(() => settings.value?.ai_key_configured !== 'true');
+// Anything that opens a page needs the solver's browser and its fonts in the data dir;
+// neither ships in the image, so those options stay off until both are downloaded.
+const cfBrowserMissing = computed(
+  () =>
+    settings.value?.cf_chromium_installed !== 'true' ||
+    settings.value?.cf_fonts_installed !== 'true',
+);
 
 const CMD_PRESETS = new Set(['', '/start', '/checkin'])
 const ACTION_CMD_PRESETS = new Set(['/start', '/checkin'])
