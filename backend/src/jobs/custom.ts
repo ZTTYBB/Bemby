@@ -2443,6 +2443,100 @@ export async function runCustom(
                 }
                 break;
               }
+
+              case "open_url": {
+                // Placeholders are expanded the same way a command's are, so a URL can carry
+                // a random query value per run
+                const url = expandCommand(action.url ?? "").trim();
+                const webSteps = action.steps ?? [];
+                const cfHost = (() => {
+                  try {
+                    return new URL(url).host;
+                  } catch {
+                    return "";
+                  }
+                })();
+                // Named before the checks below, so a misconfigured URL still logs a step
+                // that says which one it was
+                step.label = `Open ${cfHost || url || "(no URL)"}${webSteps.length ? ` (${webSteps.length} page step${webSteps.length > 1 ? "s" : ""})` : ""}`;
+                if (!url) throw new Error("No URL configured for this step");
+                if (!/^https?:\/\//i.test(url))
+                  throw new Error(`URL must start with http:// or https:// (got "${url}")`);
+
+                // The budget covers this action's whole browser life, retries included
+                const tune = cfTuning();
+                const budgetMs =
+                  action.maxWaitMs && action.maxWaitMs > 0 ? action.maxWaitMs : tune.budgetMs;
+                const budgetKey = `url:${i}`;
+                const actionDeadline = cfRun.deadlines.get(budgetKey) ?? Date.now() + budgetMs;
+                cfRun.deadlines.set(budgetKey, actionDeadline);
+                const budgetLeft = actionDeadline - Date.now();
+                if (budgetLeft < tune.minActionMs) {
+                  throw new Error(
+                    `Browser time for this action is spent (${Math.round(budgetMs / 1000)}s budget)`,
+                  );
+                }
+
+                const refused = cfRefusedFor(cfRun, cfHost);
+                const candidates = cfProxyCandidatesFor({
+                  primaryUrl: webProxyUrl,
+                  host: cfHost,
+                  proxyId: action.proxyId,
+                  tryAll: action.tryAllProxies ?? true,
+                  exclude: refused,
+                  max: action.tryAllProxies === false ? 1 : cfMaxCandidates(),
+                });
+                if (!candidates.length) {
+                  throw new Error(
+                    `Every available proxy (${refused.size}) was already refused for ${cfHost}`,
+                  );
+                }
+
+                const cf = await loadCheckinUrl(url, webProxyUrl, {
+                  webSteps,
+                  maxWaitMs: budgetLeft,
+                  screenshot: true,
+                  proxyCandidates: candidates,
+                  // The vision model lives on this side of the browser, so the page steps
+                  // reach it through a callback rather than the solver importing it
+                  aiLocate: async (image, prompt) => {
+                    const { response } = await callAI([image], prompt, 512);
+                    return response;
+                  },
+                });
+                step.cfHost = cf.finalHost;
+                step.cfChallenged = cf.challenged;
+                step.cfPassed = cf.ok;
+                step.cfProxy = cf.proxyLabel;
+                step.cfAttempts = cf.attempts;
+                step.cfPageTitle = cf.pageTitle;
+                step.cfNavError = cf.navError;
+                step.cfTrace = cf.trace;
+                step.cfScreenshot = cf.screenshot;
+                step.webSteps = cf.webSteps;
+                for (const id of cf.refusedProxyIds ?? []) refused.add(id);
+                if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
+                step.responseHtml = escapeHtml(cf.text.slice(0, 2000)).replace(/\n/g, "<br>");
+                if (!cf.ok) {
+                  throw new Error(
+                    cf.reason ?? 'Could not pass the Cloudflare "I am not a bot" challenge',
+                  );
+                }
+                const ran = (cf.webSteps ?? []).filter((s) => s.outcome).length;
+                step.result = webSteps.length
+                  ? `Opened ${cf.finalHost}, ran ${ran}/${webSteps.length} page step(s)`
+                  : `Opened ${cf.finalHost}`;
+
+                if (action.failContains && cf.text.includes(action.failContains)) {
+                  throw new Error(`Page indicates failure: "${action.failContains}" detected`);
+                }
+                if (action.successContains && !cf.text.includes(action.successContains)) {
+                  throw new Error(
+                    `Expected success indicator "${action.successContains}" not found on the page`,
+                  );
+                }
+                break;
+              }
             }
 
             actionSucceeded = true;

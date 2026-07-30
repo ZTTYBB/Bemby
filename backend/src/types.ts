@@ -185,7 +185,93 @@ export type CustomAction =
       /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
       tryAllProxies?: boolean;
     }
+  | {
+      // Open a plain web page in the installed browser, passing any Cloudflare challenge,
+      // and drive it with the sub-steps below. Nothing about this action goes through
+      // Telegram: the URL is opened directly.
+      type: "open_url";
+      url: string;
+      /** Sub-steps run on the page once it is up, in order. */
+      steps?: WebStep[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      /**
+       * Budget for the browser part of this action, across every proxy tried.
+       * Blank/0 uses the built-in default (5 minutes).
+       */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy list id, or "direct" for none. Blank uses the job's proxy. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
+      tryAllProxies?: boolean;
+    }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
+
+/**
+ * One sub-step of `open_url`, run against the loaded page.
+ *
+ * The two `ai_*` variants hand a screenshot to the vision model rather than naming an
+ * element: the interactive elements are numbered on the shot first, so what comes back is
+ * a marker to press rather than a raw pixel guess, and the click lands on a real element.
+ */
+export type WebStep =
+  | {
+      /** Type text into a field named by a CSS selector. */
+      type: "web_input";
+      selector: string;
+      text: string;
+    }
+  | {
+      /** Press a control named by a CSS selector. */
+      type: "web_button";
+      selector: string;
+    }
+  | {
+      /** Sit still for a while, for a page that needs a moment between steps. */
+      type: "web_delay";
+      waitMs: number;
+    }
+  | {
+      /**
+       * Hold until a CSS selector is on the page and has a box, so the next step is not run
+       * against a page that has not finished rendering what it needs.
+       */
+      type: "web_wait_element";
+      selector: string;
+      /** How long to wait before giving up. Blank/0 waits 30s. */
+      waitMs?: number;
+    }
+  | {
+      /** AI reads a screenshot and decides which control to press. */
+      type: "ai_web_button";
+      /** Optional steer, e.g. "the login button". Blank lets the AI judge on its own. */
+      hint?: string;
+    }
+  | {
+      /** AI reads a screenshot and decides which field to type into. */
+      type: "ai_web_input";
+      /** Optional steer, e.g. "the password box". Blank lets the AI judge on its own. */
+      hint?: string;
+      /** Text to type. Blank lets the AI decide from the page (e.g. a captcha it can read). */
+      text?: string;
+    };
+
+/** What one `open_url` sub-step did, with the page as it looked afterwards. */
+export type WebStepLog = {
+  type: WebStep["type"];
+  /** What was attempted, e.g. `web_button css: #login`. */
+  label: string;
+  /** What happened, e.g. the element pressed or the text typed. */
+  outcome?: string;
+  error?: string;
+  /** data: URI of the page right after the step. */
+  screenshot?: string;
+  /** Prompt sent to the vision model (`ai_*` steps only). */
+  aiPrompt?: string;
+  /** What the model replied (`ai_*` steps only). */
+  aiResponse?: string;
+};
 
 export type CustomConfig = {
   actions: CustomAction[];
@@ -284,6 +370,8 @@ export type CustomStepLog = {
   cfTrace?: string[];
   /** Screenshot of the final page, so a server-only failure can be seen. */
   cfScreenshot?: string;
+  /** For open_url: one entry per sub-step run on the page, in order. */
+  webSteps?: WebStepLog[];
 };
 
 export type EmbywatchConfig = {

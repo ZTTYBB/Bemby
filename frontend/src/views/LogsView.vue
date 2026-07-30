@@ -683,6 +683,57 @@
                             s.cfTrace.join("\n")
                           }}</pre>
                         </div>
+                        <!-- open_url: one card per sub-step, with the page after it ran -->
+                        <div
+                          v-if="s.webSteps?.length"
+                          class="dev-block"
+                          style="margin-top: 4px"
+                        >
+                          <div class="dev-block-label">
+                            {{ t("logs.web.steps") }}
+                          </div>
+                          <div
+                            v-for="(w, wi) in s.webSteps"
+                            :key="wi"
+                            class="web-shot"
+                          >
+                            <div class="web-shot-head">
+                              <span class="web-shot-num">{{ wi + 1 }}</span>
+                              <span class="web-shot-type">{{
+                                t("jobs.web.type." + w.type)
+                              }}</span>
+                              <span
+                                v-if="w.error"
+                                style="color: #e63946"
+                                >{{ w.error }}</span
+                              >
+                              <span v-else style="color: #2e9e5b">{{
+                                w.outcome ?? w.label
+                              }}</span>
+                            </div>
+                            <a
+                              v-if="w.screenshot"
+                              :href="w.screenshot"
+                              target="_blank"
+                            >
+                              <img
+                                :src="w.screenshot"
+                                class="dev-block-img"
+                                alt="page after step"
+                              />
+                            </a>
+                            <div
+                              v-if="showDevLogs && (w.aiPrompt || w.aiResponse)"
+                              style="margin-top: 4px"
+                            >
+                              <pre class="dev-block-pre">{{
+                                [w.aiPrompt, w.aiResponse]
+                                  .filter(Boolean)
+                                  .join("\n\n--- reply ---\n")
+                              }}</pre>
+                            </div>
+                          </div>
+                        </div>
                         <div
                           v-if="s.cfScreenshot"
                           class="dev-block"
@@ -1810,6 +1861,38 @@ function hasWarning(l: Log): boolean {
   border-radius: 4px;
   margin-bottom: 8px;
   opacity: 0.9;
+}
+
+/* One open_url sub-step: what it did, and the page it left behind */
+.web-shot {
+  margin-bottom: 8px;
+}
+
+.web-shot-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.web-shot-num {
+  min-width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #4a9eff;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.web-shot-type {
+  font-weight: 600;
 }
 
 .dev-block-pre {

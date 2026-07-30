@@ -392,7 +392,41 @@ export type CustomAction =
       /** Work through the rest of the proxy list when an exit is refused. */
       tryAllProxies?: boolean;
     }
+  | {
+      type: "open_url";
+      url: string;
+      steps?: WebStep[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      /** Budget for the browser part, across every proxy tried. 0/blank uses the default. */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy id, or "direct". Blank uses the job proxy. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. */
+      tryAllProxies?: boolean;
+    }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
+
+/** One sub-step of `open_url`, run against the loaded page. */
+export type WebStep =
+  | { type: "web_input"; selector: string; text: string }
+  | { type: "web_button"; selector: string }
+  | { type: "web_delay"; waitMs: number }
+  | { type: "web_wait_element"; selector: string; waitMs?: number }
+  | { type: "ai_web_button"; hint?: string }
+  | { type: "ai_web_input"; hint?: string; text?: string };
+
+/** What one `open_url` sub-step did, with the page as it looked afterwards. */
+export type WebStepLog = {
+  type: WebStep["type"];
+  label: string;
+  outcome?: string;
+  error?: string;
+  screenshot?: string;
+  aiPrompt?: string;
+  aiResponse?: string;
+};
 
 export type CustomConfig = {
   actions: CustomAction[];
@@ -457,6 +491,8 @@ export type CustomStepLog = {
   cfTrace?: string[];
   /** Screenshot of the page the browser ended up on. */
   cfScreenshot?: string;
+  /** For open_url: one entry per sub-step run on the page, in order. */
+  webSteps?: WebStepLog[];
 };
 
 export type Job = {

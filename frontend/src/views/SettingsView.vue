@@ -142,7 +142,7 @@
               @click="installCfSolver(false)"
             >
               <i class="fa-solid fa-download"></i>
-              {{ cfInstalling ? t("settings.cfSolver.installing") : t("settings.cfSolver.installBtn") }}
+              {{ cfInstalling ? t("settings.cfSolver.installing") : t(cfInstallLabelKey) }}
             </button>
             <button
               v-if="cfChromiumInstalled"
@@ -1675,6 +1675,14 @@ const cfFontsMissing = ref("");
 // version can be complete while they are still missing. Both have to be there before
 // the solver is fully set up.
 const cfSolverComplete = computed(() => cfChromiumInstalled.value && cfFontsInstalled.value);
+// The one install button fetches whatever is missing, and the server skips a browser that
+// is already there. Saying "install browser" when only the fonts are outstanding leaves no
+// button that looks like it installs fonts, so the label follows what will actually download.
+const cfInstallLabelKey = computed(() =>
+  cfChromiumInstalled.value && !cfFontsInstalled.value
+    ? "settings.cfSolver.installFontsBtn"
+    : "settings.cfSolver.installBtn",
+);
 const cfInstalling = ref(false);
 const cfInstallMsg = ref("");
 const cfInstallError = ref("");

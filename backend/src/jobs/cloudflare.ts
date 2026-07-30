@@ -25,6 +25,7 @@ import {
   type CfExitGeo,
   type ProxyCandidate,
 } from "../tg/proxyProviders";
+import type { WebStep, WebStepLog } from "../types";
 type Browser = Awaited<ReturnType<typeof connect>>["browser"];
 type Page = Awaited<ReturnType<typeof connect>>["page"];
 
@@ -607,6 +608,8 @@ export type CheckinPageResult = {
   screenshot?: string;
   /** One line per exit tried, for the job log. */
   trace?: string[];
+  /** One entry per `open_url` sub-step run on the page, with its screenshot. */
+  webSteps?: WebStepLog[];
 };
 
 /**
@@ -667,6 +670,13 @@ export type LoadOptions = {
   maxWaitMs?: number;
   /** Keep a screenshot of the final page on the result (diagnostics). */
   screenshot?: boolean;
+  /**
+   * Sub-steps to run against a plain web page once it is up (the `open_url` action).
+   * Unlike `inAppClicks` these are typed rather than text, and each one is captured.
+   */
+  webSteps?: WebStep[];
+  /** Hands a screenshot to the vision model, for the `ai_web_*` sub-steps. */
+  aiLocate?: (image: string, prompt: string) => Promise<string>;
 };
 
 // Every timing and limit the browser side runs on lives in cfTuning, so it can be
@@ -1699,6 +1709,386 @@ async function runInAppClicks(
   return { trace: done.length ? done.join(" → ") : undefined, ok: !failure, failure };
 }
 
+// ── Driving a plain web page (the `open_url` action) ──────────────────────────
+//
+// The sub-steps either name their element with a CSS selector, or hand a screenshot to the
+// vision model and let it choose. For the latter the page is marked up first: every
+// candidate element is outlined and numbered, and the model replies with a number rather
+// than a pixel position. Models are poor at reporting exact coordinates but good at
+// reading a labelled picture, and a marker resolves back to the element's own box, so the
+// press lands on something real and the log can say what was pressed.
+
+/** Ceiling on screenshots kept for one action, so a long step list cannot bloat the log. */
+const MAX_WEB_SHOTS = 24;
+
+/** Ceiling on markers offered to the model: past this the picture is unreadable anyway. */
+const MAX_WEB_MARKS = 60;
+
+/** Elements a press can land on. */
+const CLICKABLE_SELECTOR =
+  "a[href],button,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab]," +
+  "input[type=submit],input[type=button],input[type=checkbox],input[type=radio]," +
+  "select,summary,label,[onclick]";
+
+/** Elements text can be typed into. */
+const TYPEABLE_SELECTOR =
+  "input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox])" +
+  ":not([type=radio]),textarea,[contenteditable=true],[contenteditable='']";
+
+type WebMark = { n: number; tag: string; kind: string; text: string };
+
+/**
+ * Outlines and numbers every visible candidate element, and leaves a `data-bemby-mark`
+ * attribute on each so a reply naming a number can be resolved back to the element.
+ *
+ * Only what is inside the viewport is marked, because that is all the screenshot shows;
+ * offering the model a marker it cannot see is how it ends up picking at random.
+ */
+async function markWebElements(page: Page, selector: string, limit: number): Promise<WebMark[]> {
+  return page
+    .evaluate(
+      (sel: string, max: number) => {
+        for (const el of Array.from(document.querySelectorAll("[data-bemby-mark]")))
+          el.removeAttribute("data-bemby-mark");
+        for (const el of Array.from(document.querySelectorAll(".__bemby_mark"))) el.remove();
+
+        const out: { n: number; tag: string; kind: string; text: string }[] = [];
+        let n = 0;
+        for (const node of Array.from(document.querySelectorAll(sel))) {
+          const el = node as HTMLElement & { disabled?: boolean; value?: string; name?: string };
+          if (el.disabled) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width < 8 || r.height < 8) continue;
+          if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) continue;
+          const cs = getComputedStyle(el);
+          if (cs.visibility === "hidden" || cs.display === "none") continue;
+          if (Number(cs.opacity) < 0.05) continue;
+
+          n++;
+          el.setAttribute("data-bemby-mark", String(n));
+
+          const ring = document.createElement("div");
+          ring.className = "__bemby_mark";
+          ring.style.cssText =
+            "position:fixed;pointer-events:none;z-index:2147483646;border:2px solid #e11d48;" +
+            `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px`;
+          const badge = document.createElement("div");
+          badge.className = "__bemby_mark";
+          badge.textContent = String(n);
+          badge.style.cssText =
+            "position:fixed;pointer-events:none;z-index:2147483647;background:#e11d48;color:#fff;" +
+            "font:bold 12px/1.1 monospace;padding:2px 4px;border-radius:3px;" +
+            `left:${Math.max(0, r.left)}px;top:${Math.max(0, r.top - 14)}px`;
+          document.body.appendChild(ring);
+          document.body.appendChild(badge);
+
+          const label =
+            (el.innerText || el.value || el.getAttribute("placeholder") || "").trim() ||
+            el.getAttribute("aria-label") ||
+            el.getAttribute("title") ||
+            el.name ||
+            "";
+          out.push({
+            n,
+            tag: el.tagName.toLowerCase(),
+            kind: el.getAttribute("type") ?? "",
+            text: label.replace(/\s+/g, " ").slice(0, 60),
+          });
+          if (n >= max) break;
+        }
+        return out;
+      },
+      selector,
+      limit,
+    )
+    .catch(() => [] as WebMark[]);
+}
+
+/** Takes the outlines and numbers off again, leaving the `data-bemby-mark` attributes. */
+async function clearWebMarkBadges(page: Page): Promise<void> {
+  await page
+    .evaluate(() => {
+      for (const el of Array.from(document.querySelectorAll(".__bemby_mark"))) el.remove();
+    })
+    .catch(() => {});
+}
+
+/** One line per marker, so the model can match a number in the picture to what it is. */
+function describeMarks(marks: WebMark[]): string {
+  return marks
+    .map((m) => {
+      const kind = m.kind ? `${m.tag}[${m.kind}]` : m.tag;
+      return `${m.n}: <${kind}>${m.text ? ` "${m.text}"` : " (no label)"}`;
+    })
+    .join("\n");
+}
+
+/**
+ * Pulls the marker number and any text out of the model's reply. A JSON object is what is
+ * asked for, but models wrap it in prose or fences, and some answer with a bare number --
+ * all of which are a usable answer and not worth failing a step over.
+ */
+export function parseWebAiReply(reply: string): { mark?: number; text?: string } {
+  const obj = /\{[\s\S]*\}/.exec(reply);
+  if (obj) {
+    try {
+      const parsed = JSON.parse(obj[0]) as { mark?: unknown; text?: unknown };
+      const mark = Number(parsed.mark);
+      return {
+        mark: Number.isInteger(mark) && mark > 0 ? mark : undefined,
+        text: typeof parsed.text === "string" ? parsed.text : undefined,
+      };
+    } catch {
+      // fall through to the looser reads below
+    }
+  }
+  const keyed = /"?mark"?\s*[:=]\s*(\d+)/i.exec(reply);
+  if (keyed) {
+    const mark = Number(keyed[1]);
+    if (mark > 0) return { mark };
+  }
+  const bare = /^\D*(\d{1,2})\b/.exec(reply.trim());
+  if (bare) {
+    const mark = Number(bare[1]);
+    if (mark > 0) return { mark };
+  }
+  return {};
+}
+
+/** Types into the element carrying `data-bemby-mark=n`, or a plain CSS selector. */
+async function typeInto(page: Page, selector: string, text: string): Promise<boolean> {
+  if (!(await clickElement(page, selector))) return false;
+  // Replace rather than append: a field a previous attempt filled would otherwise
+  // end up with both values concatenated
+  await page
+    .evaluate((sel: string) => {
+      const el = document.querySelector(sel) as HTMLInputElement | null;
+      if (!el) return;
+      if (el.isContentEditable) el.textContent = "";
+      else if (typeof el.value === "string") el.value = "";
+    }, selector)
+    .catch(() => {});
+  let failed = false;
+  await page.type(selector, text, { delay: 60 }).catch(() => {
+    failed = true;
+  });
+  return !failed;
+}
+
+export type WebStepHooks = {
+  /**
+   * Hands a screenshot and a prompt to the vision model and returns its reply. Supplied by
+   * the caller so the browser side stays clear of AI credentials and settings.
+   */
+  aiLocate?: (image: string, prompt: string) => Promise<string>;
+};
+
+/**
+ * Runs the `open_url` sub-steps against the loaded page, capturing the page after each
+ * one. Stops at the first step that cannot be carried out: the steps are usually a
+ * sequence (type a name, type a password, press login), so carrying on past a failure
+ * acts on a page that is not in the state the rest of them assume.
+ */
+async function runWebSteps(
+  page: Page,
+  steps: WebStep[],
+  deadline: number,
+  hooks: WebStepHooks,
+): Promise<{ logs: WebStepLog[]; ok: boolean; failure?: string }> {
+  const tune = cfTuning();
+  const logs: WebStepLog[] = [];
+  let failure: string | undefined;
+
+  for (const step of steps) {
+    if (msLeft(deadline) <= 0) {
+      failure = "ran out of time before the page steps finished";
+      break;
+    }
+
+    const log: WebStepLog = { type: step.type, label: describeWebStep(step) };
+    logs.push(log);
+
+    try {
+      switch (step.type) {
+        case "web_button": {
+          const selector = step.selector.trim();
+          if (!selector) throw new Error("no CSS selector given");
+          if (!(await clickElement(page, selector)))
+            throw new Error(`nothing matching \`${selector}\` is on the page`);
+          log.outcome = `pressed \`${selector}\``;
+          break;
+        }
+
+        case "web_input": {
+          const selector = step.selector.trim();
+          if (!selector) throw new Error("no CSS selector given");
+          if (!(await typeInto(page, selector, step.text)))
+            throw new Error(`nothing matching \`${selector}\` could be typed into`);
+          log.outcome = `typed ${maskForLog(step.text, selector)} into \`${selector}\``;
+          break;
+        }
+
+        case "web_delay": {
+          const ms = Math.max(0, step.waitMs || 0);
+          await sleep(ms, deadline);
+          log.outcome = `waited ${Math.round(ms / 1000)}s`;
+          break;
+        }
+
+        case "web_wait_element": {
+          const selector = step.selector.trim();
+          if (!selector) throw new Error("no CSS selector given");
+          const waitMs = step.waitMs && step.waitMs > 0 ? step.waitMs : 30_000;
+          const until = Math.min(Date.now() + waitMs, deadline);
+          let seen = false;
+          for (;;) {
+            seen = await page
+              .evaluate((sel: string) => {
+                const el = document.querySelector(sel) as HTMLElement | null;
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+              }, selector)
+              .catch(() => false);
+            if (seen || Date.now() >= until) break;
+            await sleep(Math.min(tune.readyPollMs, Math.max(50, until - Date.now())), until);
+          }
+          if (!seen)
+            throw new Error(
+              `\`${selector}\` did not appear within ${Math.round(waitMs / 1000)}s`,
+            );
+          log.outcome = `\`${selector}\` appeared`;
+          break;
+        }
+
+        case "ai_web_button":
+        case "ai_web_input": {
+          if (!hooks.aiLocate) throw new Error("no AI model is configured for this step");
+          const wantInput = step.type === "ai_web_input";
+          const marks = await markWebElements(
+            page,
+            wantInput ? TYPEABLE_SELECTOR : CLICKABLE_SELECTOR,
+            MAX_WEB_MARKS,
+          );
+          if (!marks.length) {
+            await clearWebMarkBadges(page);
+            throw new Error(
+              wantInput
+                ? "no field to type into is visible on the page"
+                : "no control to press is visible on the page",
+            );
+          }
+          // The model is shown the marked-up page; the clean shot is kept for the log
+          const marked = await screenshotOf(page, 60);
+          await clearWebMarkBadges(page);
+          if (!marked) throw new Error("the page could not be captured for the AI");
+
+          const wantText = wantInput && !step.text?.trim();
+          const prompt = buildWebAiPrompt(step, marks, wantText);
+          log.aiPrompt = prompt;
+          const reply = await hooks.aiLocate(marked, prompt);
+          log.aiResponse = reply;
+
+          const { mark, text: aiText } = parseWebAiReply(reply ?? "");
+          if (!mark) throw new Error(`the AI named no usable marker (replied "${oneLine(reply)}")`);
+          const chosen = marks.find((m) => m.n === mark);
+          if (!chosen) throw new Error(`the AI chose marker ${mark}, which is not on the page`);
+
+          const selector = `[data-bemby-mark='${mark}']`;
+          const what = chosen.text ? `<${chosen.tag}> "${chosen.text}"` : `<${chosen.tag}>`;
+
+          if (!wantInput) {
+            if (!(await clickElement(page, selector)))
+              throw new Error(`marker ${mark} (${what}) has no on-screen box to press`);
+            log.outcome = `AI pressed marker ${mark}, ${what}`;
+            break;
+          }
+
+          const typed = step.text?.trim() ? step.text : aiText;
+          if (!typed) throw new Error("the AI did not say what to type, and no text was configured");
+          if (!(await typeInto(page, selector, typed)))
+            throw new Error(`marker ${mark} (${what}) could not be typed into`);
+          log.outcome = `AI typed ${maskForLog(typed, `${chosen.text} ${chosen.kind}`)} into marker ${mark}, ${what}`;
+          break;
+        }
+      }
+    } catch (err: any) {
+      log.error = err?.message ?? String(err);
+      failure = `${log.label}: ${log.error}`;
+    }
+
+    // The page as it stands after the step, whether it worked or not -- a failed step is
+    // exactly the one whose screenshot is worth having
+    await sleep(tune.inAppStepMs, deadline);
+    if (logs.length <= MAX_WEB_SHOTS) log.screenshot = await screenshotOf(page);
+    if (failure) break;
+  }
+
+  // Let the last step's request round-trip before the page text is read
+  if (logs.length) await sleep(tune.inAppSettleMs, deadline);
+  return { logs, ok: !failure, failure };
+}
+
+/** What the step is trying to do, for the log line. */
+function describeWebStep(step: WebStep): string {
+  switch (step.type) {
+    case "web_button":
+      return `Press \`${step.selector}\``;
+    case "web_input":
+      return `Type into \`${step.selector}\``;
+    case "web_delay":
+      return `Wait ${Math.round((step.waitMs || 0) / 1000)}s`;
+    case "web_wait_element":
+      return `Wait for \`${step.selector}\``;
+    case "ai_web_button":
+      return `AI presses a control${step.hint?.trim() ? ` (${step.hint.trim()})` : ""}`;
+    case "ai_web_input":
+      return `AI fills a field${step.hint?.trim() ? ` (${step.hint.trim()})` : ""}`;
+  }
+}
+
+function buildWebAiPrompt(
+  step: Extract<WebStep, { type: "ai_web_button" | "ai_web_input" }>,
+  marks: WebMark[],
+  wantText: boolean,
+): string {
+  const wantInput = step.type === "ai_web_input";
+  const hint = step.hint?.trim();
+  const noun = wantInput ? "text field" : "control";
+  return [
+    `The screenshot is a web page. Every ${noun} on it has been outlined in red and given a`,
+    `number shown just above it. The numbered ${noun}s are:`,
+    "",
+    describeMarks(marks),
+    "",
+    hint
+      ? `Choose the one that matches this description: ${hint}`
+      : `Read the page and choose the one a person would use next to get through this page.`,
+    "",
+    wantText
+      ? 'Reply with ONLY a JSON object: {"mark": <number>, "text": "<the text to type>"}. ' +
+        "Work out the text from the page itself, for example the answer to a question it asks " +
+        "or the characters shown in a captcha image."
+      : 'Reply with ONLY a JSON object: {"mark": <number>}.',
+    "No explanation, no code fences.",
+  ].join("\n");
+}
+
+/**
+ * Renders a typed value for the log, withheld when the field it went into looks like a
+ * secret. Judged from the field (its selector, or how the AI described it) rather than the
+ * value: a password does not contain the word "password", but the box it goes in usually does.
+ */
+function maskForLog(text: string, field: string): string {
+  if (/pass|pwd|secret|token|otp|credential/i.test(field)) return "*** (hidden)";
+  return `"${text.length > 40 ? `${text.slice(0, 40)}…` : text}"`;
+}
+
+function oneLine(text: string | undefined): string {
+  const one = (text ?? "").replace(/\s+/g, " ").trim();
+  return one.length > 80 ? `${one.slice(0, 80)}…` : one;
+}
+
 /**
  * What a challenge actually looks at: the browser's own account of itself. Read in one
  * page so two installs (a dev machine and the container) can be compared line by line --
@@ -1873,9 +2263,9 @@ export async function testBrowser(proxyUrl?: string): Promise<{
 }
 
 /** JPEG of what the browser is looking at, small enough to keep in a job log. */
-async function screenshotOf(page: Page): Promise<string | undefined> {
+async function screenshotOf(page: Page, quality = 45): Promise<string | undefined> {
   const shot = await page
-    .screenshot({ type: "jpeg", quality: 45, encoding: "base64" })
+    .screenshot({ type: "jpeg", quality, encoding: "base64" })
     .catch(() => undefined);
   if (typeof shot !== "string" || !shot) return undefined;
   // Job logs are stored as JSON in SQLite; an oversized image is not worth keeping
@@ -2028,6 +2418,25 @@ async function attemptLoad(
 
     await sleep(tune.settleMs, budgetDeadline);
 
+    // A plain page is driven by its own typed sub-steps rather than the Mini App's
+    // label-matching, and the challenge is worked again afterwards: pressing a login or
+    // submit control is exactly what makes a site raise one.
+    let webSteps: WebStepLog[] | undefined;
+    let webFailure: string | undefined;
+    if (opts.webSteps?.length && solved) {
+      const run = await runWebSteps(page, opts.webSteps, budgetDeadline, {
+        aiLocate: opts.aiLocate,
+      });
+      webSteps = run.logs;
+      webFailure = run.failure;
+
+      const after = await solveChallenge();
+      if (after !== null) {
+        challenged = true;
+        solved = after;
+      }
+    }
+
     // A Mini App checkin is a tap inside the app, not the page load itself.
     let inAppAction: string | undefined;
     let inAppFailure: string | undefined;
@@ -2077,7 +2486,11 @@ async function attemptLoad(
 
     const verdict = opts.miniApp
       ? miniAppVerdict({ challenged, solved, text, inAppAction, inAppFailure, navError })
-      : { ok: solved, reason: undefined as string | undefined };
+      : webSteps
+        ? // A sub-step that could not be carried out is a failure even with no challenge in
+          // the way: the page was never driven to where the caller wanted it.
+          { ok: solved && !webFailure, reason: solved ? webFailure : undefined }
+        : { ok: solved, reason: undefined as string | undefined };
 
     return {
       ok: verdict.ok,
@@ -2085,12 +2498,15 @@ async function attemptLoad(
       text,
       finalHost,
       inAppAction,
+      webSteps,
       reason: verdict.reason,
       navError,
       pageTitle,
       // A challenge this exit was refused, or a page it never loaded, is worth retrying
-      // elsewhere; a control that is not on the page is not.
-      exitRelated: !!navError || (challenged && !verdict.ok) || !text.trim(),
+      // elsewhere; a control that is not on the page is not. A sub-step that failed once
+      // the challenge was already cleared is the page's doing, so every other exit would
+      // meet it alike -- rotating the pool there only spends the budget.
+      exitRelated: solved && webFailure ? false : !!navError || (challenged && !verdict.ok) || !text.trim(),
       screenshot: opts.screenshot ? await screenshotOf(page) : undefined,
     };
   } catch (err: any) {
@@ -2174,6 +2590,9 @@ export async function loadCheckinUrl(
         result.pageTitle ? `title="${result.pageTitle}"` : undefined,
         `text ${result.text.trim().length} chars`,
         result.inAppAction ? `in-app: ${result.inAppAction}` : undefined,
+        result.webSteps?.length
+          ? `page steps: ${result.webSteps.map((s) => s.outcome ?? `${s.label} FAILED`).join(" → ")}`
+          : undefined,
         result.reason,
       ]
         .filter(Boolean)
