@@ -1,24 +1,11 @@
-import {
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import path from "node:path";
-import net from "node:net";
-import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import { spawn, spawnSync } from "node:child_process";
-import { SocksClient } from "socks";
-import { connect } from "puppeteer-real-browser";
+import type { BrowserContext, Page } from "playwright-core";
 import { cfTuning } from "./cfTuning";
+import {
+  chromiumExecutable,
+  chromiumVersion,
+  launchCfBrowser,
+  type LaunchedBrowser,
+} from "./cfBrowser";
 import {
   cfExitGeo,
   rememberCfExitGeo,
@@ -26,133 +13,33 @@ import {
   type ProxyCandidate,
 } from "../tg/proxyProviders";
 import type { WebStep, WebStepLog } from "../types";
-type Browser = Awaited<ReturnType<typeof connect>>["browser"];
-type Page = Awaited<ReturnType<typeof connect>>["page"];
 
 // Completes a checkin that hands back a URL behind Cloudflare's "I am not a bot"
-// (managed challenge / Turnstile). A real headless Chromium loads the URL and
-// waits for the challenge to clear; because Bemby runs on the user's own host,
-// the browser exits from the same IP (and proxy, if set) as expected, so simply
-// loading the page registers the checkin server-side.
+// (managed challenge / Turnstile). CloakBrowser -- a Chromium whose fingerprint is patched
+// at source rather than papered over from JavaScript -- loads the URL and works whatever
+// challenge is in the way; because Bemby runs on the user's own host, the browser exits
+// from the same IP (and proxy, if set) as expected, so simply loading the page registers
+// the checkin server-side.
+//
+// The browser itself, its profiles and its fonts live in the data dir and are installed on
+// demand: see cfBrowser.ts and cfFonts.ts, whose API is re-exported here so callers have
+// one Cloudflare module to talk to.
 
-// The image ships without a browser to stay small. When the user enables Cloudflare
-// solving, Chromium is downloaded on demand into the data dir (a persistent volume) so it
-// survives restarts. The download is Playwright's Chromium build -- the same one that
-// works on a developer machine -- which needs glibc, hence the Debian-based image. Older
-// installs put Alpine's musl apk build in an alternate root instead; that layout is still
-// resolved so an upgraded install keeps working until the browser is reinstalled.
+export {
+  chromiumExecutable,
+  chromiumVersion,
+  cloakCacheDir,
+  installCfChromium,
+  isChromiumInstalled,
+} from "./cfBrowser";
+export {
+  CF_FONTS,
+  areCfFontsInstalled,
+  cfFontsRoot,
+  cfFontsStatus,
+  installCfFonts,
+} from "./cfFonts";
 
-function dataDir(): string {
-  return path.dirname(process.env.DB_PATH ?? path.resolve(process.cwd(), "data/bemby.db"));
-}
-
-/** Data-dir subfolder holding the on-demand Chromium download (Playwright layout). */
-export function cfBrowsersRoot(): string {
-  return path.join(dataDir(), "pw-browsers");
-}
-
-/** Legacy data-dir subfolder: the musl apk install used by the Alpine-based image. */
-export function cfChromiumRoot(): string {
-  return path.join(dataDir(), "cf-chromium");
-}
-
-/** Data-dir subfolder holding the on-demand font install. */
-export function cfFontsRoot(): string {
-  return path.join(dataDir(), "cf-fonts");
-}
-
-/** Newest Playwright Chromium in the data dir. Headed build only -- the shell cannot pass a challenge. */
-function downloadedChromium(): string | undefined {
-  try {
-    return readdirSync(cfBrowsersRoot())
-      .map((name) => /^chromium-(\d+)$/.exec(name))
-      .filter((m): m is RegExpExecArray => !!m)
-      .sort((a, b) => Number(b[1]) - Number(a[1]))
-      .map((m) => path.join(cfBrowsersRoot(), m[0], "chrome-linux/chrome"))
-      .find((exe) => existsSync(exe));
-  } catch {
-    return undefined;
-  }
-}
-
-/** Data-dir subfolder holding one browser profile per exit. */
-function cfProfilesRoot(): string {
-  return path.join(dataDir(), "cf-profiles");
-}
-
-/**
- * Stable id for an exit, used to name its profile and remember its geography. The proxy
- * URL is hashed rather than stored: it carries credentials, and this ends up on disk.
- */
-function exitKey(proxyUrl?: string): string {
-  return proxyUrl ? createHash("sha1").update(proxyUrl).digest("hex").slice(0, 12) : "direct";
-}
-
-// Profiles are kept for the exits used most recently (cfTuning.maxProfiles): a Chromium
-// profile is tens of MB, and a large proxy pool would otherwise fill the data volume.
-// One Chromium at a time per profile: two sharing a user-data-dir corrupt it, and jobs
-// can run concurrently. The loser of the race gets a throwaway profile instead.
-const profilesInUse = new Set<string>();
-
-// Chromium writes inside Default/, which leaves the profile's own mtime at creation
-// time, so last use is recorded here instead.
-const USED_MARKER = ".bemby-last-used";
-
-function lastUsedAt(dir: string): number {
-  try {
-    return statSync(path.join(dir, USED_MARKER)).mtimeMs;
-  } catch {
-    try {
-      return statSync(dir).mtimeMs;
-    } catch {
-      return 0;
-    }
-  }
-}
-
-/** Drops the least recently used profiles, keeping the newest maxProfiles of them. */
-function pruneProfiles(root: string): void {
-  const tune = cfTuning();
-  try {
-    const dirs = readdirSync(root)
-      .filter((name) => !profilesInUse.has(name))
-      .map((name) => ({ full: path.join(root, name), usedAt: lastUsedAt(path.join(root, name)) }))
-      .sort((a, b) => b.usedAt - a.usedAt);
-    for (const stale of dirs.slice(tune.maxProfiles)) {
-      rmSync(stale.full, { recursive: true, force: true });
-    }
-  } catch {
-    /* housekeeping only */
-  }
-}
-
-/**
- * A profile directory for this exit, so cookies -- above all the cf_clearance a solved
- * challenge issues -- outlive the browser. Without one every attempt arrives as a
- * first-time visitor, which is exactly what a managed challenge is looking for.
- *
- * Returns no directory when the profile is already open elsewhere, leaving Chromium to
- * use a throwaway one rather than two browsers writing the same profile.
- */
-function claimProfile(key: string): { dir?: string; release: () => void } {
-  if (profilesInUse.has(key)) return { release: () => {} };
-  const dir = path.join(cfProfilesRoot(), key);
-  try {
-    mkdirSync(dir, { recursive: true });
-    // A browser that was killed leaves these behind, and Chromium then refuses the
-    // profile as "already in use"
-    for (const lock of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
-      rmSync(path.join(dir, lock), { force: true });
-    }
-    writeFileSync(path.join(dir, USED_MARKER), "");
-    profilesInUse.add(key);
-    pruneProfiles(cfProfilesRoot());
-    return { dir, release: () => profilesInUse.delete(key) };
-  } catch (err: any) {
-    console.warn(`[cloudflare] no persistent profile (${err?.message ?? err})`);
-    return { release: () => {} };
-  }
-}
 
 // Primary timezone and locale per country, for aligning the browser with its exit IP: a
 // residential address in Japan reporting UTC and en-US is a cheap signal to check.
@@ -208,367 +95,6 @@ const COUNTRY_LOCALE: Record<string, { tz: string; lang: string }> = {
 
 /** Cloudflare's own trace endpoint, which reports the country it sees the request from. */
 const TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace";
-
-/**
- * Points fontconfig at the fonts inside the browser root.
- *
- * The root is an alternate apk root, not a chroot: the browser runs against the image's
- * own filesystem and only finds its libraries there through LD_LIBRARY_PATH. Alpine's
- * fonts.conf lists `/usr/share/fonts` as an absolute path, which in the image is empty --
- * so the fonts the installer put in `<root>/usr/share/fonts` are invisible and the
- * browser renders every glyph as a box. A browser with no fonts at all measures text
- * like nothing else on the web, which is the sort of thing a challenge scores against.
- *
- * Written at launch rather than at install, so a root installed by an earlier version is
- * fixed without reinstalling the browser.
- */
-function ensureAltRootFonts(root: string): void {
-  const conf = path.join(root, "etc/fonts/local.conf");
-  const body = `<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
-<!-- Written by Bemby: the browser root is not a chroot, so its font directories have
-     to be named absolutely for fontconfig to see them. -->
-<fontconfig>
-  <dir>${path.join(root, "usr/share/fonts")}</dir>
-  <cachedir>${path.join(root, "var/cache/fontconfig")}</cachedir>
-</fontconfig>
-`;
-  try {
-    if (!existsSync(path.join(root, "etc/fonts"))) return;
-    if (existsSync(conf) && readFileSync(conf, "utf8") === body) return;
-    mkdirSync(path.join(root, "var/cache/fontconfig"), { recursive: true });
-    writeFileSync(conf, body);
-    console.log(`[cloudflare] pointed fontconfig at ${path.join(root, "usr/share/fonts")}`);
-  } catch (err: any) {
-    console.warn(`[cloudflare] could not write ${conf}: ${err?.message ?? err}`);
-  }
-}
-
-// ── On-demand fonts ──────────────────────────────────────────────────────────
-//
-// Only a Latin fallback ships in the image. The CJK and emoji faces are downloaded into
-// the data dir when Cloudflare solving is set up, which keeps ~140MB of Noto packages out
-// of every image and, because the data dir is a volume, keeps them across an upgrade.
-//
-// Pinned by tag/commit and checked by digest: these are binaries fetched at run time, so a
-// truncated or substituted file has to fail loudly rather than land in the volume.
-
-type CfFont = {
-  file: string;
-  url: string;
-  bytes: number;
-  sha256: string;
-  /** Named in the install output, so a slow download says what it is fetching. */
-  label: string;
-};
-
-export const CF_FONTS: CfFont[] = [
-  {
-    file: "NotoSansCJK-Regular.ttc",
-    url: "https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/OTC/NotoSansCJK-Regular.ttc",
-    bytes: 19_484_784,
-    sha256: "b76b0433203017ca80401b2ee0dd69350349871c4b19d504c34dbdd80541690a",
-    label: "Noto Sans CJK",
-  },
-  {
-    file: "NotoColorEmoji.ttf",
-    url: "https://raw.githubusercontent.com/googlefonts/noto-emoji/f3ae03f5e9b3b8516fa151f7168159ca1a3e7515/fonts/NotoColorEmoji.ttf",
-    bytes: 10_673_480,
-    sha256: "72a635cb3d2f3524c51620cdde406b217204e8a6a06c6a096ff8ed4b5fd6e27b",
-    label: "Noto Color Emoji",
-  },
-];
-
-function cfFontsDir(): string {
-  return path.join(cfFontsRoot(), "fonts");
-}
-
-function cfFontConfigFile(): string {
-  return path.join(cfFontsRoot(), "fonts.conf");
-}
-
-/** Installed only at the exact expected size, so a part-written file never counts. */
-function cfFontPresent(f: CfFont): boolean {
-  try {
-    return statSync(path.join(cfFontsDir(), f.file)).size === f.bytes;
-  } catch {
-    return false;
-  }
-}
-
-export function areCfFontsInstalled(): boolean {
-  return CF_FONTS.every(cfFontPresent);
-}
-
-/** Which faces are in the data dir and which are still missing, for the settings view. */
-export function cfFontsStatus(): { installed: string[]; missing: string[] } {
-  return {
-    installed: CF_FONTS.filter(cfFontPresent).map((f) => f.label),
-    missing: CF_FONTS.filter((f) => !cfFontPresent(f)).map((f) => f.label),
-  };
-}
-
-/**
- * Adds the data-dir fonts to the image's own fontconfig setup.
- *
- * The image config is included rather than replaced, so Debian's generic-family aliases and
- * hinting rules still apply and the Latin fallback in /usr/share/fonts stays visible. Our
- * cachedir is listed first because fontconfig writes to the first one it can write to:
- * that puts the cache on the volume, so it is built once instead of on every start.
- */
-function ensureCfFontConfig(): string {
-  const body = `<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
-<!-- Written by Bemby: the Cloudflare solver's fonts live in the data dir, not the image. -->
-<fontconfig>
-  <cachedir>${path.join(cfFontsRoot(), "cache")}</cachedir>
-  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
-  <dir>${cfFontsDir()}</dir>
-</fontconfig>
-`;
-  mkdirSync(cfFontsDir(), { recursive: true });
-  mkdirSync(path.join(cfFontsRoot(), "cache"), { recursive: true });
-  const conf = cfFontConfigFile();
-  if (!existsSync(conf) || readFileSync(conf, "utf8") !== body) {
-    writeFileSync(conf, body);
-  }
-  return conf;
-}
-
-/**
- * Points fontconfig at the data-dir fonts. Applied at launch rather than at install, so
- * fonts fetched by an earlier version are picked up without reinstalling anything.
- */
-let warnedMissingFonts = false;
-function applyCfFontEnv(): void {
-  if (!areCfFontsInstalled()) {
-    // Once per process: this runs per browser launch, so a job would otherwise repeat it.
-    if (!warnedMissingFonts) {
-      warnedMissingFonts = true;
-      console.warn(
-        `[cloudflare] CJK/emoji fonts are missing from ${cfFontsDir()}; the browser has only ` +
-          "the Latin fallback. Re-run the Cloudflare solver install in Settings to fetch them.",
-      );
-    }
-    return;
-  }
-  warnedMissingFonts = false;
-  try {
-    process.env.FONTCONFIG_FILE = ensureCfFontConfig();
-  } catch (err: any) {
-    console.warn(`[cloudflare] could not point fontconfig at ${cfFontsDir()}: ${err?.message ?? err}`);
-  }
-}
-
-/** Streams one face to a `.part` file, hashing as it goes, and only names it on a match. */
-async function downloadCfFont(f: CfFont): Promise<void> {
-  const dest = path.join(cfFontsDir(), f.file);
-  const part = `${dest}.part`;
-  const res = await fetch(f.url, { redirect: "follow" });
-  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-  const hash = createHash("sha256");
-  await pipeline(
-    Readable.fromWeb(res.body as any),
-    async function* (chunks: AsyncIterable<Buffer>) {
-      for await (const chunk of chunks) {
-        hash.update(chunk);
-        yield chunk;
-      }
-    },
-    createWriteStream(part),
-  );
-  const digest = hash.digest("hex");
-  if (digest !== f.sha256) {
-    rmSync(part, { force: true });
-    throw new Error(`digest mismatch (expected ${f.sha256.slice(0, 12)}, got ${digest.slice(0, 12)})`);
-  }
-  renameSync(part, dest);
-}
-
-/**
- * Downloads the faces the image no longer carries (~30MB) into the data dir.
- *
- * Deliberately not fatal to setting up the solver: with the image's Latin fallback the
- * browser still runs, it just cannot draw CJK or emoji, so a blocked download degrades the
- * challenge pass rate rather than leaving nothing installed at all.
- */
-export async function installCfFonts(force = false): Promise<{ ok: boolean; output: string }> {
-  const lines: string[] = [];
-  try {
-    ensureCfFontConfig();
-  } catch (err: any) {
-    return { ok: false, output: `Cannot write to ${cfFontsRoot()}: ${err?.message ?? err}` };
-  }
-  for (const f of CF_FONTS) {
-    if (!force && cfFontPresent(f)) {
-      lines.push(`${f.label}: already installed`);
-      continue;
-    }
-    try {
-      await downloadCfFont(f);
-      lines.push(`${f.label}: installed (${Math.round(f.bytes / 1_048_576)}MB)`);
-    } catch (err: any) {
-      lines.push(`${f.label}: FAILED, ${err?.message ?? err}`);
-    }
-  }
-  const ok = areCfFontsInstalled();
-  if (ok) lines.push(buildCfFontCache());
-  return { ok, output: lines.join("\n") };
-}
-
-/**
- * Builds the fontconfig cache up front so the first launch does not pay for it. Best
- * effort: without fc-cache on the path the browser builds the cache itself.
- */
-function buildCfFontCache(): string {
-  try {
-    const out = spawnSync("fc-cache", ["-f", cfFontsDir()], {
-      encoding: "utf8",
-      timeout: 180_000,
-      env: { ...process.env, FONTCONFIG_FILE: cfFontConfigFile() },
-    });
-    if (out.error) return "fc-cache not available; the browser will build the cache itself";
-    const tail = `${out.stdout ?? ""}${out.stderr ?? ""}`.trim().split("\n").pop();
-    return `fc-cache: ${tail || "done"}`;
-  } catch {
-    return "fc-cache skipped";
-  }
-}
-
-/**
- * True when this system runs musl rather than glibc, i.e. Alpine. The apk browser in the
- * legacy root is a musl binary: on a glibc image it cannot be executed at all, so it must
- * not be offered -- otherwise an upgraded install reports a browser it cannot launch and
- * never downloads the one it can.
- */
-function isMuslSystem(): boolean {
-  try {
-    const header = (process.report?.getReport() as any)?.header;
-    if (header && "glibcVersionRuntime" in header) return !header.glibcVersionRuntime;
-  } catch {
-    /* fall through to the file check */
-  }
-  return existsSync("/etc/alpine-release");
-}
-
-/**
- * Resolves the Chromium executable: an explicit env path, then the downloaded build in
- * the data dir, then a legacy apk root (Alpine only), then a system browser.
- */
-export function chromiumExecutable(): string | undefined {
-  const envPath = process.env.PUPPETEER_EXECUTABLE_PATH;
-  if (envPath && existsSync(envPath)) return envPath;
-  const downloaded = downloadedChromium();
-  if (downloaded) return downloaded;
-  const root = cfChromiumRoot();
-  const candidates = [
-    ...(isMuslSystem()
-      ? [
-          path.join(root, "usr/lib/chromium/chrome"),
-          path.join(root, "usr/lib/chromium/chromium"),
-          path.join(root, "usr/bin/chromium-browser"),
-        ]
-      : []),
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-  ];
-  return candidates.find((p) => existsSync(p));
-}
-
-export function isChromiumInstalled(): boolean {
-  return !!chromiumExecutable();
-}
-
-/** Version of the resolved browser, e.g. "Chromium 151.0.7922.34". */
-export function chromiumVersion(): string | undefined {
-  const exe = chromiumExecutable();
-  if (!exe) return undefined;
-  try {
-    const out = spawnSync(exe, ["--version"], { encoding: "utf8", timeout: 15_000 });
-    return `${out.stdout ?? ""}`.trim().split("\n")[0] || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Playwright's browser installer, inside the app's own node_modules. */
-function playwrightCli(): string | undefined {
-  try {
-    return createRequire(__filename).resolve("playwright-core/cli.js");
-  } catch {
-    // Compiled and bundled layouts differ; fall back to the conventional location
-    const guess = path.resolve(process.cwd(), "node_modules/playwright-core/cli.js");
-    return existsSync(guess) ? guess : undefined;
-  }
-}
-
-/**
- * Downloads Chromium into the data dir with Playwright's installer -- the same build a
- * developer machine runs, which is the one that gets through a challenge. Long-running
- * (~170MB), but needs no root: it writes to the data volume as the app's own user.
- *
- * `force` downloads again even when a browser is already there, which is how the browser
- * is updated to whatever the installed Playwright version now ships.
- */
-export function installCfChromium(force = false): Promise<{ ok: boolean; output: string }> {
-  return new Promise((resolve) => {
-    const cli = playwrightCli();
-    if (!cli) {
-      resolve({
-        ok: false,
-        output:
-          "playwright-core is not installed next to the app, so the browser cannot be " +
-          "downloaded. For local development, set PUPPETEER_EXECUTABLE_PATH to a Chromium " +
-          "binary in backend/.env and restart.",
-      });
-      return;
-    }
-
-    const root = cfBrowsersRoot();
-    try {
-      mkdirSync(root, { recursive: true });
-    } catch (err: any) {
-      resolve({ ok: false, output: `Cannot write to ${root}: ${err?.message ?? err}` });
-      return;
-    }
-
-    const proc = spawn(process.execPath, [cli, "install", "chromium", ...(force ? ["--force"] : [])], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: root },
-    });
-    let out = "";
-    const cap = (b: Buffer) => {
-      out += b.toString();
-      if (out.length > 8000) out = out.slice(-8000);
-    };
-    proc.stdout.on("data", cap);
-    proc.stderr.on("data", cap);
-    proc.on("error", (err) => resolve({ ok: false, output: `${out}\n${err.message}` }));
-    proc.on("close", (code) => {
-      if (code === 0) pruneHeadlessShells(root);
-      const ok = code === 0 && isChromiumInstalled();
-      const version = ok ? chromiumVersion() : undefined;
-      resolve({ ok, output: version ? `${out}\n${version}` : out });
-    });
-  });
-}
-
-/**
- * Removes the headless shell that comes with the browser. Only the headed build is ever
- * launched (a challenge is not passed headless), and the shell is ~110MB on a volume that
- * also holds the user's data.
- */
-function pruneHeadlessShells(root: string): void {
-  try {
-    for (const name of readdirSync(root)) {
-      if (/^chromium_headless_shell-/.test(name)) {
-        rmSync(path.join(root, name), { recursive: true, force: true });
-      }
-    }
-  } catch {
-    /* housekeeping only */
-  }
-}
 
 export type CheckinPageResult = {
   /** Reached the destination with no Cloudflare interstitial remaining. */
@@ -736,6 +262,12 @@ export function miniAppVerdict(state: {
   return { ok: true };
 }
 
+/** Why a plain page load did not get through, in plain words, for the job log. */
+function challengeRefused(challenged: boolean, navError?: string): string {
+  if (challenged) return 'Could not pass the Cloudflare "I am not a bot" challenge';
+  return navError ?? "the page could not be loaded";
+}
+
 /** Millis left before `deadline`, never negative. */
 function msLeft(deadline: number): number {
   return Math.max(0, deadline - Date.now());
@@ -752,264 +284,71 @@ function sleep(ms: number, deadline?: number): Promise<void> {
   return new Promise((r) => setTimeout(r, Math.max(0, wait)));
 }
 
-// Builds the http(s)/socks proxy option puppeteer-real-browser expects.
-function proxyOption(proxyUrl?: string): { host: string; port: number; username?: string; password?: string } | undefined {
-  if (!proxyUrl) return undefined;
+/**
+ * Asks Cloudflare where this exit comes out, so the next launch can carry the matching
+ * clock and language. Looked up once per exit and remembered: a proxy's country does not
+ * move, and the lookup costs a page load.
+ *
+ * Nothing is emulated over CDP here -- that is detectable in itself. What is learnt is
+ * handed to the browser as launch flags, which is why the caller relaunches once when an
+ * exit turns out to be somewhere new.
+ */
+async function probeExitGeo(
+  page: Page,
+  key: string,
+  deadline: number,
+): Promise<CfExitGeo | undefined> {
   try {
-    const u = new URL(proxyUrl);
-    if (!u.port) return undefined;
-    return {
-      host: u.hostname,
-      port: Number(u.port),
-      username: u.username ? decodeURIComponent(u.username) : undefined,
-      password: u.password ? decodeURIComponent(u.password) : undefined,
-    };
-  } catch {
+    await page.goto(TRACE_URL, {
+      waitUntil: "domcontentloaded",
+      timeout: Math.max(5_000, capped(15_000, deadline)),
+    });
+    const body = await page.evaluate(() => document.body?.innerText ?? "");
+    const loc = /(?:^|\n)loc=([A-Z]{2})/.exec(body)?.[1];
+    if (!loc) return undefined;
+    const geo: CfExitGeo = { loc, ...(COUNTRY_LOCALE[loc] ?? {}) };
+    rememberCfExitGeo(key, geo);
+    console.log(
+      `[cloudflare] exit ${key} comes out in ${loc}` +
+        (geo.tz ? ` -- using ${geo.tz} / ${geo.lang}` : " -- no locale mapped"),
+    );
+    return geo;
+  } catch (err: any) {
+    console.warn(`[cloudflare] exit lookup failed: ${err?.message ?? err}`);
     return undefined;
   }
 }
 
-type SocksBridge = { port: number; close: () => void };
-
 /**
- * Chromium cannot use a SOCKS5 proxy that needs credentials: --proxy-server takes no
- * password and its auth prompt only answers HTTP 407. Bemby's proxies are exactly that
- * (socks5://user:pass@host:port), so when one is configured for Cloudflare solving we
- * put a loopback HTTP proxy in front of it for the browser's lifetime and point the
- * browser at that. Only CONNECT is handled -- challenge pages are https.
+ * A browser for this exit, aligned with the country it comes out in.
+ *
+ * The timezone and locale are launch flags, so an exit being seen for the first time is
+ * launched once to find out where it lands and then relaunched with that applied. The
+ * answer is kept, so this costs one extra launch per exit ever -- not per job.
  */
-function startSocksBridge(url: URL): Promise<SocksBridge> {
-  const proxy = {
-    host: url.hostname,
-    port: Number(url.port),
-    type: (url.protocol === "socks4:" ? 4 : 5) as 4 | 5,
-    userId: url.username ? decodeURIComponent(url.username) : undefined,
-    password: url.password ? decodeURIComponent(url.password) : undefined,
-  };
-
-  const sockets = new Set<net.Socket>();
-  const server = net.createServer((client) => {
-    sockets.add(client);
-    client.on("close", () => sockets.delete(client));
-    client.on("error", () => client.destroy());
-
-    client.once("data", async (chunk) => {
-      const head = chunk.toString("latin1");
-      const target = head.match(/^CONNECT\s+([^\s:]+):(\d+)/i);
-      if (!target) {
-        client.end("HTTP/1.1 405 Method Not Allowed\r\n\r\n");
-        return;
-      }
-      try {
-        const { socket } = await SocksClient.createConnection({
-          proxy,
-          command: "connect",
-          // Hostname is passed through so the proxy resolves it, as socks5h does
-          destination: { host: target[1], port: Number(target[2]) },
-        });
-        sockets.add(socket);
-        socket.on("close", () => sockets.delete(socket));
-        socket.on("error", () => socket.destroy());
-        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        socket.pipe(client);
-        client.pipe(socket);
-      } catch {
-        client.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
-      }
-    });
-  });
-
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      resolve({
-        port,
-        close: () => {
-          for (const socket of sockets) socket.destroy();
-          server.close();
-        },
-      });
-    });
-  });
-}
-
-// Launches a real (rebrowser-patched) Chromium via puppeteer-real-browser: headed
-// under an auto-managed Xvfb display with a real cursor, and turnstile:true so it
-// auto-clicks Cloudflare Turnstile. This is the realistic path to pass Turnstile.
-// The profile is kept per exit so its cookies (cf_clearance included) carry over, and
-// the browser's language is set to match where that exit comes out.
-async function launchBrowser(proxyUrl?: string): Promise<{
-  browser: Browser;
-  page: Page;
-  cleanup: () => void;
-  /** Stable id of the exit this browser goes out through. */
-  key: string;
-  /** What is known about where it comes out, if anything yet. */
-  geo?: CfExitGeo;
-}> {
-  const tune = cfTuning();
-  const executablePath = chromiumExecutable();
-  if (!executablePath) {
-    throw new Error(
-      "Chromium not installed. Enable Cloudflare solving in Settings to install it into the data dir.",
-    );
-  }
-
-  // A data-dir (alt-root) install keeps its shared libs and fonts inside the root.
-  // Set these on our own env (not customConfig.envVars, which would REPLACE the
-  // environment and clobber the DISPLAY puppeteer-real-browser sets for Xvfb);
-  // the Chromium child inherits both from us.
-  if (executablePath.startsWith(cfChromiumRoot())) {
-    const root = cfChromiumRoot();
-    // usr/lib/pulseaudio holds libpulsecommon-*.so, a private dep of libpulse.so.0
-    // that Chromium NEEDs; without it on the path the musl loader aborts (exit 127)
-    // before the DevTools port opens, surfacing to puppeteer as ECONNREFUSED.
-    process.env.LD_LIBRARY_PATH = [
-      `${root}/usr/lib`,
-      `${root}/lib`,
-      `${root}/usr/lib/chromium`,
-      `${root}/usr/lib/pulseaudio`,
-      process.env.LD_LIBRARY_PATH,
-    ]
-      .filter(Boolean)
-      .join(":");
-    process.env.FONTCONFIG_PATH = `${root}/etc/fonts`;
-    ensureAltRootFonts(root);
-  } else {
-    // The apk root carries its own fonts; every other build takes them from the data dir.
-    applyCfFontEnv();
-  }
-
-  // A SOCKS proxy is reached through a loopback HTTP bridge (Chromium cannot
-  // authenticate to SOCKS itself); http(s) proxies are passed straight through.
-  let bridge: SocksBridge | undefined;
-  let proxy = proxyOption(proxyUrl);
-  if (proxyUrl && /^socks/i.test(proxyUrl)) {
-    try {
-      bridge = await startSocksBridge(new URL(proxyUrl));
-      proxy = { host: "127.0.0.1", port: bridge.port };
-    } catch (err: any) {
-      console.error(`[cloudflare] SOCKS bridge failed: ${err?.message ?? err}`);
-      bridge = undefined;
-      proxy = undefined;
-    }
-  }
-
-  const key = exitKey(proxyUrl);
-  const geo = cfExitGeo(key);
-  const profile = claimProfile(key);
-
-  try {
-    const launched = await connect({
-      headless: false,
-      turnstile: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--window-size=1280,800",
-        // A profile that is reused must not reopen the last session or offer to restore
-        // a crashed one, either of which would leave a dialog over the page
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--hide-crash-restore-bubble",
-        // A window Chromium considers occluded gets its timers, rendering and observer
-        // callbacks throttled, which stalls anything waiting on them. Separate switches
-        // on purpose: a second --disable-features would override the one
-        // puppeteer-real-browser sets for AutomationControlled.
-        "--window-position=0,0",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
-        "--disable-background-timer-throttling",
-        // Language has to be set at launch to stay consistent: this covers both
-        // navigator.language(s) and the Accept-Language header
-        ...(geo?.lang ? [`--lang=${geo.lang}`, `--accept-lang=${geo.lang}`] : []),
-      ],
-      customConfig: {
-        chromePath: executablePath,
-        ...(profile.dir ? { userDataDir: profile.dir } : {}),
-      },
-      // A CDP call against a wedged renderer otherwise waits out puppeteer's 3-minute
-      // default, which would swallow the whole step budget in one call
-      connectOption: { protocolTimeout: tune.protocolTimeoutMs },
-      proxy,
-    });
-    // A reused profile reopens the tabs the last session left behind, and they pile up
-    // run after run. Worse, the restored tab -- not ours -- is the active one, and
-    // Chromium delivers pointer presses only to the active tab: a click then registers as
-    // a hover and nothing else. Close the strays and bring ours to the front.
-    const strays = (await launched.browser.pages().catch(() => [])).filter(
-      (p) => p !== launched.page,
-    );
-    for (const stray of strays) await stray.close().catch(() => {});
-    if (strays.length) {
-      console.log(`[cloudflare] closed ${strays.length} restored tab(s) from the saved profile`);
-    }
-    await launched.page.bringToFront().catch(() => {});
-
-    return {
-      ...launched,
-      key,
-      geo,
-      cleanup: () => {
-        bridge?.close();
-        profile.release();
-      },
-    };
-  } catch (err) {
-    bridge?.close();
-    profile.release();
-    throw err;
-  }
-}
-
-/**
- * Asks Cloudflare where this exit comes out and applies the matching clock, so the
- * browser's timezone lines up with its IP. Looked up once per exit and remembered; the
- * language it implies is applied from the next launch, which is where it has to be set.
- */
-async function alignWithExit(
-  page: Page,
-  key: string,
-  known: CfExitGeo | undefined,
+async function launchAlignedBrowser(
+  proxyUrl: string | undefined,
   deadline: number,
-): Promise<CfExitGeo | undefined> {
-  let geo = known;
-  if (!geo) {
-    try {
-      await page.goto(TRACE_URL, {
-        waitUntil: "domcontentloaded",
-        timeout: Math.max(5_000, capped(15_000, deadline)),
-      });
-      const body = await page.evaluate(() => document.body?.innerText ?? "");
-      const loc = /(?:^|\n)loc=([A-Z]{2})/.exec(body)?.[1];
-      if (loc) {
-        geo = { loc, ...(COUNTRY_LOCALE[loc] ?? {}) };
-        rememberCfExitGeo(key, geo);
-        console.log(
-          `[cloudflare] exit ${key} comes out in ${loc}` +
-            (geo.tz ? ` -- using ${geo.tz} / ${geo.lang}` : " -- no locale mapped"),
-        );
-      }
-    } catch (err: any) {
-      console.warn(`[cloudflare] exit lookup failed: ${err?.message ?? err}`);
-    }
-  }
-  if (geo?.tz) await page.emulateTimezone(geo.tz).catch(() => {});
-  return geo;
+): Promise<LaunchedBrowser> {
+  const launched = await launchCfBrowser(proxyUrl);
+  if (launched.geo) return launched;
+
+  const geo = await probeExitGeo(launched.page, launched.key, deadline);
+  if (!geo?.tz || msLeft(deadline) <= 0) return launched;
+
+  await launched.close();
+  return launchCfBrowser(proxyUrl);
 }
 
 /**
  * Clicks an element by moving the pointer to it, rather than through `page.click`.
  *
- * Puppeteer's own click first awaits `scrollIntoViewIfNeeded`, which resolves off an
- * IntersectionObserver callback. Under Xvfb, with a window Chromium believes is occluded,
- * those callbacks are throttled and never arrive: the CDP call then hangs until the
- * protocol timeout and the step reports a press that never happened. Scrolling
- * synchronously in the page and dispatching real pointer events avoids the wait entirely,
- * and is closer to what a person does anyway.
+ * The driver's own click first waits for the element to be scrolled into view and stable,
+ * both settled off frame callbacks. Under Xvfb, with a window Chromium believes is
+ * occluded, those callbacks are throttled and never arrive: the call then hangs until the
+ * timeout and the step reports a press that never happened. Scrolling synchronously in the
+ * page and dispatching real pointer events avoids the wait entirely, and is closer to what
+ * a person does anyway.
  */
 async function clickElement(page: Page, selector: string): Promise<boolean> {
   const box = await page
@@ -1094,6 +433,20 @@ async function hasTurnstile(page: Page): Promise<boolean> {
   return (await hasTurnstileWidget(page)) || (await hasTurnstileScript(page));
 }
 
+/**
+ * Nothing challenge-shaped is on the page any more, and there is something else there
+ * instead. The second half matters: a document that is still loading has no interstitial
+ * markers in it either, and calling that "cleared" logs a checkin that never happened.
+ */
+async function challengeGone(page: Page): Promise<boolean> {
+  if (await isInterstitial(page)) return false;
+  if (await hasTurnstileWidget(page)) return false;
+  const rendered = await page
+    .evaluate(() => (document.body?.innerText ?? "").trim().length)
+    .catch(() => 0);
+  return rendered > 0;
+}
+
 type Box = { x: number; y: number; width: number; height: number };
 
 /**
@@ -1104,7 +457,7 @@ type Box = { x: number; y: number; width: number; height: number };
 async function turnstileBoxViaCdp(page: Page): Promise<Box | null> {
   let session: any;
   try {
-    session = await (page as any).target().createCDPSession();
+    session = await page.context().newCDPSession(page);
     const { root } = await session.send("DOM.getDocument", { depth: -1, pierce: true });
 
     let nodeId: number | null = null;
@@ -1145,10 +498,10 @@ async function turnstileBoxViaCdp(page: Page): Promise<Box | null> {
  * Clicks an embedded Turnstile widget's checkbox with a real mouse click at its left
  * edge, where the checkbox sits.
  *
- * puppeteer-real-browser's own auto-clicker aims at the parent element of the response
- * field, which for an explicitly rendered widget is a wrapper holding nothing but a
- * hidden input -- a zero-sized box, so its click lands nowhere and the challenge waits
- * forever. Hence the CDP lookup, with the widget's sized ancestor as a fallback.
+ * Nothing else clicks it: an interactive widget waits for a real press, and aiming at the
+ * response field's parent does not work -- for an explicitly rendered widget that is a
+ * wrapper holding nothing but a hidden input, a zero-sized box whose click lands nowhere.
+ * Hence the CDP lookup, with the widget's sized ancestor as a fallback.
  */
 export async function clickTurnstileWidget(page: Page): Promise<boolean> {
   let box = await turnstileBoxViaCdp(page);
@@ -1403,7 +756,7 @@ async function findInAppCheckin(
 ): Promise<InAppTarget | null> {
   return page
     .evaluate(
-      (labelSrc: string, doneSrc: string, sel: string) => {
+      ({ labelSrc, doneSrc, sel }: { labelSrc: string; doneSrc: string; sel: string }) => {
         const label = new RegExp(labelSrc, "i");
         const done = new RegExp(doneSrc, "i");
         const CONTROL_SEL = "button,[role=button],a[href],input[type=submit],input[type=button]";
@@ -1493,9 +846,7 @@ async function findInAppCheckin(
 
         return best ? take(best.el, best.kind, best.fallback) : null;
       },
-      labelRe.source,
-      IN_APP_DONE_RE.source,
-      selector ?? "",
+      { labelSrc: labelRe.source, doneSrc: IN_APP_DONE_RE.source, sel: selector ?? "" },
     )
     .catch((err: any) => {
       // Swallowing this once cost a long hunt: a lookup that throws looks exactly like
@@ -1624,7 +975,7 @@ async function fillInAppAnswer(page: Page, answer: string): Promise<boolean> {
     .catch(() => false);
   if (!ok) return false;
   await clickElement(page, "[data-cf-input='1']");
-  await page.type("[data-cf-input='1']", answer, { delay: 60 }).catch(() => {});
+  await typeIntoFocused(page, answer);
   await page
     .evaluate(() => document.querySelector("[data-cf-input]")?.removeAttribute("data-cf-input"))
     .catch(() => {});
@@ -1747,7 +1098,7 @@ type WebMark = { n: number; tag: string; kind: string; text: string };
 async function markWebElements(page: Page, selector: string, limit: number): Promise<WebMark[]> {
   return page
     .evaluate(
-      (sel: string, max: number) => {
+      ({ sel, max }: { sel: string; max: number }) => {
         for (const el of Array.from(document.querySelectorAll("[data-bemby-mark]")))
           el.removeAttribute("data-bemby-mark");
         for (const el of Array.from(document.querySelectorAll(".__bemby_mark"))) el.remove();
@@ -1798,8 +1149,7 @@ async function markWebElements(page: Page, selector: string, limit: number): Pro
         }
         return out;
       },
-      selector,
-      limit,
+      { sel: selector, max: limit },
     )
     .catch(() => [] as WebMark[]);
 }
@@ -1855,6 +1205,23 @@ export function parseWebAiReply(reply: string): { mark?: number; text?: string }
   return {};
 }
 
+/**
+ * Types into whatever the last click focused, keystroke by keystroke.
+ *
+ * Deliberately not `page.type(selector, ...)`: that first waits for the element to pass
+ * Playwright's actionability checks, which settle off animation-frame callbacks the
+ * browser throttles when it believes its window is occluded -- exactly the state a
+ * challenge page under Xvfb tends to be in. Keyboard events go to the focused element
+ * regardless, which is what a person's typing does too.
+ */
+async function typeIntoFocused(page: Page, text: string): Promise<boolean> {
+  let failed = false;
+  await page.keyboard.type(text, { delay: 60 }).catch(() => {
+    failed = true;
+  });
+  return !failed;
+}
+
 /** Types into the element carrying `data-bemby-mark=n`, or a plain CSS selector. */
 async function typeInto(page: Page, selector: string, text: string): Promise<boolean> {
   if (!(await clickElement(page, selector))) return false;
@@ -1868,11 +1235,7 @@ async function typeInto(page: Page, selector: string, text: string): Promise<boo
       else if (typeof el.value === "string") el.value = "";
     }, selector)
     .catch(() => {});
-  let failed = false;
-  await page.type(selector, text, { delay: 60 }).catch(() => {
-    failed = true;
-  });
-  return !failed;
+  return typeIntoFocused(page, text);
 }
 
 export type WebStepHooks = {
@@ -2214,14 +1577,11 @@ export async function testBrowser(proxyUrl?: string): Promise<{
   const executable = chromiumExecutable();
   if (!executable) return { ok: false, error: "Chromium is not installed" };
 
-  let browser: Browser | undefined;
-  let cleanup: (() => void) | undefined;
+  let launched: LaunchedBrowser | undefined;
   try {
-    const launched = await launchBrowser(proxyUrl);
-    browser = launched.browser;
-    cleanup = launched.cleanup;
+    launched = await launchCfBrowser(proxyUrl);
     const page = launched.page;
-    const version = await browser.version().catch(() => undefined);
+    const version = launched.context.browser()?.version() ?? chromiumVersion();
     await page.setContent("<h1 id=probe>bemby browser ok</h1>").catch(() => {});
     const renderedText = await page
       .evaluate(() => document.body?.innerText ?? "")
@@ -2257,17 +1617,15 @@ export async function testBrowser(proxyUrl?: string): Promise<{
   } catch (err: any) {
     return { ok: false, executable, error: err?.message ?? String(err) };
   } finally {
-    await browser?.close().catch(() => {});
-    cleanup?.();
+    await launched?.close();
   }
 }
 
 /** JPEG of what the browser is looking at, small enough to keep in a job log. */
 async function screenshotOf(page: Page, quality = 45): Promise<string | undefined> {
-  const shot = await page
-    .screenshot({ type: "jpeg", quality, encoding: "base64" })
-    .catch(() => undefined);
-  if (typeof shot !== "string" || !shot) return undefined;
+  const buffer = await page.screenshot({ type: "jpeg", quality }).catch(() => undefined);
+  const shot = buffer?.toString("base64");
+  if (!shot) return undefined;
   // Job logs are stored as JSON in SQLite; an oversized image is not worth keeping
   if (shot.length > 700_000) return undefined;
   return `data:image/jpeg;base64,${shot}`;
@@ -2288,30 +1646,26 @@ async function attemptLoad(
       return "";
     }
   })();
-  let browser: Browser | undefined;
-  let cleanup: (() => void) | undefined;
+  let launched: LaunchedBrowser | undefined;
   // Renderer trouble the page reports on its own: a crashed tab or a main request
   // that never arrived both leave a blank page that otherwise looks challenge-free.
   const troubles: string[] = [];
-  // Trouble from the exit probe belongs to the probe, not to the page being judged
-  let probing = false;
   const note = (msg: string) => {
-    if (probing) return;
     // A challenge page aborts its own load on the way to the destination, so an
     // aborted request says nothing about whether the page came up
     if (/ERR_ABORTED/i.test(msg)) return;
     if (troubles.length < 5 && !troubles.includes(msg)) troubles.push(msg);
   };
   try {
-    const launched = await launchBrowser(proxyUrl);
-    browser = launched.browser;
-    cleanup = launched.cleanup;
+    // The clock and language of the exit are launch flags, so this settles them before
+    // anything on the target is loaded
+    launched = await launchAlignedBrowser(proxyUrl, budgetDeadline);
     const page = launched.page;
 
-    page.on("error", (err) => note(`page crashed: ${err?.message ?? err}`));
+    page.on("crash", () => note("page crashed"));
     page.on("pageerror", (err: Error) => note(`page script error: ${err?.message ?? err}`));
-    page.on("requestfailed", (req: any) => {
-      if (req?.isNavigationRequest?.()) note(`request failed: ${req.failure()?.errorText}`);
+    page.on("requestfailed", (req) => {
+      if (req.isNavigationRequest()) note(`request failed: ${req.failure()?.errorText}`);
     });
 
     // In dev the backend runs via tsx/esbuild, which wraps functions passed to
@@ -2319,17 +1673,12 @@ async function attemptLoad(
     // Shim it (string form, so this injection itself isn't instrumented) so the
     // evaluate() calls below work under tsx too; tsc production builds don't need it.
     await page
-      .evaluateOnNewDocument("window.__name = window.__name || function (a) { return a; };")
+      .addInitScript("window.__name = window.__name || function (a) { return a; };")
       .catch(() => {});
 
     if (opts.miniApp) {
-      await page.evaluateOnNewDocument(WEBVIEW_PROXY_SHIM).catch(() => {});
+      await page.addInitScript(WEBVIEW_PROXY_SHIM).catch(() => {});
     }
-
-    // Clock and language to match the exit IP, before anything on the target is loaded
-    probing = true;
-    await alignWithExit(page, launched.key, launched.geo, budgetDeadline);
-    probing = false;
 
     await page
       .goto(url, {
@@ -2389,14 +1738,24 @@ async function attemptLoad(
           widgetClicks++;
           await clickTurnstileWidget(page);
         }
-        // A challenge that cleared and left no widget behind is done.
-        if (!(await isInterstitial(page)) && !(await hasTurnstileWidget(page))) return true;
-        // Portal navigated away or shows a success message.
-        if (withoutHash(page.url()) !== startUrl) return true;
         const body = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
-        if (SUCCESS_RE.test(body)) return true;
         // The site has already rejected this exit; waiting the rest out gains nothing
         if (REFUSED_RE.test(body)) return false;
+        // Nothing below means anything while the interstitial is still up: a managed
+        // challenge navigates to its own URL to run, so the address changing is the
+        // challenge working, not the portal letting us through.
+        if (await isInterstitial(page)) continue;
+        // A challenge that cleared and left no widget behind is done -- but mid-reload
+        // the document has no title and no widget in it either, which reads exactly the
+        // same, so it has to still be gone one poll later before this counts.
+        if (await challengeGone(page)) {
+          await sleep(tune.pollMs, deadline);
+          if (await challengeGone(page)) return true;
+          continue;
+        }
+        // Portal navigated away or shows a success message.
+        if (withoutHash(page.url()) !== startUrl) return true;
+        if (SUCCESS_RE.test(body)) return true;
       }
       return false;
     };
@@ -2489,8 +1848,8 @@ async function attemptLoad(
       : webSteps
         ? // A sub-step that could not be carried out is a failure even with no challenge in
           // the way: the page was never driven to where the caller wanted it.
-          { ok: solved && !webFailure, reason: solved ? webFailure : undefined }
-        : { ok: solved, reason: undefined as string | undefined };
+          { ok: solved && !webFailure, reason: solved ? webFailure : challengeRefused(challenged, navError) }
+        : { ok: solved, reason: solved ? undefined : challengeRefused(challenged, navError) };
 
     return {
       ok: verdict.ok,
@@ -2526,8 +1885,7 @@ async function attemptLoad(
       exitRelated: true,
     };
   } finally {
-    await browser?.close().catch(() => {});
-    cleanup?.();
+    await launched?.close();
   }
 }
 

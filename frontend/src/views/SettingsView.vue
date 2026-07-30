@@ -181,6 +181,72 @@
             >{{ cfTestReport }}</pre
           >
 
+          <!-- CloakBrowser licence keys: one free key per GitHub account, one browser each -->
+          <div style="border-top: 1px solid var(--border, #333); margin-top: 16px; padding-top: 12px">
+            <button class="btn btn-ghost btn-sm" @click="cfKeysOpen = !cfKeysOpen">
+              <i :class="cfKeysOpen ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"></i>
+              {{ t("settings.cfKeys.title") }}
+              <span style="color: #888; font-weight: 400">({{ cfKeys.length }})</span>
+            </button>
+            <div v-if="cfKeysOpen" style="margin-top: 10px">
+              <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+                {{ t("settings.cfKeys.hint") }}
+              </p>
+              <div v-if="cfKeysMsg" class="success-msg">{{ cfKeysMsg }}</div>
+              <div v-if="cfKeysError" class="error-msg">{{ cfKeysError }}</div>
+              <p v-if="cfKeys.length" style="font-size: 11px; color: #888; margin: 0 0 8px">
+                {{ t("settings.cfKeys.inUse") }}: {{ cfKeysInUse }} / {{ cfKeys.length }}
+              </p>
+              <div
+                v-for="(k, i) in cfKeys"
+                :key="i"
+                style="display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px"
+              >
+                <input
+                  v-model="k.label"
+                  class="form-input"
+                  style="flex: 0 0 32%"
+                  :placeholder="t('settings.cfKeys.labelPlaceholder')"
+                />
+                <div style="flex: 1">
+                  <input
+                    v-model="k.key"
+                    class="form-input"
+                    :placeholder="t('settings.cfKeys.keyPlaceholder')"
+                  />
+                  <div v-if="cfKeyChecks[k.label]" style="font-size: 11px; margin-top: 3px"
+                    :style="{ color: cfKeyChecks[k.label].valid ? '#2e9e5b' : '#c0392b' }">
+                    {{ cfKeyChecks[k.label].valid
+                      ? `${t("settings.cfKeys.checkValid")} — ${cfKeyChecks[k.label].plan || "free"}`
+                      : cfKeyChecks[k.label].error || t("settings.cfKeys.checkInvalid") }}
+                  </div>
+                </div>
+                <button class="btn btn-ghost btn-sm" @click="cfKeys.splice(i, 1)">
+                  <i class="fa-solid fa-trash"></i>
+                </button>
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap">
+                <button class="btn btn-ghost" @click="cfKeys.push({ label: '', key: '' })">
+                  <i class="fa-solid fa-plus"></i>
+                  {{ t("settings.cfKeys.addBtn") }}
+                </button>
+                <button class="btn btn-primary" :disabled="cfKeysSaving" @click="saveCfKeys">
+                  <i class="fa-solid fa-floppy-disk"></i>
+                  {{ cfKeysSaving ? t("common.saving") : t("common.save") }}
+                </button>
+                <button
+                  v-if="cfKeys.length"
+                  class="btn btn-ghost"
+                  :disabled="cfKeysSaving || cfKeysChecking"
+                  @click="checkCfKeys"
+                >
+                  <i class="fa-solid fa-circle-check"></i>
+                  {{ cfKeysChecking ? t("settings.cfKeys.checking") : t("settings.cfKeys.checkBtn") }}
+                </button>
+              </div>
+            </div>
+          </div>
+
           <!-- Browser timings and limits: defaults are what the solver ships with -->
           <div style="border-top: 1px solid var(--border, #333); margin-top: 16px; padding-top: 12px">
             <button class="btn btn-ghost btn-sm" @click="cfTuningOpen = !cfTuningOpen">
@@ -1594,6 +1660,8 @@ import type {
   Proxy,
   ProxyProvider,
   TgAppClient,
+  CfKeyView,
+  CfKeyCheck,
 } from "../api/client";
 import { t } from "../i18n";
 import { setAccountDisplayWithTgName } from "../composables/accountDisplay";
@@ -1690,6 +1758,59 @@ const cfTesting = ref(false);
 const cfTestReport = ref("");
 const cfTestWarnings = ref<string[]>([]);
 const cfTestNotes = ref<string[]>([]);
+
+// CloakBrowser licence keys. The server only ever sends them masked; a masked value sent
+// back unchanged means "keep the stored key", so a label can be edited without pasting the
+// key again.
+const cfKeysOpen = ref(false);
+const cfKeys = ref<Array<{ label: string; key: string }>>([]);
+const cfKeysInUse = ref(0);
+const cfKeysSaving = ref(false);
+const cfKeysChecking = ref(false);
+const cfKeysMsg = ref("");
+const cfKeysError = ref("");
+const cfKeyChecks = ref<Record<string, CfKeyCheck>>({});
+
+function loadCfKeys(s: Settings) {
+  try {
+    const parsed = JSON.parse(s.cf_cloak_keys_masked ?? "[]") as CfKeyView[];
+    cfKeys.value = parsed.map((k) => ({ label: k.label, key: k.masked }));
+  } catch {
+    cfKeys.value = [];
+  }
+  cfKeysInUse.value = Number(s.cf_cloak_keys_in_use ?? 0) || 0;
+}
+
+async function saveCfKeys() {
+  cfKeysSaving.value = true;
+  cfKeysMsg.value = "";
+  cfKeysError.value = "";
+  try {
+    const res = await settingsApi.saveCfKeys(cfKeys.value.filter((k) => k.key.trim()));
+    cfKeys.value = res.keys.map((k) => ({ label: k.label, key: k.masked }));
+    cfKeysInUse.value = res.inUse;
+    cfKeyChecks.value = {};
+    cfKeysMsg.value = t("settings.saved");
+  } catch (e: any) {
+    cfKeysError.value = e?.response?.data?.error ?? e?.message ?? t("settings.cfKeys.saveFailed");
+  } finally {
+    cfKeysSaving.value = false;
+  }
+}
+
+async function checkCfKeys() {
+  cfKeysChecking.value = true;
+  cfKeysMsg.value = "";
+  cfKeysError.value = "";
+  try {
+    const results = await settingsApi.checkCfKeys();
+    cfKeyChecks.value = Object.fromEntries(results.map((r) => [r.label, r]));
+  } catch (e: any) {
+    cfKeysError.value = e?.response?.data?.error ?? e?.message ?? t("settings.cfKeys.checkFailed");
+  } finally {
+    cfKeysChecking.value = false;
+  }
+}
 
 // Browser timings. The server sends the values in force, the shipped defaults and the
 // range each is held to, so this form needs no copy of any of them.
@@ -2141,6 +2262,7 @@ onMounted(async () => {
     cfChromiumVersion.value = s.cf_chromium_version ?? "";
     cfFontsInstalled.value = s.cf_fonts_installed === "true";
     cfFontsMissing.value = s.cf_fonts_missing ?? "";
+    loadCfKeys(s);
     loadCfTuning(s);
     notifyForm.username = s.notify_tg_username ?? "";
     try {

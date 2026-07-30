@@ -33,16 +33,17 @@ ENV NODE_ENV=production
 # makes GC start early enough to matter. Override the whole variable on a larger host.
 ENV NODE_OPTIONS="--max-old-space-size=512"
 
-# The Cloudflare "I am not a bot" solver runs a real Chromium. The browser itself is
-# downloaded on demand into the data dir (keeping the image small), but its shared
-# libraries and fonts belong here. This is the dependency set Playwright's Chromium
-# expects, and it is why the image is Debian: that build is glibc-only, and it is the
-# same one that gets through a challenge on a developer machine. Alpine could only
-# offer its own musl build of a different Chromium version.
+# The Cloudflare "I am not a bot" solver runs CloakBrowser, a Chromium built with
+# source-level fingerprint patches. The browser itself is downloaded on demand into the
+# data dir (keeping the image small), but its shared libraries and fonts belong here. This
+# is the dependency set that Chromium expects, and it is why the image is Debian: the build
+# is glibc-only. Alpine could only offer its own musl build of a stock Chromium, which is
+# the thing a challenge is looking for.
 #
 # xvfb gives the browser a virtual display so it can run headed (far better challenge
-# pass rate than headless). gosu lets the entrypoint fix data-dir ownership as root
-# and then drop to the non-root `node` user.
+# pass rate than headless); the app starts one X server of its own on first launch and
+# every browser shares it. gosu lets the entrypoint fix data-dir ownership as root and
+# then drop to the non-root `node` user.
 #
 # Only fonts-liberation ships here, as a Latin fallback that is always present: a browser
 # that cannot draw a glyph measures text unlike any real one. The three Noto packages this
@@ -96,9 +97,10 @@ RUN set -eu; \
     test -S /tmp/.X11-unix/X99 || { echo "Xvfb did not come up after the Mesa purge"; exit 1; }; \
     kill "$xvfb_pid" 2>/dev/null || true
 
-# puppeteer-core never downloads a browser of its own; the Playwright installer places
-# one under the data dir on demand and the app resolves it at launch.
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+# playwright-core is only the driver and never downloads a browser of its own; CloakBrowser
+# places one under the data dir on demand and the app resolves it at launch. The cache is
+# pointed at the data dir in code, so it lands on the volume rather than in $HOME.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 COPY --from=backend-builder /app/node_modules ./node_modules
 COPY --from=backend-builder /app/dist        ./dist

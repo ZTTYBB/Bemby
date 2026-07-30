@@ -4,6 +4,38 @@ All notable changes to Bemby are documented here.
 
 ---
 
+## 未发布 / Unreleased
+
+### 中文
+
+**变更**
+
+- **Cloudflare 验证改用 CloakBrowser** -- 过 CF 的整套浏览器底层已从 `puppeteer-real-browser` + Playwright 下载的普通 Chromium，替换为 **CloakBrowser**：一个在源码层修补指纹（Canvas、WebGL、音频、字体、WebRTC、TLS、`navigator.webdriver` 等）的 Chromium，通过 Playwright 驱动。挑战检测、小程序步骤、网页步骤与代理轮换逻辑保持不变。首次启用时按需下载（约 200MB）到数据目录，升级后仍然保留；旧版本留下的浏览器（`pw-browsers`、`cf-chromium`）会在安装成功后自动清理。
+- **CloakBrowser 授权密钥（设置页）** -- 新增密钥管理：不填密钥时使用较旧的免费构建；在 cloakbrowser.dev/free 用 GitHub 账号可免费领取密钥以使用最新构建。每个免费密钥仅允许 1 个并发会话，因此可添加多个（来自不同 GitHub 账号）密钥，运行中的浏览器各占用一个，用完则该次启动回退到免费构建。密钥仅保存在本机，界面始终掩码显示，并可一键验证有效性与套餐。
+- **每个出口固定设备指纹** -- 浏览器指纹种子由出口（代理）推导而来，同一出口在多次运行中呈现同一台设备，与其保留的 Cookie（含 `cf_clearance`）一致，而不再每次随机。
+- **虚拟显示由应用自行管理** -- headed 模式所需的 Xvfb 现由应用启动并复用（原先由 `puppeteer-real-browser` 负责）；无法启动时回退到 headless 并给出提示。
+- **自动更新默认关闭** -- CloakBrowser 的后台自动更新默认关闭，避免任务运行中突然下载约 200MB 并在数据卷中堆积旧构建；更新请使用设置页的「重新下载 / 更新浏览器」。
+
+**修复**
+
+- **不再把未通过的挑战记为成功** -- 托管挑战会跳转到自己的 URL 并在校验期间短暂清空文档，此前会被误判为「已通过」，从而记录一次并未发生的签到。现在挑战仍在页面上时不认可任何成功信号，且「挑战已消失」需连续两次确认。失败时日志会写明未能通过 Cloudflare 验证。
+
+### English
+
+**Changes**
+
+- **Cloudflare solving now runs on CloakBrowser** -- the whole browser layer behind CF solving moved from `puppeteer-real-browser` plus a Playwright-downloaded stock Chromium to **CloakBrowser**: a Chromium whose fingerprint is patched at source (canvas, WebGL, audio, fonts, WebRTC, TLS, `navigator.webdriver`), driven through Playwright. Challenge detection, Mini App steps, page steps and proxy rotation are unchanged. It is downloaded on demand (~200MB) into the data dir so it survives an upgrade, and the browsers earlier versions left behind (`pw-browsers`, `cf-chromium`) are removed once the new one installs.
+- **CloakBrowser licence keys (Settings)** -- with no key the solver runs the older free build; a free key (one per GitHub account at cloakbrowser.dev/free) gets the current one. A free key allows a single concurrent session, so several keys can be stored and one is leased per running browser, with a launch falling back to the free build when every seat is taken. Keys are stored on the host, only ever shown masked, and can be checked for validity and plan from the same panel.
+- **A stable device per exit** -- the browser fingerprint seed is derived from the exit (proxy) rather than chosen at random each launch, so an exit presents the same machine run after run, matching the cookies its profile keeps (`cf_clearance` included).
+- **The app manages its own virtual display** -- the Xvfb that headed mode needs is now started and shared by the app itself (it used to come from `puppeteer-real-browser`), falling back to headless with a warning when it cannot be started.
+- **Auto-update off by default** -- CloakBrowser's background update is disabled, so a job no longer triggers a surprise ~200MB download mid-run or leaves superseded builds on the data volume. Use "Re-download / update browser" in Settings instead.
+
+**Fixes**
+
+- **A refused challenge is no longer logged as a pass** -- a managed challenge navigates to its own URL and briefly empties the document while it verifies, which used to read as "cleared" and recorded a checkin that never happened. Nothing counts as success while the interstitial is still up, and "the challenge is gone" now has to hold across two consecutive checks. The job log says plainly when the Cloudflare challenge was not passed.
+
+---
+
 ## v0.9.36-patch-1
 
 ### 中文

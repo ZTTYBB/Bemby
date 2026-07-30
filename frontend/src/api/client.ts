@@ -1054,6 +1054,10 @@ export type Settings = {
   cf_fonts_installed?: string;
   /** Server-computed: comma-separated faces still to download. */
   cf_fonts_missing?: string;
+  /** Server-computed JSON: stored CloakBrowser licence keys, masked. */
+  cf_cloak_keys_masked?: string;
+  /** Server-computed: how many licence keys are held by a running browser. */
+  cf_cloak_keys_in_use?: string;
   /** JSON: the browser timings and limits in force. */
   cf_tuning?: string;
   /** Server-computed JSON: the values the solver ships with. */
@@ -1098,6 +1102,15 @@ export const settingsApi = {
         exitCountry?: string;
       }>("/settings/cf-solver/test")
       .then((r) => r.data),
+  getCfKeys: () =>
+    api.get<CfKeysResponse>("/settings/cf-solver/keys").then((r) => r.data),
+  /** Send the masked value back unchanged to keep a stored key while editing its label. */
+  saveCfKeys: (keys: Array<{ label: string; key: string }>) =>
+    api.put<CfKeysResponse>("/settings/cf-solver/keys", { keys }).then((r) => r.data),
+  checkCfKeys: () =>
+    api
+      .post<{ results: CfKeyCheck[] }>("/settings/cf-solver/keys/check")
+      .then((r) => r.data.results),
   getProxyProviders: () =>
     api
       .get<{ providers: ProxyProvider[] }>("/settings/proxy-providers")
@@ -1113,6 +1126,20 @@ export const settingsApi = {
         providerId ? { providerId } : {},
       )
       .then((r) => r.data),
+};
+
+/** A stored CloakBrowser licence key as the server will show it: never the raw value. */
+export type CfKeyView = { label: string; masked: string };
+
+export type CfKeysResponse = { keys: CfKeyView[]; total: number; inUse: number };
+
+export type CfKeyCheck = {
+  label: string;
+  masked: string;
+  valid: boolean;
+  plan?: string;
+  expires?: string;
+  error?: string;
 };
 
 export type ProxyProviderType = "webshare" | "list";

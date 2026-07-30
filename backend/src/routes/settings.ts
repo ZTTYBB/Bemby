@@ -22,6 +22,15 @@ import {
   resolveCfTuning,
 } from "../jobs/cfTuning";
 import {
+  CF_KEYS_SETTING,
+  cfLicenseKeys,
+  cfLicenseKeysForClient,
+  cfLicenseUsage,
+  maskKey,
+  saveCfLicenseKeys,
+} from "../jobs/cfLicense";
+import { checkCfLicenseKey } from "../jobs/cfBrowser";
+import {
   providersForClient,
   saveProviders,
   syncProviders,
@@ -65,6 +74,8 @@ export const CLIENT_HIDDEN_KEYS = new Set([
   // Legacy single-key AI credential (superseded by the ai_suppliers table);
   // never echo it back to the client on upgraded installs.
   "ai_api_key",
+  // CloakBrowser licence keys: served separately, masked
+  CF_KEYS_SETTING,
   // Proxy provider credentials: served separately, with keys replaced by a flag
   "webshare_api_key",
   "proxy_providers",
@@ -114,6 +125,10 @@ function getClientSettings(): Record<string, string> {
   // data dir. Reported separately so a browser that can only draw Latin is visible.
   result.cf_fonts_installed = areCfFontsInstalled() ? "true" : "false";
   result.cf_fonts_missing = cfFontsStatus().missing.join(", ");
+  // Licence keys, masked, plus how many seats are taken right now: a free key is one
+  // concurrent session, so the count is what tells the operator whether to add another
+  result.cf_cloak_keys_masked = JSON.stringify(cfLicenseKeysForClient());
+  result.cf_cloak_keys_in_use = String(cfLicenseUsage().inUse);
   // The browser timings in force, alongside the shipped defaults and the range each is
   // held to, so the client can render every field without a second source of truth
   result.cf_tuning = JSON.stringify(cfTuning());
@@ -175,10 +190,10 @@ router.put("/", (req, res) => {
   res.json(getClientSettings());
 });
 
-// POST /cf-solver/install -- download Chromium (~170MB) and the CJK/emoji faces (~30MB)
-// on demand into the data dir so the Cloudflare "I am not a bot" solver can run. Neither
-// is in the image, and the data dir is a volume, so both survive an upgrade. `force`
-// downloads again over an existing install, which is how they get updated.
+// POST /cf-solver/install -- download the CloakBrowser stealth Chromium (~200MB) and the
+// CJK/emoji faces (~30MB) on demand into the data dir so the Cloudflare "I am not a bot"
+// solver can run. Neither is in the image, and the data dir is a volume, so both survive an
+// upgrade. `force` downloads again over an existing install, which is how they get updated.
 //
 // The fonts are reported but do not decide `ok`: with the image's Latin fallback the
 // browser still works, so a blocked font download is a warning, not a failed install.
@@ -202,7 +217,7 @@ router.post("/cf-solver/install", async (req, res) => {
   cfInstalling = true;
   try {
     // Only re-download a browser that is missing (or explicitly forced): an upgrade from an
-    // image that carried the fonts needs the fonts alone, not another 170MB of browser.
+    // image that carried the fonts needs the fonts alone, not another 200MB of browser.
     const browser = isChromiumInstalled() && !force
       ? { ok: true, output: "Browser already installed" }
       : await installCfChromium(force);
@@ -222,6 +237,36 @@ router.post("/cf-solver/install", async (req, res) => {
   } finally {
     cfInstalling = false;
   }
+});
+
+// ── CloakBrowser licence keys ─────────────────────────────────────────────────
+// A free key (one per GitHub sign-in at cloakbrowser.dev/free) gets the current stealth
+// build instead of the ageing one that needs no key, and allows one concurrent browser.
+// Several can be stored so concurrent jobs each get a seat. Never sent back in full.
+
+router.get("/cf-solver/keys", (_req, res) => {
+  res.json({ keys: cfLicenseKeysForClient(), ...cfLicenseUsage() });
+});
+
+router.put("/cf-solver/keys", (req, res) => {
+  const { keys } = req.body as { keys?: Array<{ label?: string; key?: string }> };
+  if (!Array.isArray(keys)) {
+    res.status(400).json({ error: "keys array is required" });
+    return;
+  }
+  saveCfLicenseKeys(keys);
+  res.json({ keys: cfLicenseKeysForClient(), ...cfLicenseUsage() });
+});
+
+// POST /cf-solver/keys/check -- ask CloakBrowser's server what each stored key is worth,
+// so a key that was mistyped or has lapsed shows up here rather than as a job that quietly
+// runs the old build.
+router.post("/cf-solver/keys/check", async (_req, res) => {
+  const results = [];
+  for (const entry of cfLicenseKeys()) {
+    results.push({ label: entry.label, masked: maskKey(entry.key), ...(await checkCfLicenseKey(entry.key)) });
+  }
+  res.json({ results });
 });
 
 // POST /cf-solver/test -- launch the installed browser and check that it renders, so a
