@@ -11,6 +11,14 @@ import {
   testBrowser,
 } from "../jobs/cloudflare";
 import {
+  CF_TUNING_DEFAULTS,
+  CF_TUNING_KEY,
+  CF_TUNING_LIMITS,
+  cfTuning,
+  invalidateCfTuning,
+  resolveCfTuning,
+} from "../jobs/cfTuning";
+import {
   providersForClient,
   saveProviders,
   syncProviders,
@@ -43,6 +51,7 @@ export const ALLOWED_KEYS = [
   "log_retention_days",
   "schedule_min_gap_minutes",
   "cf_solver_enabled",
+  CF_TUNING_KEY,
 ];
 
 /** Settings keys that must never be sent to the client. */
@@ -98,6 +107,11 @@ function getClientSettings(): Record<string, string> {
   // Whether the on-demand Cloudflare-solver browser is present, and which build
   result.cf_chromium_installed = isChromiumInstalled() ? "true" : "false";
   result.cf_chromium_version = chromiumVersion() ?? "";
+  // The browser timings in force, alongside the shipped defaults and the range each is
+  // held to, so the client can render every field without a second source of truth
+  result.cf_tuning = JSON.stringify(cfTuning());
+  result.cf_tuning_defaults = JSON.stringify(CF_TUNING_DEFAULTS);
+  result.cf_tuning_limits = JSON.stringify(CF_TUNING_LIMITS);
   // Synthetic count so the client can show whether proxy importing is set up
   result.proxy_providers_count = String(providersForClient().length);
   return result;
@@ -122,6 +136,20 @@ router.put("/", (req, res) => {
         String(updates[key]).includes("****")
       )
         continue;
+      // Browser timings are stored resolved: out-of-range or unparsable values become the
+      // shipped default there and then, so what is saved is what a job will use
+      if (key === CF_TUNING_KEY) {
+        let incoming: unknown = updates[key];
+        if (typeof incoming === "string") {
+          try {
+            incoming = JSON.parse(incoming);
+          } catch {
+            incoming = undefined;
+          }
+        }
+        stmt.run(key, JSON.stringify(resolveCfTuning(incoming)));
+        continue;
+      }
       stmt.run(key, String(updates[key]));
     }
   })();
@@ -133,6 +161,9 @@ router.put("/", (req, res) => {
 
   // Apply a tightened retention window straight away
   if ("log_retention_days" in updates) purgeOldLogs();
+
+  // Drop the cached timings so the next job picks the new ones up without a restart
+  if (CF_TUNING_KEY in updates) invalidateCfTuning();
 
   res.json(getClientSettings());
 });

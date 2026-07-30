@@ -995,6 +995,89 @@ const zh = {
       testPassed: "浏览器可正常启动并渲染页面。",
       testFailed: "浏览器自检失败。",
     },
+    cfTuning: {
+      title: "高级：浏览器时间与上限",
+      hint: "Cloudflare / 小程序浏览器使用的各项时间与上限。留空或填 0 以外的非法值会自动恢复默认；每项都标注了默认值与允许范围。改动会在下一个任务生效，无需重启。",
+      default: "默认",
+      range: "范围",
+      saved: "已保存，下一个任务开始生效。",
+      resetBtn: "恢复默认值",
+      resetHint: "已填回默认值，点击保存后生效。",
+      fields: {
+        budgetMs: {
+          label: "浏览器总时长上限（毫秒）",
+          hint: "单个操作在浏览器中的总耗时上限，涵盖该操作的所有重试与代理尝试。操作自身填写的“浏览器最长等待”会覆盖此值。",
+        },
+        minAttemptMs: {
+          label: "再试一个代理所需的剩余时间（毫秒）",
+          hint: "剩余预算低于此值时不再尝试下一个代理出口，直接结束，避免刚启动浏览器就超时。",
+        },
+        minActionMs: {
+          label: "重试该操作所需的剩余时间（毫秒）",
+          hint: "剩余预算低于此值时不再为该操作重新启动浏览器，直接判定预算用尽。",
+        },
+        navTimeoutMs: {
+          label: "页面打开超时（毫秒）",
+          hint: "等待页面完成加载的上限。代理较慢或站点较重时可适当加大。",
+        },
+        appReadyTimeoutMs: {
+          label: "小程序启动等待上限（毫秒）",
+          hint: "小程序是单页应用，刚打开时通常还是加载动画。在此时间内等待页面内容稳定后再判断，页面很慢时可加大。",
+        },
+        challengeTimeoutMs: {
+          label: "人机验证求解上限（毫秒）",
+          hint: "页面已出现验证（Cloudflare Turnstile 或 Cap 复选框）时的求解上限。Cap 需要在浏览器内做计算，偏慢的机器可加大。",
+        },
+        postClickChallengeMs: {
+          label: "点击后等待验证出现（毫秒）",
+          hint: "部分小程序在点击签到后才弹出验证框，弹框需要一点时间渲染。在此时间内持续查找；设为 0 表示只检查一次。",
+        },
+        confirmTimeoutMs: {
+          label: "等待站点确认结果（毫秒）",
+          hint: "验证通过后由站点在服务端核验并给出结果，此为等待其显示成功/失败文字的上限。",
+        },
+        settleMs: {
+          label: "验证通过后的缓冲（毫秒）",
+          hint: "验证清除后先等待这段时间，让页面完成跳转或重绘，再读取页面文字。",
+        },
+        inAppStepMs: {
+          label: "小程序内步骤间隔（毫秒）",
+          hint: "多个小程序内操作之间的间隔，用于等待弹窗出现或列表重绘。",
+        },
+        inAppSettleMs: {
+          label: "最后一步后的等待（毫秒）",
+          hint: "最后一个小程序内操作完成后的等待时间，让其请求完成往返，再读取结果文字。",
+        },
+        pollMs: {
+          label: "验证轮询间隔（毫秒）",
+          hint: "求解验证过程中的检查间隔。调小会更快发现结果，但会更频繁地读取页面。",
+        },
+        readyPollMs: {
+          label: "启动轮询间隔（毫秒）",
+          hint: "等待小程序启动过程中的检查间隔。",
+        },
+        protocolTimeoutMs: {
+          label: "单次浏览器调用上限（毫秒）",
+          hint: "与浏览器之间单次调用（CDP）的等待上限。Puppeteer 默认为 3 分钟，一次卡死即可耗尽整个预算，因此在此收紧。",
+        },
+        proxyCandidates: {
+          label: "普通页面尝试的代理数量",
+          hint: "非小程序的 Cloudflare 页面每次尝试提供的出口数量。同一次运行中被拒绝过的代理不会重复尝试。",
+        },
+        maxPoolCandidates: {
+          label: "轮换所有代理时的上限",
+          hint: "小程序操作开启“被拒时轮换所有可用代理”后，一次最多提供多少个出口；实际仍受浏览器总时长上限约束。",
+        },
+        maxProfiles: {
+          label: "保留的浏览器配置数量",
+          hint: "按出口保存的浏览器配置目录数量（保留最近使用的若干个），用于保留 cf_clearance 等 Cookie。每个约数十 MB，占用数据目录空间；设为 0 表示不保留。",
+        },
+        blankTextLen: {
+          label: "空白页判定字数",
+          hint: "页面可见文字少于此字数即视为没有渲染出内容（通常是浏览器或网络异常），该次尝试记为失败而不是成功。",
+        },
+      },
+    },
     adminCreds: "管理员",
     credSaved: "已更新，如更改了用户名或密码请重新登录。",
     credFailed: "更新失败",
@@ -2112,6 +2195,89 @@ const en: typeof zh = {
       testing: "Testing…",
       testPassed: "The browser launches and renders pages.",
       testFailed: "Browser self-test failed.",
+    },
+    cfTuning: {
+      title: "Advanced: browser timings and limits",
+      hint: "Every number the Cloudflare / Mini App browser runs on. Anything unset or out of range falls back to the value shown as the default. Changes apply to the next job, with no restart.",
+      default: "default",
+      range: "range",
+      saved: "Saved. The next job uses these.",
+      resetBtn: "Restore defaults",
+      resetHint: "Defaults filled in — save to apply them.",
+      fields: {
+        budgetMs: {
+          label: "Total browser budget (ms)",
+          hint: "How long one action may spend in the browser altogether, covering its retries and every proxy tried. An action's own \"Browser max wait\" overrides this.",
+        },
+        minAttemptMs: {
+          label: "Budget needed to try another proxy (ms)",
+          hint: "With less budget than this left, no further exit is started — better to stop than to launch a browser that times out immediately.",
+        },
+        minActionMs: {
+          label: "Budget needed to retry the action (ms)",
+          hint: "With less than this left, the action is not given another browser run and is reported as out of time.",
+        },
+        navTimeoutMs: {
+          label: "Page load timeout (ms)",
+          hint: "How long a page has to load. Worth raising for a slow proxy or a heavy site.",
+        },
+        appReadyTimeoutMs: {
+          label: "Mini App boot wait (ms)",
+          hint: "A Mini App is a single-page app and is usually still a spinner when it first opens. This bounds the wait for its content to settle before the page is judged.",
+        },
+        challengeTimeoutMs: {
+          label: "Challenge solving timeout (ms)",
+          hint: "How long to work a challenge that is on the page (Cloudflare Turnstile, or a Cap checkbox). Cap does its work in the browser, so a slow machine may need more.",
+        },
+        postClickChallengeMs: {
+          label: "Wait for a challenge after the click (ms)",
+          hint: "Some apps only raise their verification once the checkin control is pressed, and the dialog takes a moment to render. 0 checks once and moves on.",
+        },
+        confirmTimeoutMs: {
+          label: "Wait for the site to confirm (ms)",
+          hint: "After a widget is solved the site verifies it server-side; this bounds the wait for its success or failure wording to appear.",
+        },
+        settleMs: {
+          label: "Pause after a challenge clears (ms)",
+          hint: "Time to let a redirect or re-render finish before the page text is read.",
+        },
+        inAppStepMs: {
+          label: "Pause between in-app steps (ms)",
+          hint: "Gap between the steps configured on a Mini App action, enough for a dialog to be raised or a list to re-render.",
+        },
+        inAppSettleMs: {
+          label: "Pause after the last in-app step (ms)",
+          hint: "Time for the last step's request to round-trip before its result text is read.",
+        },
+        pollMs: {
+          label: "Challenge poll interval (ms)",
+          hint: "How often to check while a challenge is being worked. Lower notices the outcome sooner at the cost of reading the page more often.",
+        },
+        readyPollMs: {
+          label: "Boot poll interval (ms)",
+          hint: "How often to check whether a Mini App has finished booting.",
+        },
+        protocolTimeoutMs: {
+          label: "Single browser call ceiling (ms)",
+          hint: "Longest one call to the browser (CDP) may take. Puppeteer's own default is three minutes, long enough for one wedged call to spend a whole budget, so it is held tighter here.",
+        },
+        proxyCandidates: {
+          label: "Exits tried for a plain page",
+          hint: "How many exits are offered per attempt for a non-Mini-App Cloudflare page. Exits already refused in the same run are never offered again.",
+        },
+        maxPoolCandidates: {
+          label: "Ceiling when trying every proxy",
+          hint: "Most exits offered at once when a Mini App action has \"Try every proxy when refused\" on. The total browser budget still bounds how many are actually reached.",
+        },
+        maxProfiles: {
+          label: "Browser profiles kept",
+          hint: "How many per-exit browser profiles to keep (most recently used first), so cookies such as cf_clearance survive. Each is tens of MB on the data volume; 0 keeps none.",
+        },
+        blankTextLen: {
+          label: "Blank-page text length",
+          hint: "A page with less visible text than this counts as having rendered nothing — usually a browser or network fault — and the attempt fails rather than passing.",
+        },
+      },
     },
     adminCreds: "Admin Credentials",
     credSaved:

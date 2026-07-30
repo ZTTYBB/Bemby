@@ -1,4 +1,5 @@
 import { db } from "../db/database";
+import { cfTuning } from "../jobs/cfTuning";
 
 // Proxy sellers hand out lists that change over time -- addresses get replaced, plans
 // get resized. Rather than pasting each proxy into Settings by hand, a provider can be
@@ -269,9 +270,10 @@ export type ProxyCandidate = { id: string; label: string; url?: string };
 const CF_WINS_KEY = "cf_proxy_last_ok";
 // Cloudflare accepts a minority of exits, so a first run needs room to find one. A
 // refused attempt is cut short as soon as the page says so, keeping this affordable.
-const DEFAULT_CF_CANDIDATES = 8;
+// Both counts are configurable in Settings (cfTuning).
+const candidateCount = () => cfTuning().proxyCandidates;
 /** Sanity ceiling for callers that offer the whole pool, however large it has grown. */
-export const CF_MAX_CANDIDATES = 200;
+export const cfMaxCandidates = () => cfTuning().maxPoolCandidates;
 
 function readCfWins(): Record<string, string> {
   try {
@@ -348,7 +350,7 @@ export function cfProxyCandidatesFor(opts: {
   /** Ids of exits already tried; each proxy is offered once. */
   exclude?: Iterable<string>;
 }): ProxyCandidate[] {
-  const { primaryUrl, host, proxyId, tryAll = true, max = DEFAULT_CF_CANDIDATES } = opts;
+  const { primaryUrl, host, proxyId, tryAll = true, max = candidateCount() } = opts;
   const pool = readProxies();
   const tried = new Set(opts.exclude ?? []);
 
@@ -386,7 +388,7 @@ export function cfProxyCandidatesFor(opts: {
       seen.add(key);
       return true;
     })
-    .slice(0, Math.max(1, Math.min(max, CF_MAX_CANDIDATES)));
+    .slice(0, Math.max(1, Math.min(max, cfMaxCandidates())));
 }
 
 function readProxies(): BembyProxy[] {

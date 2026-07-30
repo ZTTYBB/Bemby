@@ -176,6 +176,53 @@
             style="font-size: 11px; margin-top: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap"
             >{{ cfTestReport }}</pre
           >
+
+          <!-- Browser timings and limits: defaults are what the solver ships with -->
+          <div style="border-top: 1px solid var(--border, #333); margin-top: 16px; padding-top: 12px">
+            <button class="btn btn-ghost btn-sm" @click="cfTuningOpen = !cfTuningOpen">
+              <i :class="cfTuningOpen ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"></i>
+              {{ t("settings.cfTuning.title") }}
+            </button>
+            <div v-if="cfTuningOpen" style="margin-top: 10px">
+              <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+                {{ t("settings.cfTuning.hint") }}
+              </p>
+              <div v-if="cfTuningMsg" class="success-msg">{{ cfTuningMsg }}</div>
+              <div v-if="cfTuningError" class="error-msg">{{ cfTuningError }}</div>
+              <div v-for="f in cfTuningFields" :key="f" class="form-group">
+                <label class="form-label">
+                  {{ t(`settings.cfTuning.fields.${f}.label`) }}
+                  <span style="font-weight: 400; color: #888">
+                    ({{ t("settings.cfTuning.default") }}: {{ cfTuningDefaults[f] }})
+                  </span>
+                </label>
+                <input
+                  v-model.number="cfTuningForm[f]"
+                  class="form-input"
+                  type="number"
+                  :min="cfTuningLimits[f]?.min"
+                  :max="cfTuningLimits[f]?.max"
+                  :placeholder="String(cfTuningDefaults[f])"
+                />
+                <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+                  {{ t(`settings.cfTuning.fields.${f}.hint`) }}
+                  <span v-if="cfTuningLimits[f]">
+                    {{ t("settings.cfTuning.range") }}: {{ cfTuningLimits[f].min }}–{{ cfTuningLimits[f].max }}
+                  </span>
+                </div>
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 12px">
+                <button class="btn btn-primary" :disabled="cfTuningSaving" @click="saveCfTuning">
+                  <i class="fa-solid fa-floppy-disk"></i>
+                  {{ cfTuningSaving ? t("common.saving") : t("common.save") }}
+                </button>
+                <button class="btn btn-ghost" :disabled="cfTuningSaving" @click="resetCfTuning">
+                  <i class="fa-solid fa-rotate-left"></i>
+                  {{ t("settings.cfTuning.resetBtn") }}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1472,6 +1519,7 @@ import { settingsApi, authApi, dataApi, aiSuppliersApi } from "../api/client";
 import type {
   ExportPayload,
   EncryptedEnvelope,
+  Settings,
   UAPreset,
   AiSupplier,
   Proxy,
@@ -1559,6 +1607,52 @@ const cfTesting = ref(false);
 const cfTestReport = ref("");
 const cfTestWarnings = ref<string[]>([]);
 const cfTestNotes = ref<string[]>([]);
+
+// Browser timings. The server sends the values in force, the shipped defaults and the
+// range each is held to, so this form needs no copy of any of them.
+type CfLimit = { min: number; max: number };
+const cfTuningOpen = ref(false);
+const cfTuningSaving = ref(false);
+const cfTuningMsg = ref("");
+const cfTuningError = ref("");
+const cfTuningForm = ref<Record<string, number>>({});
+const cfTuningDefaults = ref<Record<string, number>>({});
+const cfTuningLimits = ref<Record<string, CfLimit>>({});
+const cfTuningFields = computed(() => Object.keys(cfTuningDefaults.value));
+
+function loadCfTuning(s: Settings) {
+  const parse = <T,>(raw: string | undefined, fallback: T): T => {
+    try {
+      return raw ? (JSON.parse(raw) as T) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+  cfTuningDefaults.value = parse(s.cf_tuning_defaults, {} as Record<string, number>);
+  cfTuningLimits.value = parse(s.cf_tuning_limits, {} as Record<string, CfLimit>);
+  cfTuningForm.value = { ...cfTuningDefaults.value, ...parse(s.cf_tuning, {} as Record<string, number>) };
+}
+
+async function saveCfTuning() {
+  cfTuningMsg.value = "";
+  cfTuningError.value = "";
+  cfTuningSaving.value = true;
+  try {
+    // The server clamps and stores what it will actually use, then hands it back
+    const saved = await settingsApi.update({ cf_tuning: JSON.stringify(cfTuningForm.value) });
+    loadCfTuning(saved);
+    cfTuningMsg.value = t("settings.cfTuning.saved");
+  } catch (e: any) {
+    cfTuningError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
+  } finally {
+    cfTuningSaving.value = false;
+  }
+}
+
+function resetCfTuning() {
+  cfTuningForm.value = { ...cfTuningDefaults.value };
+  cfTuningMsg.value = t("settings.cfTuning.resetHint");
+}
 
 /** `force` downloads the browser again over an existing one, updating it. */
 async function installCfSolver(force = false) {
@@ -1927,6 +2021,7 @@ onMounted(async () => {
     form.ai_fallback_enabled = s.ai_fallback_enabled !== "false";
     cfChromiumInstalled.value = s.cf_chromium_installed === "true";
     cfChromiumVersion.value = s.cf_chromium_version ?? "";
+    loadCfTuning(s);
     notifyForm.username = s.notify_tg_username ?? "";
     try {
       if (s.notify_tg_events)
