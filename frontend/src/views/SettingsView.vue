@@ -131,10 +131,14 @@
             </strong>
             <span v-if="cfChromiumVersion" style="color: #888"> — {{ cfChromiumVersion }}</span>
           </p>
+          <p v-if="cfChromiumInstalled && !cfFontsInstalled" style="font-size: 12px; margin: -6px 0 12px; color: #c47f17">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            {{ t("settings.cfSolver.fontsMissing") }}<span v-if="cfFontsMissing"> ({{ cfFontsMissing }})</span>
+          </p>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
             <button
               class="btn btn-primary"
-              :disabled="cfInstalling || cfTesting || cfChromiumInstalled"
+              :disabled="cfInstalling || cfTesting || cfSolverComplete"
               @click="installCfSolver(false)"
             >
               <i class="fa-solid fa-download"></i>
@@ -1665,6 +1669,12 @@ const notifyError = ref("");
 // demand into the data dir (keeps the image small).
 const cfChromiumInstalled = ref(false);
 const cfChromiumVersion = ref("");
+const cfFontsInstalled = ref(false);
+const cfFontsMissing = ref("");
+// The fonts live in the data dir, not the image, so a browser installed by an older
+// version can be complete while they are still missing. Both have to be there before
+// the solver is fully set up.
+const cfSolverComplete = computed(() => cfChromiumInstalled.value && cfFontsInstalled.value);
 const cfInstalling = ref(false);
 const cfInstallMsg = ref("");
 const cfInstallError = ref("");
@@ -1729,9 +1739,14 @@ async function installCfSolver(force = false) {
     if (res.ok) {
       cfChromiumInstalled.value = true;
       cfChromiumVersion.value = res.version ?? "";
+      cfFontsInstalled.value = res.fontsInstalled === true;
+      if (res.fontsInstalled) cfFontsMissing.value = "";
       cfInstallMsg.value = res.version
         ? `${t("settings.cfSolver.installed")} — ${res.version}`
         : t("settings.cfSolver.installed");
+      // The browser is usable without them, so a font failure is a warning beside the
+      // success rather than an error in place of it.
+      if (!res.fontsInstalled) cfInstallError.value = t("settings.cfSolver.fontsFailed");
     } else {
       cfInstallError.value = res.message || res.output || t("settings.cfSolver.failed");
     }
@@ -2116,6 +2131,8 @@ onMounted(async () => {
     form.ai_fallback_enabled = s.ai_fallback_enabled !== "false";
     cfChromiumInstalled.value = s.cf_chromium_installed === "true";
     cfChromiumVersion.value = s.cf_chromium_version ?? "";
+    cfFontsInstalled.value = s.cf_fonts_installed === "true";
+    cfFontsMissing.value = s.cf_fonts_missing ?? "";
     loadCfTuning(s);
     notifyForm.username = s.notify_tg_username ?? "";
     try {

@@ -1014,6 +1014,10 @@ export type Settings = {
   cf_chromium_installed?: string;
   /** Server-computed: version of that browser, e.g. "Chromium 151.0.7922.34". */
   cf_chromium_version?: string;
+  /** Server-computed: "true" when the CJK/emoji faces are in the data dir. */
+  cf_fonts_installed?: string;
+  /** Server-computed: comma-separated faces still to download. */
+  cf_fonts_missing?: string;
   /** JSON: the browser timings and limits in force. */
   cf_tuning?: string;
   /** Server-computed JSON: the values the solver ships with. */
@@ -1040,6 +1044,7 @@ export const settingsApi = {
         version?: string;
         output?: string;
         message?: string;
+        fontsInstalled?: boolean;
       }>("/settings/cf-solver/install", { force })
       .then((r) => r.data),
   /** Launches the installed browser and reports what the page sees of itself. */

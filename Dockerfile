@@ -42,8 +42,21 @@ ENV NODE_OPTIONS="--max-old-space-size=512"
 #
 # xvfb gives the browser a virtual display so it can run headed (far better challenge
 # pass rate than headless). gosu lets the entrypoint fix data-dir ownership as root
-# and then drop to the non-root `node` user. The fonts cover Latin, CJK and emoji: a
-# browser that cannot draw a glyph measures text unlike any real one.
+# and then drop to the non-root `node` user.
+#
+# Only fonts-liberation ships here, as a Latin fallback that is always present: a browser
+# that cannot draw a glyph measures text unlike any real one. The three Noto packages this
+# used to install (fonts-noto-core, fonts-noto-cjk, fonts-noto-color-emoji) come to roughly
+# 140MB between them for a feature most installs never turn on, so the CJK and emoji faces
+# are downloaded into the data dir alongside the browser instead (see installCfFonts) and
+# survive an upgrade with it.
+#
+# Note that nothing replaces fonts-noto-core: scripts that are neither Latin nor CJK
+# (Cyrillic, Greek, Arabic, Devanagari) now render as boxes. That is the deliberate trade
+# for the size. If a challenge is ever found to need one, add the face to CF_FONTS so it
+# downloads on demand rather than putting the package back in the image.
+#
+# fontconfig is kept for its fc-cache, which that install runs.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
@@ -53,9 +66,35 @@ RUN apt-get update \
       libdrm2 libatspi2.0-0 libx11-6 libxcomposite1 libxdamage1 libxext6 \
       libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 \
       libasound2 libxcb1 libexpat1 libglib2.0-0 libudev1 \
-      fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
+      fontconfig fonts-liberation \
  && fc-cache -f \
  && rm -rf /var/lib/apt/lists/*
+
+# xvfb pulls libgl1 -> libglx-mesa0 -> libgl1-mesa-dri -> libllvm*: a software OpenGL
+# rasteriser that Chromium does not use, because it renders through its own bundled
+# SwiftShader/ANGLE. The LLVM runtime behind it is the bulk of it, ~100MB installed on its
+# own. They are hard dependencies, so dpkg has to be told to drop them anyway; the GL
+# dispatch library Xvfb links against (libgl1) stays.
+#
+# The LLVM runtime is matched by pattern rather than named: its package tracks the Debian
+# release (libllvm15 on bookworm), and a base-image bump must not quietly stop removing it.
+#
+# The smoke test is the guard: if removing the driver ever does stop the X server coming
+# up, the build fails here rather than every Cloudflare job failing with ECONNREFUSED.
+# The proof is the display socket, not the child's PID -- an Xvfb that died would still be
+# an unreaped zombie that `kill -0` reports as alive.
+RUN set -eu; \
+    purge="$(dpkg-query -W -f='${Package}\n' libgl1-mesa-dri 'libllvm*' 2>/dev/null || true)"; \
+    if [ -n "$purge" ]; then \
+      dpkg --purge --force-depends $purge; \
+    else \
+      echo "no Mesa/LLVM packages to purge; the base image may have changed"; \
+    fi; \
+    Xvfb :99 -screen 0 1280x800x24 -nolisten tcp & \
+    xvfb_pid=$!; \
+    sleep 3; \
+    test -S /tmp/.X11-unix/X99 || { echo "Xvfb did not come up after the Mesa purge"; exit 1; }; \
+    kill "$xvfb_pid" 2>/dev/null || true
 
 # puppeteer-core never downloads a browser of its own; the Playwright installer places
 # one under the data dir on demand and the app resolves it at launch.

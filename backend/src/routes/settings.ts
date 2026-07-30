@@ -5,8 +5,11 @@ import { SocksClient } from "socks";
 import { parseTgProxy } from "../jobs/runner";
 import { isBulkAccountManagementEnabled } from "../jobs/bulkAdd";
 import {
+  areCfFontsInstalled,
+  cfFontsStatus,
   chromiumVersion,
   installCfChromium,
+  installCfFonts,
   isChromiumInstalled,
   testBrowser,
 } from "../jobs/cloudflare";
@@ -107,6 +110,10 @@ function getClientSettings(): Record<string, string> {
   // Whether the on-demand Cloudflare-solver browser is present, and which build
   result.cf_chromium_installed = isChromiumInstalled() ? "true" : "false";
   result.cf_chromium_version = chromiumVersion() ?? "";
+  // The CJK/emoji faces are not in the image either; they sit beside the browser in the
+  // data dir. Reported separately so a browser that can only draw Latin is visible.
+  result.cf_fonts_installed = areCfFontsInstalled() ? "true" : "false";
+  result.cf_fonts_missing = cfFontsStatus().missing.join(", ");
   // The browser timings in force, alongside the shipped defaults and the range each is
   // held to, so the client can render every field without a second source of truth
   result.cf_tuning = JSON.stringify(cfTuning());
@@ -168,17 +175,21 @@ router.put("/", (req, res) => {
   res.json(getClientSettings());
 });
 
-// POST /cf-solver/install -- download Chromium on demand into the data dir so the
-// Cloudflare "I am not a bot" solver can run. Long-running (~170MB). `force` downloads
-// again over an existing browser, which is how it gets updated (or replaced when an
-// earlier version installed a different build).
+// POST /cf-solver/install -- download Chromium (~170MB) and the CJK/emoji faces (~30MB)
+// on demand into the data dir so the Cloudflare "I am not a bot" solver can run. Neither
+// is in the image, and the data dir is a volume, so both survive an upgrade. `force`
+// downloads again over an existing install, which is how they get updated.
+//
+// The fonts are reported but do not decide `ok`: with the image's Latin fallback the
+// browser still works, so a blocked font download is a warning, not a failed install.
 let cfInstalling = false;
 router.post("/cf-solver/install", async (req, res) => {
   const force = req.body?.force === true || req.query.force === "1";
-  if (isChromiumInstalled() && !force) {
+  if (isChromiumInstalled() && areCfFontsInstalled() && !force) {
     res.json({
       ok: true,
       installed: true,
+      fontsInstalled: true,
       version: chromiumVersion(),
       message: "Already installed",
     });
@@ -190,15 +201,21 @@ router.post("/cf-solver/install", async (req, res) => {
   }
   cfInstalling = true;
   try {
-    const result = await installCfChromium(force);
-    if (result.ok) {
+    // Only re-download a browser that is missing (or explicitly forced): an upgrade from an
+    // image that carried the fonts needs the fonts alone, not another 170MB of browser.
+    const browser = isChromiumInstalled() && !force
+      ? { ok: true, output: "Browser already installed" }
+      : await installCfChromium(force);
+    const fonts = await installCfFonts(force);
+    if (browser.ok) {
       db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('cf_solver_enabled', 'true')").run();
     }
     res.json({
-      ok: result.ok,
-      installed: result.ok,
-      version: result.ok ? chromiumVersion() : undefined,
-      output: result.output.slice(-1500),
+      ok: browser.ok,
+      installed: browser.ok,
+      fontsInstalled: fonts.ok,
+      version: browser.ok ? chromiumVersion() : undefined,
+      output: `${browser.output}\n\n--- fonts ---\n${fonts.output}`.slice(-1500),
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, message: err?.message ?? "Install failed" });
