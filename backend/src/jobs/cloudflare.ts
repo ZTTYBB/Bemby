@@ -589,31 +589,59 @@ const SUCCESS_RE =
 // always have exactly one), so it isn't tied to any one site's wording. Nothing is
 // clicked on a page full of unrelated controls (e.g. a Mini App panel with a nav
 // sidebar), where guessing would navigate away from the challenge.
+const VERIFY_LABEL_RE =
+  /verify|驗證|验证|continue|submit|確認|确认|start|begin|開始|开始|proceed/i;
+
+/**
+ * Which control to press to engage a verify portal's Turnstile, or null to press nothing.
+ *
+ * A verify portal is a near-empty page: a widget and a button. Anything with a site around
+ * it is not one, and guessing there presses the site's own controls -- a login form's
+ * "send verification code" reads exactly like a verify button, and pressing it submits the
+ * form with whatever is in it.
+ */
+export function verifyPortalChoice(labels: string[]): number | null {
+  if (labels.length > 3) return null;
+  const named = labels.findIndex((label) => VERIFY_LABEL_RE.test(label));
+  if (named >= 0) return named;
+  return labels.length === 1 ? 0 : null;
+}
+
+// Visible controls, in document order, shared by the two passes below so the index one
+// returns still means the same element to the other.
+const VISIBLE_CONTROLS_FN = `
+  function __visibleControls() {
+    return Array.prototype.slice
+      .call(document.querySelectorAll("button,a[href],[role=button],input[type=submit],input[type=button]"))
+      .filter(function (el) { return el.offsetParent !== null || el.getClientRects().length > 0; });
+  }
+`;
+
 async function clickVerifyButton(page: Page): Promise<boolean> {
+  const labels = (await page
+    .evaluate(
+      `(function () { ${VISIBLE_CONTROLS_FN}
+         return __visibleControls().map(function (el) { return el.textContent || el.value || ""; });
+       })()`,
+    )
+    .catch(() => null)) as string[] | null;
+  if (!labels) return false;
+
+  const at = verifyPortalChoice(labels);
+  if (at === null) return false;
+
   const sel = await page
-    .evaluate(() => {
-      const all = Array.from(
-        document.querySelectorAll("button,a[href],[role=button],input[type=submit],input[type=button]"),
-      ) as HTMLElement[];
-      const visible = all.filter((e) => e.offsetParent !== null || e.getClientRects().length > 0);
-      // A verify portal is a near-empty page: a widget and a button. Anything with a site
-      // around it is not one, and guessing there presses the site's own controls -- a
-      // login form's "send verification code" reads exactly like a verify button.
-      const portal = visible.length <= 3;
-      if (!portal) return null;
-      const byText = visible.find((e) =>
-        /verify|驗證|验证|continue|submit|確認|确认|start|begin|開始|开始|proceed/i.test(
-          e.textContent || (e as HTMLInputElement).value || "",
-        ),
-      );
-      const target = byText ?? (visible.length === 1 ? visible[0] : null);
-      if (!target) return null;
-      target.setAttribute("data-cf-click", "1");
-      return "[data-cf-click='1']";
-    })
+    .evaluate(
+      `(function () { ${VISIBLE_CONTROLS_FN}
+         var el = __visibleControls()[${at}];
+         if (!el) return null;
+         el.setAttribute("data-cf-click", "1");
+         return "[data-cf-click='1']";
+       })()`,
+    )
     .catch(() => null);
   if (!sel) return false;
-  return clickElement(page, sel);
+  return clickElement(page, sel as string);
 }
 
 
