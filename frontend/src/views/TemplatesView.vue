@@ -27,6 +27,13 @@
       </div>
     </div>
 
+    <div v-if="importNotice" class="success-msg" style="margin-bottom:12px">
+      {{ importNotice }}
+      <button class="btn btn-ghost btn-sm btn-icon" style="margin-left:8px" @click="importNotice = ''">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+
     <div class="card">
       <PaginationBar
         :page="page"
@@ -1007,6 +1014,7 @@ const actionMenuTpl = ref<JobTemplate | null>(null);
 const showImport = ref(false);
 const importJson = ref('');
 const importError = ref('');
+const importNotice = ref('');
 const importing = ref(false);
 const copiedTplId = ref<number | null>(null);
 
@@ -1909,14 +1917,25 @@ async function shareTemplate(tpl: JobTemplate) {
 function openImport() {
   importJson.value = '';
   importError.value = '';
+  importNotice.value = '';
   showImport.value = true;
 }
 
-function normaliseImportItem(item: Record<string, unknown>) {
+// A shared template carries `proxyId`, which only means something next to the proxy list
+// it came from. Keeping one this instance does not have would silently run the job with no
+// proxy at all, so it is dropped and reported.
+function normaliseImportItem(item: Record<string, unknown>): { item: Record<string, unknown>; droppedProxy: boolean } {
   if (typeof item.config === 'string') {
     try { item.config = JSON.parse(item.config); } catch { /* leave as-is */ }
   }
-  return item;
+  let droppedProxy = false;
+  const cfg = item.config as Record<string, unknown> | null | undefined;
+  const proxyId = cfg && typeof cfg === 'object' ? cfg.proxyId : undefined;
+  if (typeof proxyId === 'string' && proxyId && !proxiesList.value.some((p) => p.id === proxyId)) {
+    delete (cfg as Record<string, unknown>).proxyId;
+    droppedProxy = true;
+  }
+  return { item, droppedProxy };
 }
 
 async function doImport() {
@@ -1937,10 +1956,16 @@ async function doImport() {
 
   importing.value = true;
   try {
+    let droppedProxies = 0;
     for (const item of items) {
-      await templatesApi.create(normaliseImportItem(item) as Partial<JobTemplate>);
+      const { item: normalised, droppedProxy } = normaliseImportItem(item);
+      if (droppedProxy) droppedProxies++;
+      await templatesApi.create(normalised as Partial<JobTemplate>);
     }
     showImport.value = false;
+    if (droppedProxies) {
+      importNotice.value = t('templates.importProxyDropped').replace('{n}', String(droppedProxies));
+    }
     await loadTemplates();
   } catch (err: any) {
     importError.value = err.response?.data?.error ?? t('common.saveFailed');

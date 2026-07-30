@@ -30,8 +30,14 @@ export const EXPORT_EXCLUDED_SETTINGS = new Set([
   'ai_default_model_id',
 ]);
 
-// Settings whose presence forces the export to be encrypted.
-export const SENSITIVE_SETTING_KEYS = ['default_tg_api_hash', 'proxies'];
+// Settings whose presence forces the export to be encrypted. Proxy entries carry their
+// credentials in the URL, and a provider entry carries the seller's API token.
+export const SENSITIVE_SETTING_KEYS = [
+  'default_tg_api_hash',
+  'proxies',
+  'proxy_providers',
+  'webshare_api_key',
+];
 
 // Config keys that carry a credential (e.g. Emby login) inside a job/template config blob.
 const SENSITIVE_CONFIG_KEYS = ['password', 'username'];
@@ -223,6 +229,61 @@ export type ExportPayload = {
   settings: Record<string, string>;
 };
 
+/** Ids of the proxies currently configured, for validating references against. */
+function configuredProxyIds(): Set<string> {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'proxies'").get() as
+    | { value: string }
+    | undefined;
+  try {
+    const list = JSON.parse(row?.value ?? '[]') as Array<{ id?: string }>;
+    return new Set(list.map((p) => p.id).filter((id): id is string => !!id));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Drops proxy references that point at proxies this instance does not have: the account
+ * column, and the `proxyId` inside job and template configs. Returns how many were
+ * cleared. A dangling reference is worse than none, because it silently resolves to no
+ * proxy at all instead of the one the job was set up with.
+ */
+export function clearDanglingProxyRefs(): number {
+  const known = configuredProxyIds();
+  let cleared = 0;
+
+  const accounts = db
+    .prepare("SELECT id, proxy_id FROM tg_accounts WHERE proxy_id IS NOT NULL AND proxy_id != ''")
+    .all() as Array<{ id: number; proxy_id: string }>;
+  for (const a of accounts) {
+    if (known.has(a.proxy_id)) continue;
+    db.prepare('UPDATE tg_accounts SET proxy_id = NULL WHERE id = ?').run(a.id);
+    cleared++;
+  }
+
+  for (const table of ['jobs', 'job_templates'] as const) {
+    const rows = db
+      .prepare(`SELECT id, config FROM ${table} WHERE config IS NOT NULL AND config LIKE '%proxyId%'`)
+      .all() as Array<{ id: number; config: string }>;
+    for (const row of rows) {
+      let cfg: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(row.config);
+        cfg = typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
+      } catch {
+        continue;
+      }
+      const proxyId = cfg?.proxyId;
+      if (typeof proxyId !== 'string' || !proxyId || known.has(proxyId)) continue;
+      delete cfg.proxyId;
+      db.prepare(`UPDATE ${table} SET config = ? WHERE id = ?`).run(JSON.stringify(cfg), row.id);
+      cleared++;
+    }
+  }
+
+  return cleared;
+}
+
 router.post('/export', (req, res) => {
   const { secret } = req.body as { secret?: string };
 
@@ -360,7 +421,7 @@ router.post('/import', async (req, res) => {
     }
   }
 
-  const results = { accountsImported: 0, accountsSkipped: 0, templatesImported: 0, jobsImported: 0, aiSuppliersImported: 0, aiModelsImported: 0, settingsUpdated: 0 };
+  const results = { accountsImported: 0, accountsSkipped: 0, templatesImported: 0, jobsImported: 0, aiSuppliersImported: 0, aiModelsImported: 0, settingsUpdated: 0, proxyRefsCleared: 0 };
 
   try {
     db.transaction(() => {
@@ -525,6 +586,12 @@ router.post('/import', async (req, res) => {
         if (typeof value === 'string') { stmt.run(key, value); results.settingsUpdated++; }
       }
     }
+
+    // A proxy reference is an id that only means something next to the proxy list it came
+    // from: a backup taken without proxies, or one imported into an instance with its own,
+    // leaves accounts and jobs pointing at nothing. That reads as "no proxy" at run time
+    // rather than as an error, so the dangling references are cleared here and counted.
+    results.proxyRefsCleared = clearDanglingProxyRefs();
     })();
   } catch (err) {
     // A malformed backup can throw inside the transaction (bad bind value,

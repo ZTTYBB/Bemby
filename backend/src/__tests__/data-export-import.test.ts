@@ -302,6 +302,16 @@ describe('exportRequiresEncryption -- forces encryption for any credential', () 
     expect(exportRequiresEncryption({ ...base, settings: { proxies: 'socks5://u:p@host:1080' } })).toBe(true);
   });
 
+  it('is true when settings contain a proxy provider token (regression: was plaintext)', () => {
+    expect(
+      exportRequiresEncryption({
+        ...base,
+        settings: { proxy_providers: '[{"id":"webshare","type":"webshare","apiKey":"tok"}]' },
+      }),
+    ).toBe(true);
+    expect(exportRequiresEncryption({ ...base, settings: { webshare_api_key: 'tok' } })).toBe(true);
+  });
+
   it('is true when a job config embeds an Emby password (regression: was plaintext)', () => {
     const jobs = [{ config: JSON.stringify({ username: 'u', password: 'p' }) }] as ExportPayload['jobs'];
     expect(exportRequiresEncryption({ ...base, jobs })).toBe(true);
