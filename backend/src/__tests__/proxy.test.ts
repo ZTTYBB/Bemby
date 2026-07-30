@@ -96,7 +96,9 @@ describe('runJob proxy resolution — checkin', () => {
     expect(args[10]).toBeUndefined();
   });
 
-  it('resolves proxy from job config and passes TgProxy to runCheckin', async () => {
+  // Telegram must exit where the session was created -- the account's proxy -- or one
+  // auth key is seen on two IPs and Telegram answers with AUTH_KEY_DUPLICATED.
+  it('keeps Telegram off a job-config proxy, handing it to the browser instead', async () => {
     vi.mocked(runCheckin).mockResolvedValue(stubLog as any);
 
     vi.mocked(db.prepare).mockReturnValue({
@@ -104,17 +106,18 @@ describe('runJob proxy resolution — checkin', () => {
     } as any);
 
     const job = makeCheckinJob({ config: JSON.stringify({ proxyId: 'px1' }) });
-    await runJob(job, makeAccount());
+    await runJob(job, makeAccount()); // account has no proxy: login went out direct
 
-    const tgProxy = vi.mocked(runCheckin).mock.calls[0][10];
-    expect(tgProxy).toMatchObject({ ip: 'proxy.local', port: 1080, socksType: 5 });
+    expect(vi.mocked(runCheckin).mock.calls[0][10]).toBeUndefined();
+    // 16th argument (index 15) is the browser proxy URL
+    expect(vi.mocked(runCheckin).mock.calls[0][15]).toBe('socks5://proxy.local:1080');
   });
 
-  it('resolves proxy from template config in preference to job config', async () => {
+  it('keeps Telegram off a template proxy, handing it to the browser instead', async () => {
     vi.mocked(runCheckin).mockResolvedValue(stubLog as any);
 
     vi.mocked(db.prepare).mockImplementation((sql: string) => ({
-      get: vi.fn().mockImplementation((arg: unknown) => {
+      get: vi.fn().mockImplementation(() => {
         if (sql.includes('job_templates')) return { config: JSON.stringify({ proxyId: 'tpl-px' }) };
         // settings lookup
         return { value: JSON.stringify([
@@ -127,19 +130,19 @@ describe('runJob proxy resolution — checkin', () => {
     const job = makeCheckinJob({ templateId: 42, config: JSON.stringify({ proxyId: 'job-px' }) });
     await runJob(job, makeAccount());
 
-    const tgProxy = vi.mocked(runCheckin).mock.calls[0][10];
-    expect(tgProxy).toMatchObject({ ip: 'tpl.proxy' });
+    expect(vi.mocked(runCheckin).mock.calls[0][10]).toBeUndefined();
+    expect(vi.mocked(runCheckin).mock.calls[0][15]).toBe('socks5://tpl.proxy:1080');
   });
 
-  it('does not pass a TgProxy when the proxy URL is HTTP (not SOCKS)', async () => {
+  it('does not pass a TgProxy when the account proxy URL is HTTP (not SOCKS)', async () => {
     vi.mocked(runCheckin).mockResolvedValue(stubLog as any);
 
     vi.mocked(db.prepare).mockReturnValue({
       get: vi.fn().mockReturnValue({ value: JSON.stringify([{ id: 'http-px', url: 'http://proxy.local:3128' }]) }),
     } as any);
 
-    const job = makeCheckinJob({ config: JSON.stringify({ proxyId: 'http-px' }) });
-    await runJob(job, makeAccount());
+    const job = makeCheckinJob();
+    await runJob(job, { ...makeAccount(), proxyId: 'http-px' });
 
     const tgProxy = vi.mocked(runCheckin).mock.calls[0][10];
     expect(tgProxy).toBeUndefined();
@@ -147,7 +150,21 @@ describe('runJob proxy resolution — checkin', () => {
 });
 
 describe('runJob proxy resolution — custom', () => {
-  it('passes TgProxy to runCustom when socks5 proxy is configured', async () => {
+  it('passes the account TgProxy to runCustom when it is socks5', async () => {
+    vi.mocked(runCustom).mockResolvedValue({ steps: [] } as any);
+
+    vi.mocked(db.prepare).mockReturnValue({
+      get: vi.fn().mockReturnValue({ value: JSON.stringify([{ id: 'cp1', url: 'socks5://custom.proxy:1080' }]) }),
+    } as any);
+
+    const job = makeCheckinJob({ jobType: 'custom', config: JSON.stringify({ actions: [] }) });
+    await runJob(job, { ...makeAccount(), proxyId: 'cp1' });
+
+    const tgProxy = vi.mocked(runCustom).mock.calls[0][6];
+    expect(tgProxy).toMatchObject({ ip: 'custom.proxy', port: 1080, socksType: 5 });
+  });
+
+  it('gives a job-config proxy to the browser only, never to Telegram', async () => {
     vi.mocked(runCustom).mockResolvedValue({ steps: [] } as any);
 
     vi.mocked(db.prepare).mockReturnValue({
@@ -160,8 +177,9 @@ describe('runJob proxy resolution — custom', () => {
     });
     await runJob(job, makeAccount());
 
-    const tgProxy = vi.mocked(runCustom).mock.calls[0][6];
-    expect(tgProxy).toMatchObject({ ip: 'custom.proxy', port: 1080, socksType: 5 });
+    expect(vi.mocked(runCustom).mock.calls[0][6]).toBeUndefined();
+    // 9th argument (index 8) is the browser proxy URL
+    expect(vi.mocked(runCustom).mock.calls[0][8]).toBe('socks5://custom.proxy:1080');
   });
 });
 
@@ -205,15 +223,25 @@ describe('runJob proxy resolution — account proxy priority (checkin)', () => {
     expect(tgProxy).toMatchObject({ ip: 'acct.proxy' });
   });
 
-  it('falls back to job config proxy when account proxyId is null', async () => {
+  it('connects direct when the account has no proxy, whatever the job carries', async () => {
     vi.mocked(runCheckin).mockResolvedValue(stubLog as any);
     vi.mocked(db.prepare).mockReturnValue({ get: vi.fn().mockReturnValue({ value: ALL_PROXIES }) } as any);
 
     const job = makeCheckinJob({ config: JSON.stringify({ proxyId: 'job-px' }) });
-    await runJob(job, makeAccount()); // proxyId: null
+    await runJob(job, makeAccount()); // proxyId: null -- as the login was
 
-    const tgProxy = vi.mocked(runCheckin).mock.calls[0][10];
-    expect(tgProxy).toMatchObject({ ip: 'job.proxy' });
+    expect(vi.mocked(runCheckin).mock.calls[0][10]).toBeUndefined();
+    expect(vi.mocked(runCheckin).mock.calls[0][15]).toBe('socks5://job.proxy:1080');
+  });
+
+  it('sends the browser through the account proxy when the job names none', async () => {
+    vi.mocked(runCheckin).mockResolvedValue(stubLog as any);
+    vi.mocked(db.prepare).mockReturnValue({ get: vi.fn().mockReturnValue({ value: ALL_PROXIES }) } as any);
+
+    await runJob(makeCheckinJob(), { ...makeAccount(), proxyId: 'acct-px' });
+
+    expect(vi.mocked(runCheckin).mock.calls[0][10]).toMatchObject({ ip: 'acct.proxy' });
+    expect(vi.mocked(runCheckin).mock.calls[0][15]).toBe('socks5://acct.proxy:1080');
   });
 
   it('passes no proxy when account proxyId is null and job has no proxy', async () => {

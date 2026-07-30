@@ -547,6 +547,8 @@ const zh = {
     libraryHint: "优先仅从指定媒体库中挑选内容（含续播/顺序播放），可填写媒体库名称或其序号（从 1 开始）。若找不到该媒体库，或库内没有可播放内容，则回退到整个服务器。",
     labelProxy: "代理",
     proxyNone: "不使用代理",
+    proxyBrowserOnlyHint:
+      "此代理用于浏览器（Cloudflare 验证 / 小程序）。Telegram 连接始终使用账户上的代理，与登录时保持一致；若两者不同会导致同一会话出现两个 IP，触发 AUTH_KEY_DUPLICATED 并使会话失效。要让 Telegram 也走某个代理，请在账户上设置该代理（必要时重新登录）。",
     playbackRulesHint:
       "播放从剧集的随机 5–10% 位置开始，时长为设定时间加上 0–10% 的随机延长。",
     labelCheckinButton: "签到按钮文字",
@@ -1644,6 +1646,8 @@ const en: typeof zh = {
       "Prefer content only from this library (including resume / Sequence Play). Enter the library name or its index (starting from 1). If it can't be matched, or the library has nothing to play, it falls back to the whole server.",
     labelProxy: "Proxy",
     proxyNone: "No proxy",
+    proxyBrowserOnlyHint:
+      "Used by the browser (Cloudflare checks / Mini Apps). The Telegram connection always follows the proxy set on the account, matching what login used: two exits for one session is what Telegram answers with AUTH_KEY_DUPLICATED, invalidating it. To route Telegram through a proxy, set it on the account (and re-authenticate if needed).",
     playbackRulesHint:
       "Playback starts at a random 5–10% into the episode. Duration is the set time plus 0–10% random extra.",
     labelCheckinButton: "Check-in Button Text",
