@@ -783,6 +783,7 @@
               <option value="">{{ t('jobs.proxyNone') }}</option>
               <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
+            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.proxyBrowserOnlyHint') }}</div>
           </div>
 
         </div><!-- end modal-body -->
