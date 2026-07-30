@@ -5,9 +5,9 @@ import { StringSession } from 'telegram/sessions';
 import type { TgProxy } from '../types';
 import type { TgDeviceParams } from '../auth/tgAuth';
 import { NewMessage, NewMessageEvent, Raw } from 'telegram/events';
-import { loadCheckinUrl } from './cloudflare';
+import { cfRefusedFor, loadCheckinUrl, newCfRunState, type CfRunState } from './cloudflare';
 import { openableButtonUrl, webButtonOf, type WebButton } from '../tg/miniApp';
-import { cfProxyCandidates, rememberCfProxy } from '../tg/proxyProviders';
+import { cfProxyCandidatesFor, rememberCfProxy } from '../tg/proxyProviders';
 
 export type CheckinAttemptLog = {
   attempt: number;
@@ -880,6 +880,9 @@ export async function runCheckin(
   failContains?: string,
   cfChallenge = false,
   webProxyUrl?: string,
+  // Shared across the runner's retries, so an exit refused earlier in this run is not
+  // offered again instead of the same few being cycled
+  cfRun: CfRunState = newCfRunState(),
 ): Promise<CheckinAttemptLog> {
   const attemptStart = Date.now();
   const log: CheckinAttemptLog = {
@@ -924,11 +927,18 @@ export async function runCheckin(
         return '';
       }
     })();
+    const refused = cfRefusedFor(cfRun, host);
+    const candidates = cfProxyCandidatesFor({ primaryUrl: webProxyUrl, host, exclude: refused });
+    if (!candidates.length) {
+      throw new Error(`Every available proxy (${refused.size}) was already refused for ${host}`);
+    }
     const result = await loadCheckinUrl(url, webProxyUrl, {
       miniApp: log.cfMiniApp,
-      // Cloudflare refuses some exit IPs outright, so the rest of the pool stands by
-      proxyCandidates: cfProxyCandidates(webProxyUrl, host),
+      // Cloudflare refuses some exit IPs outright, so the rest of the pool stands by --
+      // minus the ones this run has already had refused
+      proxyCandidates: candidates,
     });
+    for (const id of result.refusedProxyIds ?? []) refused.add(id);
     log.cfHost = result.finalHost;
     log.cfChallenged = result.challenged;
     log.cfPassed = result.ok;

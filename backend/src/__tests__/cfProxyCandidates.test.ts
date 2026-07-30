@@ -61,4 +61,38 @@ describe("cfProxyCandidatesFor", () => {
   it("caps how many exits are offered", () => {
     expect(cfProxyCandidatesFor({ primaryUrl: POOL[0].url, max: 2 })).toHaveLength(2);
   });
+
+  it("offers an exit once: refused ones are not repeated on a retry", () => {
+    const first = cfProxyCandidatesFor({ primaryUrl: POOL[0].url, max: 2 });
+    expect(first.map((c) => c.id)).toEqual(["p1", "p2"]);
+    const second = cfProxyCandidatesFor({
+      primaryUrl: POOL[0].url,
+      max: 2,
+      exclude: first.map((c) => c.id),
+    });
+    expect(second.map((c) => c.id)).toEqual(["p3"]);
+    expect(
+      cfProxyCandidatesFor({ primaryUrl: POOL[0].url, exclude: ["p1", "p2", "p3"] }),
+    ).toEqual([]);
+  });
+
+  it("reaches exits sitting past one attempt's window, imports included", () => {
+    const big = [
+      ...POOL,
+      { id: "pp:webshare:1", name: "Webshare A", url: "http://u:p@4.4.4.4:8080" },
+      { id: "pp:webshare:2", name: "Webshare B", url: "http://u:p@5.5.5.5:8080" },
+    ];
+    store.set("proxies", JSON.stringify(big));
+    const first = cfProxyCandidatesFor({ primaryUrl: POOL[0].url, max: 3 });
+    const second = cfProxyCandidatesFor({
+      primaryUrl: POOL[0].url,
+      max: 3,
+      exclude: first.map((c) => c.id),
+    });
+    expect(second.map((c) => c.id)).toEqual(["pp:webshare:1", "pp:webshare:2"]);
+  });
+
+  it("drops a pinned exit that has already been refused", () => {
+    expect(cfProxyCandidatesFor({ proxyId: "p3", tryAll: false, exclude: ["p3"] })).toEqual([]);
+  });
 });

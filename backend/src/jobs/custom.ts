@@ -21,10 +21,21 @@ import {
   escapeHtml,
   callAI,
 } from "./checkin";
-import { loadCheckinUrl, type LoadOptions } from "./cloudflare";
+import {
+  cfRefusedFor,
+  loadCheckinUrl,
+  newCfRunState,
+  type CfRunState,
+  type LoadOptions,
+} from "./cloudflare";
 import { openableButtonUrl, webButtonOf, type WebButton } from "../tg/miniApp";
-import { cfProxyCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
+import { CF_MAX_CANDIDATES, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
 import type { CustomConfig, CustomStepLog } from "../types";
+
+// Browser time a Mini App action gets across all its attempts when none is configured.
+const MINI_APP_BUDGET_MS = 300_000;
+// Below this there is no point launching the browser again.
+const MIN_MINI_APP_MS = 15_000;
 
 export type CustomJobLog = {
   steps: CustomStepLog[];
@@ -40,6 +51,7 @@ async function passCloudflare(
   webProxyUrl?: string,
   miniApp = false,
   extra: Pick<LoadOptions, "inAppClicks" | "solveQuestion" | "refreshUrl"> = {},
+  cfRun: CfRunState = newCfRunState(),
 ): Promise<string> {
   if (!cfChallenge) {
     throw new Error(
@@ -53,16 +65,23 @@ async function passCloudflare(
       return "";
     }
   })();
+  const refused = cfRefusedFor(cfRun, host);
+  const candidates = cfProxyCandidatesFor({ primaryUrl: webProxyUrl, host, exclude: refused });
+  if (!candidates.length) {
+    throw new Error(`Every available proxy (${refused.size}) was already refused for ${host}`);
+  }
   const cf = await loadCheckinUrl(url, webProxyUrl, {
     miniApp,
     ...extra,
     // A Mini App runs entirely inside the browser, so keep what it saw
     screenshot: miniApp,
-    // Cloudflare refuses some exit IPs outright, so the rest of the pool stands by
-    proxyCandidates: cfProxyCandidates(webProxyUrl, host),
+    // Cloudflare refuses some exit IPs outright, so the rest of the pool stands by --
+    // minus the ones this run has already had refused
+    proxyCandidates: candidates,
   });
   step.cfProxy = cf.proxyLabel;
   step.cfAttempts = cf.attempts;
+  for (const id of cf.refusedProxyIds ?? []) refused.add(id);
   if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
   step.cfHost = cf.finalHost;
   step.cfChallenged = cf.challenged;
@@ -90,13 +109,14 @@ async function followUpCfText(
   responses: { msg: Api.Message }[],
   step: CustomStepLog,
   webProxyUrl?: string,
+  cfRun: CfRunState = newCfRunState(),
 ): Promise<string> {
   const answerUrl = (answer as any)?.url as string | undefined;
-  if (answerUrl) return passCloudflare(answerUrl, true, step, webProxyUrl);
+  if (answerUrl) return passCloudflare(answerUrl, true, step, webProxyUrl, false, {}, cfRun);
 
   const hit = responses.map((r) => ({ msg: r.msg, web: findUrlButton(r.msg) })).find((h) => h.web);
   if (!hit?.web) return '';
-  return (await openWebButton(client, hit.web, peer, hit.msg, true, step, webProxyUrl)).text;
+  return (await openWebButton(client, hit.web, peer, hit.msg, true, step, webProxyUrl, cfRun)).text;
 }
 
 type WebButtonOutcome = {
@@ -114,6 +134,7 @@ async function openWebButton(
   cfChallenge: boolean | undefined,
   step: CustomStepLog,
   webProxyUrl?: string,
+  cfRun: CfRunState = newCfRunState(),
 ): Promise<WebButtonOutcome> {
   // A `?start=` deep link is followed the way a real client does -- by sending the
   // command to that bot -- not by loading a page. Group bots use these to move a
@@ -132,7 +153,9 @@ async function openWebButton(
       `Telegram would not sign the Mini App behind "${web.text}"; the app cannot be opened logged in`,
     );
   }
-  return { text: await passCloudflare(url, cfChallenge, step, webProxyUrl, web.miniApp) };
+  return {
+    text: await passCloudflare(url, cfChallenge, step, webProxyUrl, web.miniApp, {}, cfRun),
+  };
 }
 
 export class CustomJobError extends Error {
@@ -643,6 +666,9 @@ export async function runCustom(
   proxy?: TgProxy,
   deviceParams?: TgDeviceParams,
   webProxyUrl?: string,
+  // Shared with the runner's outer retries, so an exit refused on an earlier attempt of
+  // this run is not offered again and an action's browser budget spans its retries
+  cfRun: CfRunState = newCfRunState(),
 ): Promise<CustomJobLog> {
   const log: CustomJobLog = { steps: [] };
   const jobMaxRetries = config.maxRetries ?? 1;
@@ -1117,7 +1143,7 @@ export async function runCustom(
                       const web = webButtonOf(btn);
                       if (web) {
                         const opened = await openWebButton(
-                          client, web, botUsername, buttonsMsg, action.cfChallenge, step, webProxyUrl,
+                          client, web, botUsername, buttonsMsg, action.cfChallenge, step, webProxyUrl, cfRun,
                         );
                         const cfText = opened.text;
                         // Following a deep link starts a private chat with that bot;
@@ -1296,7 +1322,7 @@ export async function runCustom(
                       // "Verify" the user handles in a later action) must be ignored.
                       if (action.cfChallenge) {
                         cfText = await followUpCfText(
-                          client, botUsername, answer, responses, step, webProxyUrl,
+                          client, botUsername, answer, responses, step, webProxyUrl, cfRun,
                         );
                       }
 
@@ -1499,7 +1525,7 @@ export async function runCustom(
                       const web = webButtonOf(btn);
                       if (web) {
                         const opened = await openWebButton(
-                          client, web, entity, buttonsMsg, action.cfChallenge, step, webProxyUrl,
+                          client, web, entity, buttonsMsg, action.cfChallenge, step, webProxyUrl, cfRun,
                         );
                         const cfText = opened.text;
                         // Following a deep link starts a private chat with that bot;
@@ -1670,7 +1696,7 @@ export async function runCustom(
                       // "Verify" the user handles in a later action) must be ignored.
                       if (action.cfChallenge) {
                         cfText = await followUpCfText(
-                          client, entity, answer, responses, step, webProxyUrl,
+                          client, entity, answer, responses, step, webProxyUrl, cfRun,
                         );
                       }
 
@@ -2334,10 +2360,41 @@ export async function runCustom(
                     return "";
                   }
                 })();
+
+                // The budget covers this action's whole browser life, retries included
+                const budgetMs =
+                  action.maxWaitMs && action.maxWaitMs > 0 ? action.maxWaitMs : MINI_APP_BUDGET_MS;
+                const budgetKey = `mini:${i}`;
+                const actionDeadline = cfRun.deadlines.get(budgetKey) ?? Date.now() + budgetMs;
+                cfRun.deadlines.set(budgetKey, actionDeadline);
+                const budgetLeft = actionDeadline - Date.now();
+                if (budgetLeft < MIN_MINI_APP_MS) {
+                  throw new Error(
+                    `Browser time for this action is spent (${Math.round(budgetMs / 1000)}s budget)`,
+                  );
+                }
+
+                const refused = cfRefusedFor(cfRun, cfHost);
+                const candidates = cfProxyCandidatesFor({
+                  primaryUrl: webProxyUrl,
+                  host: cfHost,
+                  proxyId: action.proxyId,
+                  tryAll: action.tryAllProxies ?? true,
+                  // An exit that was already refused this run is not offered again, so a
+                  // retry moves further into the pool instead of replaying the same few
+                  exclude: refused,
+                  max: action.tryAllProxies === false ? 1 : CF_MAX_CANDIDATES,
+                });
+                if (!candidates.length) {
+                  throw new Error(
+                    `Every available proxy (${refused.size}) was already refused for ${cfHost}`,
+                  );
+                }
+
                 const cf = await loadCheckinUrl(url, webProxyUrl, {
                   miniApp: true,
                   inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
-                  maxWaitMs: action.maxWaitMs,
+                  maxWaitMs: budgetLeft,
                   // The browser side is invisible from here, so keep what it saw
                   screenshot: true,
                   solveQuestion: async (question) => {
@@ -2352,12 +2409,7 @@ export async function runCustom(
                   },
                   // Cloudflare judges the exit IP too, so the action can pin an exit of
                   // its own and decide whether the rest of the pool stands by
-                  proxyCandidates: cfProxyCandidatesFor({
-                    primaryUrl: webProxyUrl,
-                    host: cfHost,
-                    proxyId: action.proxyId,
-                    tryAll: action.tryAllProxies ?? true,
-                  }),
+                  proxyCandidates: candidates,
                   // Init data ages, so each attempt gets a freshly signed URL
                   refreshUrl: async () =>
                     (await openableButtonUrl(client, hit!.web, target, hit!.msg)).url,
@@ -2372,6 +2424,7 @@ export async function runCustom(
                 step.cfNavError = cf.navError;
                 step.cfTrace = cf.trace;
                 step.cfScreenshot = cf.screenshot;
+                for (const id of cf.refusedProxyIds ?? []) refused.add(id);
                 if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
                 step.responseHtml = escapeHtml(cf.text.slice(0, 2000)).replace(/\n/g, "<br>");
                 if (!cf.ok) {

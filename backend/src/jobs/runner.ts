@@ -9,6 +9,7 @@ import type {
 } from "../types";
 import { runCheckin, CheckinError, type CheckinAttemptLog } from "./checkin";
 import { runEmbywatch } from "./embywatch";
+import { newCfRunState } from "./cloudflare";
 import { runCustom, CustomJobError, type CustomJobLog } from "./custom";
 import { runAutoreg, AutoregJobError, type AutoregJobLog } from "./autoreg";
 import { db } from "../db/database";
@@ -112,6 +113,9 @@ export async function runJob(
   signal?: AbortSignal,
 ): Promise<void> {
   let lastError: unknown;
+  // Browser exits refused during this run, shared by every attempt below: retrying a
+  // proxy Cloudflare has already turned down only replays the refusal
+  const cfRun = newCfRunState();
 
   for (let attempt = 1; attempt <= job.retryMax; attempt++) {
     if (signal?.aborted) throw new Error("Job cancelled");
@@ -168,6 +172,7 @@ export async function runJob(
             checkinCfg.failContains,
             checkinCfg.cfChallenge ?? false,
             checkinProxyUrl,
+            cfRun,
           );
           detailLogs?.push(log);
           break;
@@ -218,6 +223,7 @@ export async function runJob(
             customProxy,
             customDevice,
             customProxyUrl,
+            cfRun,
           );
           detailLogs?.push(customLog);
           break;
