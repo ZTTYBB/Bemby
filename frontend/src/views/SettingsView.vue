@@ -165,6 +165,12 @@
           <div v-if="cfTestWarnings.length" class="error-msg" style="margin-top: 8px">
             <div v-for="w in cfTestWarnings" :key="w">• {{ w }}</div>
           </div>
+          <div
+            v-if="cfTestNotes.length"
+            style="font-size: 11px; color: #888; margin-top: 8px"
+          >
+            <div v-for="n in cfTestNotes" :key="n">• {{ n }}</div>
+          </div>
           <pre
             v-if="cfTestReport"
             style="font-size: 11px; margin-top: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap"
@@ -1617,6 +1623,7 @@ const cfInstallError = ref("");
 const cfTesting = ref(false);
 const cfTestReport = ref("");
 const cfTestWarnings = ref<string[]>([]);
+const cfTestNotes = ref<string[]>([]);
 
 /** `force` downloads the browser again over an existing one, updating it. */
 async function installCfSolver(force = false) {
@@ -1648,12 +1655,20 @@ async function testCfSolver() {
   cfInstallError.value = "";
   cfTestReport.value = "";
   cfTestWarnings.value = [];
+  cfTestNotes.value = [];
   cfTesting.value = true;
   try {
     const res = await settingsApi.testCfSolver();
     cfTestWarnings.value = res.warnings ?? [];
+    cfTestNotes.value = res.notes ?? [];
     cfTestReport.value = JSON.stringify(
-      { ok: res.ok, version: res.version, executable: res.executable, ...res.env },
+      {
+        ok: res.ok,
+        version: res.version,
+        executable: res.executable,
+        exitCountry: res.exitCountry,
+        ...res.env,
+      },
       null,
       2,
     );

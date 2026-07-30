@@ -1045,6 +1045,8 @@ export const settingsApi = {
         error?: string;
         env?: Record<string, unknown>;
         warnings?: string[];
+        notes?: string[];
+        exitCountry?: string;
       }>("/settings/cf-solver/test")
       .then((r) => r.data),
   getProxyProviders: () =>
