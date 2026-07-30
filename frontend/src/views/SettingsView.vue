@@ -130,6 +130,16 @@
               {{ cfChromiumInstalled ? t("settings.cfSolver.stateInstalled") : t("settings.cfSolver.stateNotInstalled") }}
             </strong>
             <span v-if="cfChromiumVersion" style="color: #888"> — {{ cfChromiumVersion }}</span>
+            <span v-if="cfChromiumTier" style="color: #888">
+              ({{ cfChromiumTier === "keyed" ? t("settings.cfSolver.tierKeyed") : t("settings.cfSolver.tierFree") }})
+            </span>
+          </p>
+          <p v-if="cfChromiumPath" style="font-size: 11px; color: #888; margin: -6px 0 12px; word-break: break-all">
+            {{ cfChromiumPath }}
+          </p>
+          <p v-if="cfKeyedPending" style="font-size: 12px; margin: -6px 0 12px; color: #c47f17">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            {{ t("settings.cfSolver.keyedPending") }}
           </p>
           <p v-if="cfChromiumInstalled && !cfFontsInstalled" style="font-size: 12px; margin: -6px 0 12px; color: #c47f17">
             <i class="fa-solid fa-triangle-exclamation"></i>
@@ -1737,20 +1747,28 @@ const notifyError = ref("");
 // demand into the data dir (keeps the image small).
 const cfChromiumInstalled = ref(false);
 const cfChromiumVersion = ref("");
+// Which build is on disk ("keyed" or "free"), and whether a stored licence key unlocks one
+// that has not been downloaded yet -- downloads are deliberate, never automatic.
+const cfChromiumTier = ref("");
+const cfChromiumPath = ref("");
+const cfKeyedPending = ref(false);
 const cfFontsInstalled = ref(false);
 const cfFontsMissing = ref("");
 // The fonts live in the data dir, not the image, so a browser installed by an older
 // version can be complete while they are still missing. Both have to be there before
 // the solver is fully set up.
-const cfSolverComplete = computed(() => cfChromiumInstalled.value && cfFontsInstalled.value);
+const cfSolverComplete = computed(
+  () => cfChromiumInstalled.value && cfFontsInstalled.value && !cfKeyedPending.value,
+);
 // The one install button fetches whatever is missing, and the server skips a browser that
 // is already there. Saying "install browser" when only the fonts are outstanding leaves no
 // button that looks like it installs fonts, so the label follows what will actually download.
-const cfInstallLabelKey = computed(() =>
-  cfChromiumInstalled.value && !cfFontsInstalled.value
-    ? "settings.cfSolver.installFontsBtn"
-    : "settings.cfSolver.installBtn",
-);
+const cfInstallLabelKey = computed(() => {
+  if (cfKeyedPending.value) return "settings.cfSolver.installKeyedBtn";
+  if (cfChromiumInstalled.value && !cfFontsInstalled.value)
+    return "settings.cfSolver.installFontsBtn";
+  return "settings.cfSolver.installBtn";
+});
 const cfInstalling = ref(false);
 const cfInstallMsg = ref("");
 const cfInstallError = ref("");
@@ -1790,11 +1808,27 @@ async function saveCfKeys() {
     cfKeys.value = res.keys.map((k) => ({ label: k.label, key: k.masked }));
     cfKeysInUse.value = res.inUse;
     cfKeyChecks.value = {};
+    // Adding the first key means the build it unlocks is now outstanding, so the install
+    // panel above has to start offering it
+    await refreshCfBuildState();
     cfKeysMsg.value = t("settings.saved");
   } catch (e: any) {
     cfKeysError.value = e?.response?.data?.error ?? e?.message ?? t("settings.cfKeys.saveFailed");
   } finally {
     cfKeysSaving.value = false;
+  }
+}
+
+/** Re-reads which build is installed and whether a key has one outstanding. */
+async function refreshCfBuildState() {
+  try {
+    const fresh = await settingsApi.get();
+    cfChromiumTier.value = fresh.cf_chromium_tier ?? "";
+    cfChromiumPath.value = fresh.cf_chromium_path ?? "";
+    cfKeyedPending.value = fresh.cf_chromium_keyed_pending === "true";
+    cfChromiumVersion.value = fresh.cf_chromium_version ?? "";
+  } catch {
+    /* the panel keeps what it has */
   }
 }
 
@@ -1870,6 +1904,7 @@ async function installCfSolver(force = false) {
       cfChromiumVersion.value = res.version ?? "";
       cfFontsInstalled.value = res.fontsInstalled === true;
       if (res.fontsInstalled) cfFontsMissing.value = "";
+      await refreshCfBuildState();
       cfInstallMsg.value = res.version
         ? `${t("settings.cfSolver.installed")} — ${res.version}`
         : t("settings.cfSolver.installed");
@@ -2260,6 +2295,9 @@ onMounted(async () => {
     form.ai_fallback_enabled = s.ai_fallback_enabled !== "false";
     cfChromiumInstalled.value = s.cf_chromium_installed === "true";
     cfChromiumVersion.value = s.cf_chromium_version ?? "";
+    cfChromiumTier.value = s.cf_chromium_tier ?? "";
+    cfChromiumPath.value = s.cf_chromium_path ?? "";
+    cfKeyedPending.value = s.cf_chromium_keyed_pending === "true";
     cfFontsInstalled.value = s.cf_fonts_installed === "true";
     cfFontsMissing.value = s.cf_fonts_missing ?? "";
     loadCfKeys(s);

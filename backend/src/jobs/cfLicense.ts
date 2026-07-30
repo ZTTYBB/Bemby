@@ -74,7 +74,13 @@ export function saveCfLicenseKeys(incoming: Array<{ label?: string; key?: string
     CF_KEYS_SETTING,
     JSON.stringify(kept),
   );
+  // The seats belonged to the old list, and anything queued for one was queued for a key
+  // that may no longer exist
   leased.clear();
+  for (const waiter of waiting.splice(0)) {
+    clearTimeout(waiter.timer);
+    waiter.resolve(NO_KEY);
+  }
   return kept;
 }
 
@@ -82,25 +88,80 @@ export function saveCfLicenseKeys(incoming: Array<{ label?: string; key?: string
 // session, so a key in here is not offered again until its browser closes.
 const leased = new Set<string>();
 
+// Launches waiting for a seat, oldest first. A released key goes straight to the head of
+// this queue rather than back to the pool, so a waiter cannot be jumped.
+type Waiter = { resolve: (lease: LeasedKey) => void; timer: ReturnType<typeof setTimeout> };
+const waiting: Waiter[] = [];
+
 export type LeasedKey = {
   /** The key to launch with, or undefined when there is none free (or none at all). */
   key?: string;
   release: () => void;
 };
 
-/**
- * Takes a key for one browser. Returns none rather than doubling up when every key is
- * already in use: the launch still works, it just runs the older free binary, which beats
- * failing outright or having two sessions fight over one key's seat.
- */
-export function leaseCfLicenseKey(): LeasedKey {
-  const envKey = process.env.CLOAKBROWSER_LICENSE_KEY?.trim();
-  if (envKey) return { key: envKey, release: () => {} };
+const NO_KEY: LeasedKey = { release: () => {} };
 
-  const free = readKeys().find((entry) => !leased.has(entry.key));
-  if (!free) return { release: () => {} };
-  leased.add(free.key);
-  return { key: free.key, release: () => leased.delete(free.key) };
+function handOut(key: string): LeasedKey {
+  let released = false;
+  return {
+    key,
+    release: () => {
+      if (released) return;
+      released = true;
+      const next = waiting.shift();
+      if (next) {
+        // Passed on while still counted as leased: the seat never goes back to the pool
+        clearTimeout(next.timer);
+        next.resolve(handOut(key));
+        return;
+      }
+      leased.delete(key);
+    },
+  };
+}
+
+/**
+ * Takes a key for one browser.
+ *
+ * A free key is a single concurrent session, so when every key is out this waits for one
+ * rather than doubling up -- which the licence server refuses -- for up to `waitMs`.
+ * Waiting is the honest answer: it makes how many solvers run at once follow how many keys
+ * the operator has, instead of failing the job or quietly running an unlicensed build.
+ *
+ * Gives up with no key when the wait runs out, or when none is configured at all.
+ */
+export function leaseCfLicenseKey(waitMs = 0): Promise<LeasedKey> {
+  const envKey = process.env.CLOAKBROWSER_LICENSE_KEY?.trim();
+  if (envKey) return Promise.resolve({ key: envKey, release: () => {} });
+
+  const keys = readKeys();
+  const free = keys.find((entry) => !leased.has(entry.key));
+  if (free) {
+    leased.add(free.key);
+    return Promise.resolve(handOut(free.key));
+  }
+  if (!keys.length || waitMs <= 0) return Promise.resolve(NO_KEY);
+
+  return new Promise((resolve) => {
+    const waiter: Waiter = {
+      resolve,
+      timer: setTimeout(() => {
+        const at = waiting.indexOf(waiter);
+        if (at >= 0) waiting.splice(at, 1);
+        resolve(NO_KEY);
+      }, waitMs),
+    };
+    waiting.push(waiter);
+  });
+}
+
+/**
+ * A key to identify the account with, without taking a seat. Downloading a build is not a
+ * browser session, so the installer must not hold one -- and must not be told there is no
+ * key just because every seat is currently in a running browser.
+ */
+export function anyCfLicenseKey(): string | undefined {
+  return process.env.CLOAKBROWSER_LICENSE_KEY?.trim() || readKeys()[0]?.key;
 }
 
 /** How many keys are configured and how many are in use right now, for the settings view. */

@@ -78,40 +78,85 @@ describe("leasing", () => {
     ]);
   });
 
-  it("hands two concurrent browsers different keys", () => {
-    const first = leaseCfLicenseKey();
-    const second = leaseCfLicenseKey();
+  it("hands two concurrent browsers different keys", async () => {
+    const first = await leaseCfLicenseKey();
+    const second = await leaseCfLicenseKey();
     expect(first.key).toBeDefined();
     expect(second.key).toBeDefined();
     expect(first.key).not.toBe(second.key);
     expect(cfLicenseUsage()).toEqual({ total: 2, inUse: 2 });
   });
 
-  // Doubling up would put two sessions on one seat, which is what the free tier refuses.
-  // Running the older build is the lesser evil, so the third browser gets no key.
-  it("gives no key out once every seat is taken", () => {
-    leaseCfLicenseKey();
-    leaseCfLicenseKey();
-    expect(leaseCfLicenseKey().key).toBeUndefined();
+  // Doubling up would put two sessions on one seat, which the licence server refuses. A
+  // caller that will not wait gets no key rather than a seat somebody else is sitting in.
+  it("gives no key out once every seat is taken", async () => {
+    await leaseCfLicenseKey();
+    await leaseCfLicenseKey();
+    expect((await leaseCfLicenseKey()).key).toBeUndefined();
   });
 
-  it("offers a key again once its browser has closed", () => {
-    const first = leaseCfLicenseKey();
-    leaseCfLicenseKey();
+  it("offers a key again once its browser has closed", async () => {
+    const first = await leaseCfLicenseKey();
+    await leaseCfLicenseKey();
     first.release();
-    expect(leaseCfLicenseKey().key).toBe(first.key);
+    expect((await leaseCfLicenseKey()).key).toBe(first.key);
   });
 
-  it("lets the environment override the stored keys", () => {
-    process.env.CLOAKBROWSER_LICENSE_KEY = "cb_from_env";
-    expect(leaseCfLicenseKey().key).toBe("cb_from_env");
-    // and takes no seat, so it is not exhausted by concurrent jobs
-    expect(leaseCfLicenseKey().key).toBe("cb_from_env");
+  // The point of waiting: concurrency follows how many keys the operator has, instead of
+  // the launch failing or running the keyed build unlicensed.
+  it("hands a waiting launch the seat the moment one is released", async () => {
+    const first = await leaseCfLicenseKey();
+    await leaseCfLicenseKey();
+    const queued = leaseCfLicenseKey(5_000);
+    first.release();
+    expect((await queued).key).toBe(first.key);
+    // still held, by the waiter this time
+    expect(cfLicenseUsage().inUse).toBe(2);
   });
 
-  it("reports no key at all when none is configured", () => {
+  it("serves waiters in the order they arrived", async () => {
+    const first = await leaseCfLicenseKey();
+    const second = await leaseCfLicenseKey();
+    const earlier = leaseCfLicenseKey(5_000);
+    const later = leaseCfLicenseKey(5_000);
+    first.release();
+    second.release();
+    expect((await earlier).key).toBe(first.key);
+    expect((await later).key).toBe(second.key);
+  });
+
+  it("gives up with no key when the wait runs out", async () => {
+    await leaseCfLicenseKey();
+    await leaseCfLicenseKey();
+    expect((await leaseCfLicenseKey(20)).key).toBeUndefined();
+  });
+
+  it("does not wait when no key is configured at all", async () => {
     saveCfLicenseKeys([]);
-    expect(leaseCfLicenseKey().key).toBeUndefined();
+    expect((await leaseCfLicenseKey(5_000)).key).toBeUndefined();
     expect(cfLicenseUsage()).toEqual({ total: 0, inUse: 0 });
+  });
+
+  // Releasing twice would hand the same seat out to two waiters.
+  it("ignores a second release of the same lease", async () => {
+    const first = await leaseCfLicenseKey();
+    first.release();
+    first.release();
+    expect(cfLicenseUsage().inUse).toBe(0);
+  });
+
+  it("lets the environment override the stored keys", async () => {
+    process.env.CLOAKBROWSER_LICENSE_KEY = "cb_from_env";
+    expect((await leaseCfLicenseKey()).key).toBe("cb_from_env");
+    // and takes no seat, so it is not exhausted by concurrent jobs
+    expect((await leaseCfLicenseKey()).key).toBe("cb_from_env");
+  });
+
+  it("frees anything queued when the keys are replaced", async () => {
+    await leaseCfLicenseKey();
+    await leaseCfLicenseKey();
+    const queued = leaseCfLicenseKey(5_000);
+    saveCfLicenseKeys([{ label: "c", key: "cb_cccccccccccc" }]);
+    expect((await queued).key).toBeUndefined();
   });
 });

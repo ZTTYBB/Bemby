@@ -29,7 +29,7 @@ import {
   maskKey,
   saveCfLicenseKeys,
 } from "../jobs/cfLicense";
-import { checkCfLicenseKey } from "../jobs/cfBrowser";
+import { checkCfLicenseKey, chromiumPath, installedBuildTier, keyedBuildPending } from "../jobs/cfBrowser";
 import {
   providersForClient,
   saveProviders,
@@ -121,6 +121,11 @@ function getClientSettings(): Record<string, string> {
   // Whether the on-demand Cloudflare-solver browser is present, and which build
   result.cf_chromium_installed = isChromiumInstalled() ? "true" : "false";
   result.cf_chromium_version = chromiumVersion() ?? "";
+  // Which build is on disk, and whether a configured key unlocks one that is not yet
+  // downloaded -- downloads are deliberate, so this is what surfaces the outstanding one
+  result.cf_chromium_tier = installedBuildTier() ?? "";
+  result.cf_chromium_path = chromiumPath() ?? "";
+  result.cf_chromium_keyed_pending = keyedBuildPending() ? "true" : "false";
   // The CJK/emoji faces are not in the image either; they sit beside the browser in the
   // data dir. Reported separately so a browser that can only draw Latin is visible.
   result.cf_fonts_installed = areCfFontsInstalled() ? "true" : "false";
@@ -200,7 +205,9 @@ router.put("/", (req, res) => {
 let cfInstalling = false;
 router.post("/cf-solver/install", async (req, res) => {
   const force = req.body?.force === true || req.query.force === "1";
-  if (isChromiumInstalled() && areCfFontsInstalled() && !force) {
+  // A licence key with no build behind it counts as outstanding: the key is only worth
+  // anything once the build it unlocks is on disk.
+  if (isChromiumInstalled() && areCfFontsInstalled() && !keyedBuildPending() && !force) {
     res.json({
       ok: true,
       installed: true,
@@ -218,7 +225,7 @@ router.post("/cf-solver/install", async (req, res) => {
   try {
     // Only re-download a browser that is missing (or explicitly forced): an upgrade from an
     // image that carried the fonts needs the fonts alone, not another 200MB of browser.
-    const browser = isChromiumInstalled() && !force
+    const browser = isChromiumInstalled() && !keyedBuildPending() && !force
       ? { ok: true, output: "Browser already installed" }
       : await installCfChromium(force);
     const fonts = await installCfFonts(force);

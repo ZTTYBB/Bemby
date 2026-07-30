@@ -1050,6 +1050,12 @@ export type Settings = {
   cf_chromium_installed?: string;
   /** Server-computed: version of that browser, e.g. "Chromium 151.0.7922.34". */
   cf_chromium_version?: string;
+  /** Server-computed: "keyed" when the installed build is the one a licence key unlocks. */
+  cf_chromium_tier?: string;
+  /** Server-computed: path of the browser a job will actually launch. */
+  cf_chromium_path?: string;
+  /** Server-computed: "true" when a key is stored but its build is not downloaded yet. */
+  cf_chromium_keyed_pending?: string;
   /** Server-computed: "true" when the CJK/emoji faces are in the data dir. */
   cf_fonts_installed?: string;
   /** Server-computed: comma-separated faces still to download. */

@@ -30,7 +30,9 @@ export {
   chromiumVersion,
   cloakCacheDir,
   installCfChromium,
+  installedBuildTier,
   isChromiumInstalled,
+  keyedBuildPending,
 } from "./cfBrowser";
 export {
   CF_FONTS,
@@ -551,6 +553,20 @@ export async function turnstileToken(page: Page): Promise<string> {
     .catch(() => "");
 }
 
+/**
+ * Whether a Turnstile token means the page is through.
+ *
+ * A token issued to a widget the site itself put on its page is the deliverable: the site
+ * takes it from there. On a full-page interstitial it proves nothing -- Cloudflare's own
+ * widget satisfies itself and hands the token back, and the edge still refuses an address
+ * it has decided against, leaving the interstitial up. Believing the token there reports a
+ * challenge passed that never was, and whatever runs next acts on a page with none of the
+ * site on it.
+ */
+export function turnstilePassed(token: string, onInterstitial: boolean): boolean {
+  return !!token && !onInterstitial;
+}
+
 // Text a page shows when the challenge was refused outright. Recognising it ends the
 // attempt at once instead of waiting out the timeout, so the next exit can be tried.
 const REFUSED_RE =
@@ -580,6 +596,11 @@ async function clickVerifyButton(page: Page): Promise<boolean> {
         document.querySelectorAll("button,a[href],[role=button],input[type=submit],input[type=button]"),
       ) as HTMLElement[];
       const visible = all.filter((e) => e.offsetParent !== null || e.getClientRects().length > 0);
+      // A verify portal is a near-empty page: a widget and a button. Anything with a site
+      // around it is not one, and guessing there presses the site's own controls -- a
+      // login form's "send verification code" reads exactly like a verify button.
+      const portal = visible.length <= 3;
+      if (!portal) return null;
       const byText = visible.find((e) =>
         /verify|驗證|验证|continue|submit|確認|确认|start|begin|開始|开始|proceed/i.test(
           e.textContent || (e as HTMLInputElement).value || "",
@@ -712,12 +733,16 @@ function escapeRe(s: string): string {
 const LOADING_RE = /loading|加载|加載|載入|please wait|请稍候|請稍候/i;
 
 /**
- * Waits for a single-page app to finish booting: a Mini App served straight from
- * `goto` is usually still a spinner, and judging the page then sees neither the
- * challenge it is about to render nor the controls to press. Returns as soon as a
- * challenge shows up, or once the rendered text has stopped changing.
+ * Waits for the page to finish arriving before anything judges it.
+ *
+ * `goto` returns at DOMContentLoaded, which for a Mini App is still a spinner and for a
+ * challenged page can be an empty document -- Cloudflare's interstitial writes its title
+ * and markers a moment later. Judged at that instant the page looks challenge-free, and
+ * the steps then run against an interstitial that will never show them what they want.
+ *
+ * Returns as soon as a challenge shows up, or once the rendered text has stopped changing.
  */
-async function waitForAppReady(page: Page, budgetDeadline: number): Promise<void> {
+async function waitForPageReady(page: Page, budgetDeadline: number): Promise<void> {
   const tune = cfTuning();
   const deadline = Math.min(Date.now() + tune.appReadyTimeoutMs, budgetDeadline);
   let previous = "";
@@ -729,6 +754,17 @@ async function waitForAppReady(page: Page, budgetDeadline: number): Promise<void
     previous = text;
     await sleep(tune.readyPollMs, deadline);
   }
+}
+
+/**
+ * A full-page challenge is up, so none of the site is on screen to act on.
+ *
+ * Deliberately not "a Turnstile widget is present": plenty of sites put one on their own
+ * login form, where the page around it is perfectly usable and the widget verifies itself
+ * while the steps get on with filling the form in.
+ */
+async function interstitialOnPage(page: Page): Promise<boolean> {
+  return isInterstitial(page);
 }
 
 /** How the thing that got clicked was identified, worst last. */
@@ -1271,6 +1307,15 @@ async function runWebSteps(
     const log: WebStepLog = { type: step.type, label: describeWebStep(step) };
     logs.push(log);
 
+    // A challenge raised by the previous step (a login press is exactly what raises one)
+    // leaves nothing of the site on screen for this one to act on
+    if (step.type !== "web_delay" && (await interstitialOnPage(page))) {
+      log.error = "a full-page Cloudflare challenge is covering the site";
+      failure = `${log.label}: ${log.error}`;
+      log.screenshot = await screenshotOf(page);
+      break;
+    }
+
     try {
       switch (step.type) {
         case "web_button": {
@@ -1314,6 +1359,14 @@ async function runWebSteps(
               }, selector)
               .catch(() => false);
             if (seen || Date.now() >= until) break;
+            // Nothing the site owns is on an interstitial, so waiting out the rest of the
+            // timeout only delays the real answer -- and buries it under a step error
+            // about a selector that was never going to appear.
+            if (await interstitialOnPage(page)) {
+              throw new Error(
+                `a full-page Cloudflare challenge took over before \`${selector}\` appeared`,
+              );
+            }
             await sleep(Math.min(tune.readyPollMs, Math.max(50, until - Date.now())), until);
           }
           if (!seen)
@@ -1696,7 +1749,7 @@ async function attemptLoad(
     // portal navigating away, and counting it would call the challenge solved at once.
     const withoutHash = (u: string) => u.split("#")[0];
     const startUrl = withoutHash(page.url());
-    if (opts.miniApp) await waitForAppReady(page, budgetDeadline);
+    await waitForPageReady(page, budgetDeadline);
 
     // Works a challenge that is on the page right now. Returns null when there is
     // none, so callers can tell "nothing to do" from "tried and failed".
@@ -1729,8 +1782,7 @@ async function attemptLoad(
       let widgetClicks = 0;
       while (Date.now() < deadline) {
         await sleep(tune.pollMs, deadline);
-        // Strongest signal: a Turnstile token was issued.
-        if (await turnstileToken(page)) return true;
+        if (turnstilePassed(await turnstileToken(page), await isInterstitial(page))) return true;
         // Nudge a widget that is sitting there unsolved: it may be an interactive
         // checkbox that nothing has clicked yet. Spaced out, so a widget that is
         // verifying on its own is not interrupted.

@@ -28,6 +28,7 @@ beforeEach(async () => {
   delete process.env.PUPPETEER_EXECUTABLE_PATH;
   delete process.env.CLOAKBROWSER_BINARY_PATH;
   delete process.env.CLOAKBROWSER_CACHE_DIR;
+  delete process.env.CLOAKBROWSER_LICENSE_KEY;
   cf = await import("../jobs/cloudflare");
 });
 
@@ -36,6 +37,7 @@ afterEach(() => {
   delete process.env.DB_PATH;
   delete process.env.PUPPETEER_EXECUTABLE_PATH;
   delete process.env.CLOAKBROWSER_BINARY_PATH;
+  delete process.env.CLOAKBROWSER_LICENSE_KEY;
 });
 
 describe("chromiumExecutable", () => {
@@ -84,12 +86,92 @@ describe("chromiumExecutable", () => {
     expect(cf.chromiumExecutable()).toBe(pinned);
   });
 
-  // Kept so a development machine that pinned a local Chromium before the switch to
-  // CloakBrowser keeps launching, even though it gives up the fingerprint patches.
-  it("still honours the legacy PUPPETEER_EXECUTABLE_PATH pin", () => {
-    const pinned = path.join(dir, "dev-chrome");
+  // The previous solver launched whatever this named, and installs set up then still carry
+  // it. A stock Chromium has none of the fingerprint patches, so a job pointed at one is
+  // not solving anything -- it only looks like it is.
+  it("ignores the previous solver's PUPPETEER_EXECUTABLE_PATH pin", () => {
+    const stale = path.join(dir, "old-playwright-chrome");
+    writeFileSync(stale, "");
+    process.env.PUPPETEER_EXECUTABLE_PATH = stale;
+    const build = fakeDownload("150.0.7900.10.1");
+    expect(cf.chromiumExecutable()).toBe(build);
+  });
+
+  it("reports nothing installed when only the previous solver's browser is pinned", () => {
+    const stale = path.join(dir, "old-playwright-chrome");
+    writeFileSync(stale, "");
+    process.env.PUPPETEER_EXECUTABLE_PATH = stale;
+    expect(cf.chromiumExecutable()).toBeUndefined();
+    expect(cf.isChromiumInstalled()).toBe(false);
+  });
+
+  // A launch with a key in hand must not land on the free build and vice versa: the keyed
+  // build declines to run without one.
+  it("picks the build matching the tier asked for", () => {
+    const free = fakeDownload("146.0.7680.177.5");
+    const keyed = fakeDownload("150.0.7900.10.1", true);
+    expect(cf.chromiumExecutable("keyed")).toBe(keyed);
+    expect(cf.chromiumExecutable("free")).toBe(free);
+  });
+
+  it("falls back to whatever is installed when the tier asked for is not", () => {
+    const free = fakeDownload("146.0.7680.177.5");
+    expect(cf.chromiumExecutable("keyed")).toBe(free);
+  });
+});
+
+// A key is only worth something once the build behind it is on disk, and downloading is
+// deliberate here rather than automatic -- so this is what puts the download in front of
+// the operator after they add one.
+describe("keyedBuildPending", () => {
+  it("is false with no key configured", () => {
+    fakeDownload("146.0.7680.177.5");
+    expect(cf.keyedBuildPending()).toBe(false);
+  });
+
+  it("is true once a key is stored but its build is not downloaded", () => {
+    fakeDownload("146.0.7680.177.5");
+    process.env.CLOAKBROWSER_LICENSE_KEY = "cb_aaaaaaaaaaaa";
+    expect(cf.keyedBuildPending()).toBe(true);
+  });
+
+  it("clears once the keyed build is downloaded", () => {
+    fakeDownload("146.0.7680.177.5");
+    fakeDownload("150.0.7900.10.1", true);
+    process.env.CLOAKBROWSER_LICENSE_KEY = "cb_aaaaaaaaaaaa";
+    expect(cf.keyedBuildPending()).toBe(false);
+  });
+
+  // An operator pointing at their own binary has taken the choice of build out of our
+  // hands entirely, so there is nothing to offer them.
+  it("stays quiet when an explicit CloakBrowser binary is pinned", () => {
+    const pinned = path.join(dir, "my-cloakbrowser");
     writeFileSync(pinned, "");
-    process.env.PUPPETEER_EXECUTABLE_PATH = pinned;
-    expect(cf.chromiumExecutable()).toBe(pinned);
+    process.env.CLOAKBROWSER_BINARY_PATH = pinned;
+    process.env.CLOAKBROWSER_LICENSE_KEY = "cb_aaaaaaaaaaaa";
+    expect(cf.keyedBuildPending()).toBe(false);
+  });
+
+  // The stale pin is ignored, so it must not silence the prompt either
+  it("still prompts when the previous solver's browser is pinned", () => {
+    const stale = path.join(dir, "old-playwright-chrome");
+    writeFileSync(stale, "");
+    process.env.PUPPETEER_EXECUTABLE_PATH = stale;
+    fakeDownload("150.0.7900.10.1");
+    process.env.CLOAKBROWSER_LICENSE_KEY = "cb_aaaaaaaaaaaa";
+    expect(cf.keyedBuildPending()).toBe(true);
+  });
+});
+
+describe("installedBuildTier", () => {
+  it("reports which build is on disk", () => {
+    fakeDownload("146.0.7680.177.5");
+    expect(cf.installedBuildTier()).toBe("free");
+    fakeDownload("150.0.7900.10.1", true);
+    expect(cf.installedBuildTier()).toBe("keyed");
+  });
+
+  it("reports nothing when the data dir is empty", () => {
+    expect(cf.installedBuildTier()).toBeUndefined();
   });
 });

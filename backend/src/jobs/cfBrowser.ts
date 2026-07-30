@@ -8,7 +8,7 @@ import { SocksClient } from "socks";
 import type { BrowserContext, Page } from "playwright-core";
 import { cfTuning } from "./cfTuning";
 import { applyCfFontEnv } from "./cfFonts";
-import { cfLicenseUsage, leaseCfLicenseKey } from "./cfLicense";
+import { anyCfLicenseKey, cfLicenseUsage, leaseCfLicenseKey } from "./cfLicense";
 import { dataDir } from "./paths";
 import { cfExitGeo, type CfExitGeo } from "../tg/proxyProviders";
 
@@ -128,33 +128,82 @@ function cachedBuilds(): CachedBuild[] {
   return out.sort((a, b) => (versionNewer(a.version, b.version) ? -1 : 1));
 }
 
-function downloadedChromium(tier?: BuildTier): string | undefined {
+/** The build that would launch for `tier`, falling back to whatever is installed. */
+function resolvedBuild(tier?: BuildTier): CachedBuild | undefined {
   const builds = cachedBuilds();
-  return (tier ? builds.find((b) => b.tier === tier) : undefined)?.exe ?? builds[0]?.exe;
+  return (tier ? builds.find((b) => b.tier === tier) : undefined) ?? builds[0];
 }
 
 /**
- * Resolves the browser to launch: an explicit path, then the downloaded stealth build --
- * preferring the tier that matches whether a licence key is in hand, since a keyed build
- * declines to run without one.
- *
- * PUPPETEER_EXECUTABLE_PATH is still honoured so a development machine that pinned a local
- * Chromium keeps working, but it gives up the fingerprint patches.
+ * A CloakBrowser binary the operator pinned themselves, which is how an older build is
+ * rolled back to. The library reads this variable directly as well, so honouring it here
+ * only keeps the settings page in step with what will launch.
+ */
+function pinnedBinary(): string | undefined {
+  const pin = process.env.CLOAKBROWSER_BINARY_PATH;
+  return pin && existsSync(pin) ? pin : undefined;
+}
+
+// The previous solver launched whatever PUPPETEER_EXECUTABLE_PATH named, and installs that
+// were set up then still carry it. It is deliberately not honoured any more: a stock
+// Chromium has none of the fingerprint patches, so a job pointed at one is not solving
+// anything -- it just looks like it is.
+let warnedLegacyPin = false;
+function warnLegacyPin(): void {
+  if (warnedLegacyPin || !process.env.PUPPETEER_EXECUTABLE_PATH) return;
+  warnedLegacyPin = true;
+  console.warn(
+    `[cfBrowser] ignoring PUPPETEER_EXECUTABLE_PATH (${process.env.PUPPETEER_EXECUTABLE_PATH}): ` +
+      "the solver only launches CloakBrowser builds. Remove it from your .env, and delete " +
+      "the browser it points at to reclaim the space.",
+  );
+}
+
+/**
+ * The browser that will launch: the operator's pin, else the downloaded stealth build of
+ * the tier matching whether a licence key is in hand -- a keyed build declines to run
+ * without one.
  */
 export function chromiumExecutable(tier?: BuildTier): string | undefined {
-  for (const envPath of [process.env.CLOAKBROWSER_BINARY_PATH, process.env.PUPPETEER_EXECUTABLE_PATH]) {
-    if (envPath && existsSync(envPath)) return envPath;
-  }
-  return downloadedChromium(tier);
+  warnLegacyPin();
+  return pinnedBinary() ?? resolvedBuild(tier)?.exe;
 }
 
 export function isChromiumInstalled(): boolean {
   return !!chromiumExecutable();
 }
 
-/** Version of the resolved browser, e.g. "Chromium 146.0.7680.177". */
+/** Tier of the build that is installed, for the settings view. */
+export function installedBuildTier(): BuildTier | undefined {
+  if (pinnedBinary()) return undefined;
+  return resolvedBuild()?.tier;
+}
+
+/**
+ * A licence key is configured but the build it unlocks has not been downloaded, so jobs
+ * are still launching the older free one. Downloading is deliberate rather than automatic
+ * (see the launch pin), so this is what tells the operator there is something to fetch.
+ */
+export function keyedBuildPending(): boolean {
+  if (pinnedBinary()) return false;
+  const hasKey = !!process.env.CLOAKBROWSER_LICENSE_KEY?.trim() || cfLicenseUsage().total > 0;
+  return hasKey && !cachedBuilds().some((build) => build.tier === "keyed");
+}
+
+/**
+ * Version of the browser that will launch, e.g. "CloakBrowser 150.0.7871.114.4".
+ *
+ * Read from the directory the build was unpacked into rather than by running it: the
+ * keyed build refuses to start without its licence key, and the key lives in the database
+ * rather than this process's environment, so asking the binary reports nothing at all --
+ * which is how the settings page ended up naming the build it had replaced.
+ */
 export function chromiumVersion(): string | undefined {
-  const exe = chromiumExecutable();
+  const build = resolvedBuild();
+  if (build && !pinnedBinary()) return `CloakBrowser ${build.version}`;
+
+  // A pinned binary has no version in its path, so it has to be asked
+  const exe = pinnedBinary();
   if (!exe) return undefined;
   try {
     const out = spawnSync(exe, ["--version"], { encoding: "utf8", timeout: 15_000 });
@@ -162,6 +211,11 @@ export function chromiumVersion(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Path of the browser that will launch, so the settings page can name it exactly. */
+export function chromiumPath(): string | undefined {
+  return chromiumExecutable();
 }
 
 /**
@@ -181,17 +235,19 @@ export async function installCfChromium(force = false): Promise<{ ok: boolean; o
 
   // Any configured key will do here: which build is downloaded is the same question for
   // all of them, and this is not a browser session, so it takes no seat.
-  const lease = leaseCfLicenseKey();
+  const licenseKey = anyCfLicenseKey();
   try {
-    const { ensureBinary, clearCache, binaryInfo } = await cloak();
+    const { ensureBinary, binaryInfo } = await cloak();
+    // Only the build being replaced is cleared, not the whole cache: the other tier is
+    // what an overflow launch falls back to, and re-downloading it is another 200MB.
     if (force) {
-      clearCache();
-      lines.push("Cleared the cached browser");
+      const dropped = removeBuild(licenseKey ? "keyed" : "free");
+      lines.push(dropped ? `Cleared ${dropped}` : "Nothing cached to clear");
     }
-    const exe = await ensureBinary(lease.key);
+    const exe = await ensureBinary(licenseKey);
     const info = binaryInfo();
     lines.push(`CloakBrowser ${info.version} (${info.tier} build) at ${exe}`);
-    if (!lease.key) {
+    if (!licenseKey) {
       lines.push(
         "No licence key configured, so this is the older free build. Add a free key in " +
           "Settings for the current one, which passes more challenges.",
@@ -199,8 +255,6 @@ export async function installCfChromium(force = false): Promise<{ ok: boolean; o
     }
   } catch (err: any) {
     return { ok: false, output: `${lines.join("\n")}\n${err?.message ?? err}`.trim() };
-  } finally {
-    lease.release();
   }
 
   if (!isChromiumInstalled()) {
@@ -213,6 +267,20 @@ export async function installCfChromium(force = false): Promise<{ ok: boolean; o
   const reclaimed = pruneLegacyBrowsers();
   if (reclaimed) lines.push(reclaimed);
   return { ok: true, output: lines.join("\n") };
+}
+
+/** Drops the cached build of one tier, so the next install fetches it again. */
+function removeBuild(tier: BuildTier): string | undefined {
+  const build = cachedBuilds().find((b) => b.tier === tier);
+  if (!build) return undefined;
+  const dir = path.dirname(build.exe);
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch (err: any) {
+    console.warn(`[cfBrowser] could not remove ${dir}: ${err?.message ?? err}`);
+    return undefined;
+  }
+  return path.basename(dir);
 }
 
 /**
@@ -250,9 +318,9 @@ function pruneOldBuilds(): string | undefined {
  * them they are most of a gigabyte on the user's volume.
  */
 function pruneLegacyBrowsers(): string | undefined {
-  const stale = [path.join(dataDir(), "pw-browsers"), path.join(dataDir(), "cf-chromium")].filter(
-    (dir) => existsSync(dir),
-  );
+  const stale = ["pw-browsers", ".pw-browsers", "cf-chromium"]
+    .map((name) => path.join(dataDir(), name))
+    .filter((dir) => existsSync(dir));
   if (!stale.length) return undefined;
   for (const dir of stale) {
     try {
@@ -525,6 +593,36 @@ async function resolveProxy(proxyUrl?: string): Promise<{ proxy?: string; close:
 
 // ── Launch ───────────────────────────────────────────────────────────────────
 
+/**
+ * Runs `launch` with the library pointed at a binary already on disk.
+ *
+ * `CLOAKBROWSER_BINARY_PATH` is the only thing that stops the library resolving a binary
+ * of its own -- passing an executable through the launch options overrides which one
+ * finally starts, but the resolve (and, with nothing cached for that tier, a ~200MB
+ * download) has already happened by then. That download would land in the middle of a
+ * job, over the connection the job is using.
+ *
+ * Launches are serialised through here because the setting is process-wide and two
+ * concurrent ones can want different tiers. The section covers the launch call only, so
+ * the queue is a second or two, and the previous value is put back for the settings page.
+ */
+let launchGate: Promise<unknown> = Promise.resolve();
+
+function withBinaryPin<T>(exe: string | undefined, launch: () => Promise<T>): Promise<T> {
+  const run = launchGate.then(async () => {
+    const previous = process.env.CLOAKBROWSER_BINARY_PATH;
+    if (exe) process.env.CLOAKBROWSER_BINARY_PATH = exe;
+    try {
+      return await launch();
+    } finally {
+      if (previous === undefined) delete process.env.CLOAKBROWSER_BINARY_PATH;
+      else process.env.CLOAKBROWSER_BINARY_PATH = previous;
+    }
+  });
+  launchGate = run.catch(() => {});
+  return run;
+}
+
 export type LaunchedBrowser = {
   context: BrowserContext;
   page: Page;
@@ -561,53 +659,60 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
   const geo = cfExitGeo(key);
   const profile = claimProfile(key);
   const proxy = await resolveProxy(proxyUrl);
-  // One seat per key, held for as long as this browser lives
-  const lease = leaseCfLicenseKey();
+  // One seat per key, held for as long as this browser lives. When they are all out,
+  // wait for one: a free key is a single concurrent session, so the alternative is
+  // launching the keyed build unlicensed, which it refuses. The wait is bounded by the
+  // same ceiling one action gets, so it cannot outlast the job that is waiting.
+  let lease = await leaseCfLicenseKey();
   if (!lease.key && cfLicenseUsage().total) {
-    console.warn(
-      "[cfBrowser] every CloakBrowser licence key is already in use, so this browser goes " +
-        "without one. Add another key in Settings to run more solvers at once.",
-    );
+    console.log("[cfBrowser] every licence seat is taken; waiting for one to free up");
+    lease = await leaseCfLicenseKey(tune.budgetMs);
+    if (!lease.key) {
+      console.warn(
+        "[cfBrowser] no licence seat came free, so this browser launches without a key. " +
+          "Add another key in Settings to run more solvers at once.",
+      );
+    }
   }
+
+  // The build that matches whether a key is in hand: a keyed binary declines to run
+  // without one, and a free one has no use for it
+  const executablePath = chromiumExecutable(lease.key ? "keyed" : "free");
 
   try {
     const { launchPersistentContext } = await cloak();
-    const context = await launchPersistentContext({
-      userDataDir: profile.dir,
-      headless: !display,
-      proxy: proxy.proxy,
-      ...(lease.key ? { licenseKey: lease.key } : {}),
-      // Human-like pointer curves and keystroke timing on the driver's own methods
-      humanize: true,
-      ...(geo?.tz ? { timezone: geo.tz } : {}),
-      ...(geo?.lang ? { locale: geo.lang } : {}),
-      args: [
-        // One machine per exit, kept across runs alongside its cookies
-        `--fingerprint=${fingerprintSeed(key)}`,
-        // The container has no user namespaces to sandbox into, and /dev/shm is small
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        // A profile that is reused must not reopen the last session or offer to restore a
-        // crashed one, either of which would leave a dialog over the page
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--hide-crash-restore-bubble",
-        // A window Chromium considers occluded gets its timers, rendering and observer
-        // callbacks throttled, which stalls anything waiting on them
-        "--window-position=0,0",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
-        "--disable-background-timer-throttling",
-      ],
-      launchOptions: {
-        timeout: tune.navTimeoutMs,
-        // Pinned to what is already on disk. Left to resolve the binary itself, the
-        // library would fetch a different ~200MB build the moment the tier changed --
-        // in the middle of a job, over the same connection the job is using.
-        executablePath: chromiumExecutable(lease.key ? "keyed" : "free"),
-      },
-    });
+    const context = await withBinaryPin(executablePath, () =>
+      launchPersistentContext({
+        userDataDir: profile.dir,
+        headless: !display,
+        proxy: proxy.proxy,
+        ...(lease.key ? { licenseKey: lease.key } : {}),
+        // Human-like pointer curves and keystroke timing on the driver's own methods
+        humanize: true,
+        ...(geo?.tz ? { timezone: geo.tz } : {}),
+        ...(geo?.lang ? { locale: geo.lang } : {}),
+        args: [
+          // One machine per exit, kept across runs alongside its cookies
+          `--fingerprint=${fingerprintSeed(key)}`,
+          // The container has no user namespaces to sandbox into, and /dev/shm is small
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          // A profile that is reused must not reopen the last session or offer to restore a
+          // crashed one, either of which would leave a dialog over the page
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--hide-crash-restore-bubble",
+          // A window Chromium considers occluded gets its timers, rendering and observer
+          // callbacks throttled, which stalls anything waiting on them
+          "--window-position=0,0",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+          "--disable-background-timer-throttling",
+        ],
+        launchOptions: { timeout: tune.navTimeoutMs, executablePath },
+      }),
+    );
 
     // Bounds every driver call, so one wedged renderer cannot swallow the step budget
     context.setDefaultTimeout(tune.protocolTimeoutMs);

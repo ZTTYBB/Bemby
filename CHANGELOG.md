@@ -12,12 +12,20 @@ All notable changes to Bemby are documented here.
 
 - **Cloudflare 验证改用 CloakBrowser** -- 过 CF 的整套浏览器底层已从 `puppeteer-real-browser` + Playwright 下载的普通 Chromium，替换为 **CloakBrowser**：一个在源码层修补指纹（Canvas、WebGL、音频、字体、WebRTC、TLS、`navigator.webdriver` 等）的 Chromium，通过 Playwright 驱动。挑战检测、小程序步骤、网页步骤与代理轮换逻辑保持不变。首次启用时按需下载（约 200MB）到数据目录，升级后仍然保留；旧版本留下的浏览器（`pw-browsers`、`cf-chromium`）会在安装成功后自动清理。
 - **CloakBrowser 授权密钥（设置页）** -- 新增密钥管理：不填密钥时使用较旧的免费构建；在 cloakbrowser.dev/free 用 GitHub 账号可免费领取密钥以使用最新构建。每个免费密钥仅允许 1 个并发会话，因此可添加多个（来自不同 GitHub 账号）密钥，运行中的浏览器各占用一个，用完则该次启动回退到免费构建。密钥仅保存在本机，界面始终掩码显示，并可一键验证有效性与套餐。
+- **授权构建按需下载** -- 添加授权密钥后，设置页会提示「授权构建尚未下载」，并把安装按钮切换为<strong>下载授权构建</strong>；状态行也会标明当前装的是免费构建还是授权构建。下载始终由你触发，任务运行中不会自动下载。
 - **每个出口固定设备指纹** -- 浏览器指纹种子由出口（代理）推导而来，同一出口在多次运行中呈现同一台设备，与其保留的 Cookie（含 `cf_clearance`）一致，而不再每次随机。
 - **虚拟显示由应用自行管理** -- headed 模式所需的 Xvfb 现由应用启动并复用（原先由 `puppeteer-real-browser` 负责）；无法启动时回退到 headless 并给出提示。
 - **自动更新默认关闭** -- CloakBrowser 的后台自动更新默认关闭，避免任务运行中突然下载约 200MB 并在数据卷中堆积旧构建；更新请使用设置页的「重新下载 / 更新浏览器」。
 
 **修复**
 
+- **只启动 CloakBrowser 构建** -- 旧版方案会启动 `PUPPETEER_EXECUTABLE_PATH` 指向的浏览器，升级前配置过该变量的安装会继续使用它——那是没有任何指纹修补的普通 Chromium，看似在过验证，实则毫无作用。现在该变量完全不再读取（启动时会提示可删除），数据目录中遗留的 `pw-browsers` / `.pw-browsers` / `cf-chromium` 也会在下次安装时清理。
+- **设置页显示的是真正会启动的浏览器** -- 版本号改为从构建目录读取，并新增所用二进制的完整路径。此前是运行该二进制取版本，而授权构建在没有密钥的环境下拒绝启动（密钥存在数据库而非环境变量里），于是页面仍显示被替换掉的旧版本。
+- **强制重装不再清空整个缓存** -- 「重新下载 / 更新浏览器」此前会删除全部构建，导致添加密钥后免费构建被一并删除；现在只清除本次要替换的那一档。
+- **授权席位不足时排队等待** -- 密钥全部占用时不再直接以无密钥方式启动（授权构建会拒绝运行），而是等待席位释放（上限为单个操作的总时长），使并发数量自动跟随密钥数量。
+- **整页验证下发的 Turnstile 令牌不再当作通过** -- Cloudflare 的整页验证会自行完成自己的 Turnstile 并写入令牌，但被拒绝的出口 IP 依然停留在验证页。此前只要看到令牌就判定"已通过"，于是后续网页子步骤在一个根本没有站点内容的页面上空等到超时（例如等待登录框 120 秒），最后才报出误导性的步骤错误。现在整页验证必须真正消失才算通过；站点自己页面上的 Turnstile 组件仍以令牌为准。
+- **网页子步骤遇到验证会立即停止** -- 子步骤开始前及等待元素期间会检查验证是否占据页面，一旦出现立即中止并说明原因，而不是耗尽各自的超时。
+- **判定验证前先等页面就绪** -- 普通网页此前在 `goto` 返回的瞬间就判断有无验证，此时文档可能还是空的，验证会被漏判。现在与小程序一样先等页面就绪。
 - **不再把未通过的挑战记为成功** -- 托管挑战会跳转到自己的 URL 并在校验期间短暂清空文档，此前会被误判为「已通过」，从而记录一次并未发生的签到。现在挑战仍在页面上时不认可任何成功信号，且「挑战已消失」需连续两次确认。失败时日志会写明未能通过 Cloudflare 验证。
 
 ### English
@@ -26,12 +34,20 @@ All notable changes to Bemby are documented here.
 
 - **Cloudflare solving now runs on CloakBrowser** -- the whole browser layer behind CF solving moved from `puppeteer-real-browser` plus a Playwright-downloaded stock Chromium to **CloakBrowser**: a Chromium whose fingerprint is patched at source (canvas, WebGL, audio, fonts, WebRTC, TLS, `navigator.webdriver`), driven through Playwright. Challenge detection, Mini App steps, page steps and proxy rotation are unchanged. It is downloaded on demand (~200MB) into the data dir so it survives an upgrade, and the browsers earlier versions left behind (`pw-browsers`, `cf-chromium`) are removed once the new one installs.
 - **CloakBrowser licence keys (Settings)** -- with no key the solver runs the older free build; a free key (one per GitHub account at cloakbrowser.dev/free) gets the current one. A free key allows a single concurrent session, so several keys can be stored and one is leased per running browser, with a launch falling back to the free build when every seat is taken. Keys are stored on the host, only ever shown masked, and can be checked for validity and plan from the same panel.
+- **The licensed build is offered as a download** -- once a key is added, Settings says the build it unlocks has not been downloaded and the install button becomes <strong>Download the licensed build</strong>; the status line names which build is on disk. Downloads still only happen when you ask, never mid-job.
 - **A stable device per exit** -- the browser fingerprint seed is derived from the exit (proxy) rather than chosen at random each launch, so an exit presents the same machine run after run, matching the cookies its profile keeps (`cf_clearance` included).
 - **The app manages its own virtual display** -- the Xvfb that headed mode needs is now started and shared by the app itself (it used to come from `puppeteer-real-browser`), falling back to headless with a warning when it cannot be started.
 - **Auto-update off by default** -- CloakBrowser's background update is disabled, so a job no longer triggers a surprise ~200MB download mid-run or leaves superseded builds on the data volume. Use "Re-download / update browser" in Settings instead.
 
 **Fixes**
 
+- **Only CloakBrowser builds are launched** -- the previous solver ran whatever `PUPPETEER_EXECUTABLE_PATH` named, and installs that were set up before the switch kept using it: a stock Chromium with none of the fingerprint patches, which looks like it is solving challenges without doing any of the work. The variable is no longer read at all (a startup line says so), and the browsers left in the data dir (`pw-browsers`, `.pw-browsers`, `cf-chromium`) are cleaned up on the next install.
+- **Settings names the browser that will actually launch** -- the version is read from the build directory and the full binary path is shown. It used to come from running the binary, which the keyed build refuses to do without its licence key (the key lives in the database, not this process's environment), so the page went on naming the build it had replaced.
+- **A forced reinstall no longer empties the whole cache** -- "Re-download / update browser" deleted every build, so adding a key and reinstalling took the free build with it. Only the tier being replaced is cleared now.
+- **Launches queue for a licence seat** -- with every key in use a browser no longer starts keyless (which the keyed build refuses); it waits for a seat, bounded by the budget one action gets, so how many solvers run at once follows how many keys are configured.
+- **A Turnstile token from a full-page interstitial no longer counts as a pass** -- Cloudflare's interstitial satisfies its own Turnstile and fills the token field in, while an exit IP it has decided against stays on the interstitial. The token alone used to be read as "solved", so the page steps then ran against a page with none of the site on it and waited out their whole timeout (two minutes for a login field, in one report) before failing with a misleading step error. The interstitial now has to actually go away; a Turnstile the site itself put on its page still passes on the token.
+- **Page steps stop as soon as a challenge owns the page** -- checked before each step and while waiting for an element, so a challenge raised mid-run ends the step with the real reason instead of running out its timeout.
+- **The page is allowed to arrive before it is judged** -- a plain page used to be checked for a challenge the instant `goto` returned, when the document can still be empty and the interstitial has written nothing; it now waits for readiness the way a Mini App already did.
 - **A refused challenge is no longer logged as a pass** -- a managed challenge navigates to its own URL and briefly empties the document while it verifies, which used to read as "cleared" and recorded a checkin that never happened. Nothing counts as success while the interstitial is still up, and "the challenge is gone" now has to hold across two consecutive checks. The job log says plainly when the Cloudflare challenge was not passed.
 
 ---
