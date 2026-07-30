@@ -44,6 +44,12 @@ ENV NODE_OPTIONS="--max-old-space-size=512"
 # pass rate than headless). gosu lets the entrypoint fix data-dir ownership as root
 # and then drop to the non-root `node` user.
 #
+# procps supplies `ps`, which puppeteer-real-browser reaches for (via tree-kill) to walk the
+# browser's process tree on every close. Debian slim ships without it and the failed spawn
+# arrives as an unhandled 'error' event that takes the server down -- see the guard in
+# server.ts. The old Alpine base masked this: busybox `ps` exists but rejects the --ppid
+# flags, and tree-kill reads a non-zero exit as "no children" instead of failing outright.
+#
 # Only fonts-liberation ships here, as a Latin fallback that is always present: a browser
 # that cannot draw a glyph measures text unlike any real one. The three Noto packages this
 # used to install (fonts-noto-core, fonts-noto-cjk, fonts-noto-color-emoji) come to roughly
@@ -61,6 +67,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
       gosu \
+      procps \
       xvfb \
       libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
       libdrm2 libatspi2.0-0 libx11-6 libxcomposite1 libxdamage1 libxext6 \

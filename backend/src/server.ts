@@ -7,6 +7,20 @@ process.on("unhandledRejection", (reason: any) => {
   if (reason?.message === "TIMEOUT") return;
   console.error("Unhandled rejection:", reason);
 });
+
+// puppeteer-real-browser tree-kills the browser on every disconnect, which shells out to
+// `ps`. Its own try/catch cannot help: a failed spawn arrives asynchronously as an unhandled
+// 'error' event, so an image without procps loses the whole server the first time a browser
+// closes. Chromium is still torn down by the browser.close() that triggered the disconnect.
+// Nothing else is swallowed here.
+process.on("uncaughtException", (err: any) => {
+  if (err?.code === "ENOENT" && err?.syscall === "spawn ps") {
+    console.error("[cloudflare] tree-kill could not run `ps` — install procps in the image");
+    return;
+  }
+  console.error("Uncaught exception:", err);
+  process.exit(1);
+});
 import cors from "cors";
 import path from "path";
 
