@@ -300,19 +300,50 @@ export function cfProxyCandidates(
   host?: string,
   max = DEFAULT_CF_CANDIDATES,
 ): ProxyCandidate[] {
+  return cfProxyCandidatesFor({ primaryUrl, host, max });
+}
+
+/** Value of a pinned proxy id meaning "no proxy for the browser". */
+export const CF_PROXY_DIRECT = "direct";
+
+/**
+ * Ordered proxies for a Cloudflare attempt, with the caller's own preference honoured:
+ * `proxyId` pins one exit from the pool (or `direct` for none) instead of the job's
+ * proxy, and `tryAll: false` keeps the run to that single exit rather than working
+ * through the pool. A pinned exit always stays first -- the host's last winner only
+ * leads when nothing was pinned.
+ */
+export function cfProxyCandidatesFor(opts: {
+  primaryUrl?: string;
+  host?: string;
+  /** Pool id of a pinned proxy, or `direct`. */
+  proxyId?: string;
+  /** Fall through the rest of the pool when an exit is refused. Defaults to true. */
+  tryAll?: boolean;
+  max?: number;
+}): ProxyCandidate[] {
+  const { primaryUrl, host, proxyId, tryAll = true, max = DEFAULT_CF_CANDIDATES } = opts;
   const pool = readProxies();
-  const primary: ProxyCandidate = {
-    id: pool.find((p) => p.url === primaryUrl)?.id ?? (primaryUrl ? "job" : "direct"),
-    label: pool.find((p) => p.url === primaryUrl)?.name ?? (primaryUrl ? "job proxy" : "direct"),
-    url: primaryUrl,
-  };
+
+  const pinned = proxyId && proxyId !== CF_PROXY_DIRECT ? pool.find((p) => p.id === proxyId) : undefined;
+  const primary: ProxyCandidate = pinned
+    ? { id: pinned.id, label: pinned.name, url: pinned.url }
+    : proxyId === CF_PROXY_DIRECT
+      ? { id: CF_PROXY_DIRECT, label: "direct", url: undefined }
+      : {
+          id: pool.find((p) => p.url === primaryUrl)?.id ?? (primaryUrl ? "job" : "direct"),
+          label: pool.find((p) => p.url === primaryUrl)?.name ?? (primaryUrl ? "job proxy" : "direct"),
+          url: primaryUrl,
+        };
+
+  if (!tryAll) return [primary];
 
   const rest: ProxyCandidate[] = pool
-    .filter((p) => p.url && p.url !== primaryUrl)
+    .filter((p) => p.url && p.url !== primary.url)
     .map((p) => ({ id: p.id, label: p.name, url: p.url }));
 
   // Lead with the proxy that cleared this host last time, wherever it sits in the pool
-  const winnerId = host ? readCfWins()[host] : undefined;
+  const winnerId = host && !proxyId ? readCfWins()[host] : undefined;
   const winnerIndex = winnerId ? rest.findIndex((c) => c.id === winnerId) : -1;
   const ordered =
     winnerIndex >= 0 ? [rest[winnerIndex], primary, ...rest.filter((_, i) => i !== winnerIndex)] : [primary, ...rest];

@@ -173,6 +173,15 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       maxRetries?: number;
+      /**
+       * Budget for the browser part of this action, across every proxy tried.
+       * Blank/0 uses the built-in default (5 minutes).
+       */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy list id, or "direct" for none. Blank uses the job's proxy. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
+      tryAllProxies?: boolean;
     }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
 
@@ -265,6 +274,14 @@ export type CustomStepLog = {
   cfProxy?: string;
   /** How many exits were tried before the page loaded. */
   cfAttempts?: number;
+  /** Title of the page the browser ended up on. */
+  cfPageTitle?: string;
+  /** Navigation or renderer trouble seen while loading (crashed tab, failed request). */
+  cfNavError?: string;
+  /** One line per exit tried: outcome, page title, text length, in-app steps. */
+  cfTrace?: string[];
+  /** Screenshot of the final page, so a server-only failure can be seen. */
+  cfScreenshot?: string;
 };
 
 export type EmbywatchConfig = {

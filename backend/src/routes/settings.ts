@@ -4,7 +4,7 @@ import { refreshScheduler, purgeOldLogs } from "../scheduler";
 import { SocksClient } from "socks";
 import { parseTgProxy } from "../jobs/runner";
 import { isBulkAccountManagementEnabled } from "../jobs/bulkAdd";
-import { installCfChromium, isChromiumInstalled } from "../jobs/cloudflare";
+import { installCfChromium, isChromiumInstalled, testBrowser } from "../jobs/cloudflare";
 import {
   providersForClient,
   saveProviders,
@@ -155,6 +155,14 @@ router.post("/cf-solver/install", async (_req, res) => {
   } finally {
     cfInstalling = false;
   }
+});
+
+// POST /cf-solver/test -- launch the installed browser and check that it renders, so a
+// Mini App step that comes up blank on a server can be told apart from a site problem.
+// `?screenshot=1` includes what the browser drew.
+router.post("/cf-solver/test", async (req, res) => {
+  const result = await testBrowser();
+  res.json(req.query.screenshot ? result : { ...result, screenshot: undefined });
 });
 
 // ── Proxy providers ───────────────────────────────────────────────────────────

@@ -632,6 +632,73 @@
                         >
                           {{ s.callbackAnswer }}
                         </div>
+                        <!-- Browser (Cloudflare / Mini App) outcome: the page the
+                             browser ended up on is otherwise invisible from here -->
+                        <div v-if="s.cfHost" class="dev-step-meta">
+                          <span>{{ t("logs.cf.host") }}: {{ s.cfHost }}</span>
+                          <span v-if="s.cfProxy"
+                            >{{ t("logs.cf.proxy") }}: {{ s.cfProxy
+                            }}{{
+                              s.cfAttempts && s.cfAttempts > 1
+                                ? ` (${s.cfAttempts})`
+                                : ""
+                            }}</span
+                          >
+                          <span
+                            >{{ t("logs.cf.challenge") }}:
+                            {{
+                              s.cfChallenged
+                                ? s.cfPassed
+                                  ? t("logs.cf.passed")
+                                  : t("logs.cf.refused")
+                                : t("logs.cf.none")
+                            }}</span
+                          >
+                          <span v-if="s.cfMiniApp"
+                            >{{ t("logs.cf.signed") }}:
+                            {{ s.cfMiniAppSigned ? "✓" : "✗" }}</span
+                          >
+                          <span v-if="s.cfMiniAppAction"
+                            >{{ t("logs.cf.inApp") }}:
+                            {{ s.cfMiniAppAction }}</span
+                          >
+                          <span v-if="s.cfPageTitle"
+                            >{{ t("logs.cf.pageTitle") }}:
+                            {{ s.cfPageTitle }}</span
+                          >
+                          <span v-if="s.cfNavError" style="color: #e63946"
+                            >{{ t("logs.cf.navError") }}:
+                            {{ s.cfNavError }}</span
+                          >
+                        </div>
+                        <div
+                          v-if="showDevLogs && s.cfTrace?.length"
+                          class="dev-block"
+                          style="margin-top: 4px"
+                        >
+                          <div class="dev-block-label">
+                            {{ t("logs.cf.trace") }}
+                          </div>
+                          <pre class="dev-block-pre">{{
+                            s.cfTrace.join("\n")
+                          }}</pre>
+                        </div>
+                        <div
+                          v-if="s.cfScreenshot"
+                          class="dev-block"
+                          style="margin-top: 4px"
+                        >
+                          <div class="dev-block-label">
+                            {{ t("logs.cf.screenshot") }}
+                          </div>
+                          <a :href="s.cfScreenshot" target="_blank">
+                            <img
+                              :src="s.cfScreenshot"
+                              class="dev-block-img"
+                              alt="browser page"
+                            />
+                          </a>
+                        </div>
                         <!-- Response after the action -->
                         <div
                           v-if="

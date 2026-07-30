@@ -936,7 +936,8 @@ export async function runCheckin(
     log.cfProxy = result.proxyLabel;
     log.cfAttempts = result.attempts;
     if (result.ok && result.proxyId) rememberCfProxy(result.finalHost, result.proxyId);
-    if (!result.ok) throw new Error('Could not pass the Cloudflare "I am not a bot" challenge');
+    if (!result.ok)
+      throw new Error(result.reason ?? 'Could not pass the Cloudflare "I am not a bot" challenge');
     return result.text;
   };
 
