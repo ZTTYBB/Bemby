@@ -390,6 +390,12 @@ export type CheckinPageResult = {
    * stays available, while a retry skips the ones already known to be refused.
    */
   refusedProxyIds?: string[];
+  /**
+   * The failure is about this exit -- a refused challenge, a page that never loaded -- so
+   * another is worth trying. False for a failure inside the app, which every exit meets
+   * alike: rotating through the pool then only wastes the budget.
+   */
+  exitRelated?: boolean;
   /** Why the attempt is not ok, in plain words, for the job log. */
   reason?: string;
   /** Navigation/renderer trouble seen while loading (page crash, failed request). */
@@ -482,6 +488,11 @@ const DEFAULT_BUDGET_MS = 300_000;
 const MIN_ATTEMPT_MS = 10_000;
 // A page holding less text than this rendered nothing worth reading.
 const BLANK_TEXT_LEN = 10;
+// How long to keep looking for a verification the app raises after the checkin click.
+const POST_CLICK_CHALLENGE_MS = 20_000;
+// Ceiling for a single CDP call. Puppeteer's own default is three minutes, long enough
+// for one wedged call to spend a whole step's budget.
+const PROTOCOL_TIMEOUT_MS = 30_000;
 
 /**
  * Decides whether a Mini App pass actually did anything. A page that rendered nothing,
@@ -514,6 +525,16 @@ export function miniAppVerdict(state: {
     };
   }
   if (solved && inAppFailure) return { ok: false, reason: inAppFailure };
+  // The app's own wording wins over our reading of the page: if it is still asking to be
+  // verified, the checkin did not go through, whatever the challenge detection saw.
+  if (solved && VERIFY_REQUIRED_RE.test(text)) {
+    return {
+      ok: false,
+      reason:
+        "the app is still asking for a human verification, so the checkin did not go " +
+        "through -- add the verification step to the action (its control, or css:...)",
+    };
+  }
   if (!solved) {
     return {
       ok: false,
@@ -700,6 +721,14 @@ async function launchBrowser(proxyUrl?: string): Promise<{
         "--no-first-run",
         "--no-default-browser-check",
         "--hide-crash-restore-bubble",
+        // A window Chromium considers occluded gets its timers, rendering and observer
+        // callbacks throttled, which stalls anything waiting on them. Separate switches
+        // on purpose: a second --disable-features would override the one
+        // puppeteer-real-browser sets for AutomationControlled.
+        "--window-position=0,0",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-background-timer-throttling",
         // Language has to be set at launch to stay consistent: this covers both
         // navigator.language(s) and the Accept-Language header
         ...(geo?.lang ? [`--lang=${geo.lang}`, `--accept-lang=${geo.lang}`] : []),
@@ -708,8 +737,24 @@ async function launchBrowser(proxyUrl?: string): Promise<{
         chromePath: executablePath,
         ...(profile.dir ? { userDataDir: profile.dir } : {}),
       },
+      // A CDP call against a wedged renderer otherwise waits out puppeteer's 3-minute
+      // default, which would swallow the whole step budget in one call
+      connectOption: { protocolTimeout: PROTOCOL_TIMEOUT_MS },
       proxy,
     });
+    // A reused profile reopens the tabs the last session left behind, and they pile up
+    // run after run. Worse, the restored tab -- not ours -- is the active one, and
+    // Chromium delivers pointer presses only to the active tab: a click then registers as
+    // a hover and nothing else. Close the strays and bring ours to the front.
+    const strays = (await launched.browser.pages().catch(() => [])).filter(
+      (p) => p !== launched.page,
+    );
+    for (const stray of strays) await stray.close().catch(() => {});
+    if (strays.length) {
+      console.log(`[cloudflare] closed ${strays.length} restored tab(s) from the saved profile`);
+    }
+    await launched.page.bringToFront().catch(() => {});
+
     return {
       ...launched,
       key,
@@ -760,6 +805,43 @@ async function alignWithExit(
   }
   if (geo?.tz) await page.emulateTimezone(geo.tz).catch(() => {});
   return geo;
+}
+
+/**
+ * Clicks an element by moving the pointer to it, rather than through `page.click`.
+ *
+ * Puppeteer's own click first awaits `scrollIntoViewIfNeeded`, which resolves off an
+ * IntersectionObserver callback. Under Xvfb, with a window Chromium believes is occluded,
+ * those callbacks are throttled and never arrive: the CDP call then hangs until the
+ * protocol timeout and the step reports a press that never happened. Scrolling
+ * synchronously in the page and dispatching real pointer events avoids the wait entirely,
+ * and is closer to what a person does anyway.
+ */
+async function clickElement(page: Page, selector: string): Promise<boolean> {
+  const box = await page
+    .evaluate((sel: string) => {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      if (!el) return null;
+      el.scrollIntoView({ block: "center", inline: "center" });
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return null;
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    }, selector)
+    .catch(() => null);
+  if (!box) return false;
+  // Approach then press, as a pointer would
+  let failure: string | undefined;
+  await page.mouse.move(box.x - 8, box.y + 6).catch((err: any) => {
+    failure = `move: ${err?.message ?? err}`;
+  });
+  await page.mouse.click(box.x, box.y).catch((err: any) => {
+    failure = `click: ${err?.message ?? err}`;
+  });
+  if (failure) {
+    console.warn(`[cloudflare] pointer ${failure}`);
+    return false;
+  }
+  return true;
 }
 
 // Full-page Cloudflare interstitial ("Just a moment...").
@@ -927,6 +1009,12 @@ export async function turnstileToken(page: Page): Promise<string> {
 const REFUSED_RE =
   /人机验证失败|人機驗證失敗|验证失败|驗證失敗|verification failed|challenge failed|请刷新页面重试|請刷新頁面重試/i;
 
+// An app asking for a human check in its own wording, typically in a dialog raised by
+// pressing the checkin control. The widget behind it renders a moment later, so this is
+// also the signal to keep waiting for one.
+const VERIFY_REQUIRED_RE =
+  /请完成人机验证|請完成人機驗證|完成人机验证|完成人機驗證|需要人机验证|需要人機驗證|complete the (?:human )?verification|verify you are human/i;
+
 // Text a verify portal shows once the identity check has gone through.
 const SUCCESS_RE =
   /success|verified|verification complete|completed|已(驗|验)[證证]|(驗|验)[證证](成功|完成|通過|通过)|已通過|已通过/i;
@@ -957,8 +1045,98 @@ async function clickVerifyButton(page: Page): Promise<boolean> {
     })
     .catch(() => null);
   if (!sel) return false;
-  await page.click(sel).catch(() => {});
+  return clickElement(page, sel);
+}
+
+
+// Cap (capjs.js.org) is a self-hosted proof-of-work captcha some apps use instead of
+// Turnstile: a checkbox reading "Verify you're human" inside a custom element's shadow
+// root. Ticking it runs the work in the browser and the app proceeds on its own once a
+// token is issued, so it needs no service and no key -- only a real click and patience.
+const CAP_SELECTOR = "cap-widget,cap-floating-widget,[data-cap-api-endpoint]";
+const CAP_ASKING_RE = /verify you'?re human|i'?m not a robot|请完成验证/i;
+const CAP_SOLVED_RE = /you'?re human|verified|完成|成功/i;
+
+/** A Cap widget is on the page (light DOM or inside a shadow root). */
+async function hasCapWidget(page: Page): Promise<boolean> {
+  return page
+    .evaluate(
+      `(function () { ${DEEP_QUERY_FN}
+         return __deepQuery(${JSON.stringify(CAP_SELECTOR)}).length > 0;
+       })()`,
+    )
+    .then((v) => !!v)
+    .catch(() => false);
+}
+
+/** What the Cap widget is showing, and whether it has produced a token. */
+async function capState(page: Page): Promise<{ asking: boolean; solved: boolean }> {
+  return page
+    .evaluate(
+      `(function () { ${DEEP_QUERY_FN}
+         var w = __deepQuery(${JSON.stringify(CAP_SELECTOR)})[0];
+         if (!w) return { asking: false, solved: false };
+         var root = w.shadowRoot || w;
+         var text = (root.textContent || "") + " " + (w.textContent || "");
+         var token = w.getAttribute("data-cap-token") || w.getAttribute("token") || "";
+         if (!token) {
+           var field = (root.querySelector ? root.querySelector("input") : null);
+           token = (field && field.value) || "";
+         }
+         return {
+           asking: ${CAP_ASKING_RE.toString()}.test(text),
+           solved: !!token || (${CAP_SOLVED_RE.toString()}.test(text) && !${CAP_ASKING_RE.toString()}.test(text)),
+         };
+       })()`,
+    )
+    .then((v: any) => ({ asking: !!v?.asking, solved: !!v?.solved }))
+    .catch(() => ({ asking: false, solved: false }));
+}
+
+/** Ticks the Cap checkbox: a real pointer press at its box, shadow root and all. */
+async function clickCapWidget(page: Page): Promise<boolean> {
+  const box = (await page
+    .evaluate(
+      `(function () { ${DEEP_QUERY_FN}
+         var w = __deepQuery(${JSON.stringify(CAP_SELECTOR)})[0];
+         if (!w) return null;
+         w.scrollIntoView({ block: "center" });
+         var r = w.getBoundingClientRect();
+         if (r.width < 10 || r.height < 10) return null;
+         return { x: r.x, y: r.y, width: r.width, height: r.height };
+       })()`,
+    )
+    .catch(() => null)) as Box | null;
+  if (!box) return false;
+  // The checkbox sits at the left edge, as it does in Turnstile
+  await page.mouse.move(box.x + 12, box.y + box.height / 2 + 6).catch(() => {});
+  await page.mouse.click(box.x + 22, box.y + box.height / 2).catch(() => {});
   return true;
+}
+
+/**
+ * Ticks a Cap checkbox and waits for the app to move on. The work happens in the browser
+ * and takes a moment; the app is what completes the action once its token arrives, so the
+ * app's own success wording counts as much as the widget's state.
+ */
+async function solveCap(page: Page, deadline: number): Promise<boolean> {
+  if (!(await clickCapWidget(page))) return false;
+  let clicks = 1;
+  while (Date.now() < deadline) {
+    await sleep(POLL_MS, deadline);
+    const state = await capState(page);
+    const body = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+    if (state.solved || SUCCESS_RE.test(body)) return true;
+    if (REFUSED_RE.test(body)) return false;
+    // Gone from the page altogether: the app took it and closed the dialog
+    if (!state.asking && !VERIFY_REQUIRED_RE.test(body)) return true;
+    // Nudge it a couple of times in case the first press missed the checkbox
+    if (state.asking && clicks < 3 && Date.now() > deadline - CHALLENGE_TIMEOUT_MS + clicks * 8_000) {
+      clicks++;
+      await clickCapWidget(page);
+    }
+  }
+  return false;
 }
 
 // telegram-web-app.js posts events to the host client; with no host it either
@@ -1004,24 +1182,63 @@ async function waitForAppReady(page: Page, budgetDeadline: number): Promise<void
   }
 }
 
+/** How the thing that got clicked was identified, worst last. */
+type InAppTargetKind = "selector" | "control" | "pointer" | "in-card" | "text";
+
+type InAppTarget = { label: string; kind: InAppTargetKind; done: boolean };
+
 /**
- * Finds a control inside the Mini App by its visible text. Mini apps are ordinary web
- * apps, so the control may be a real button, a link, or any element with a click
- * handler; the label is located first, then the nearest thing that behaves like a
- * control. Tags it with `data-cf-checkin` for a CDP click. Reports `done: true` when
- * that control is disabled or reads as already used, so it is left alone.
+ * Finds the control to press inside the Mini App.
+ *
+ * A label is not a control. These apps put the wording in several places at once -- a
+ * card captioned "每日签到" over a heading "立即签到" beside a button reading "签到" -- and
+ * taking the first match in document order lands on the caption, which clicks nothing
+ * while looking like success. So every match is collected and the most control-like one
+ * wins: a real button or link first, then an element that at least behaves like one, then
+ * a button sitting in the same card as the label, and only then the bare text.
+ *
+ * `wanted` may instead be a CSS selector (`css:` prefix), which skips all of this and
+ * presses exactly what the selector names.
  */
 async function findInAppCheckin(
   page: Page,
   labelRe: RegExp,
-): Promise<{ label: string; done: boolean } | null> {
+  selector?: string,
+): Promise<InAppTarget | null> {
   return page
     .evaluate(
-      (labelSrc: string, doneSrc: string) => {
+      (labelSrc: string, doneSrc: string, sel: string) => {
         const label = new RegExp(labelSrc, "i");
         const done = new RegExp(doneSrc, "i");
-        // Direct text nodes only: identifies the element holding the label itself
-        // rather than every wrapper around it.
+        const CONTROL_SEL = "button,[role=button],a[href],input[type=submit],input[type=button]";
+
+        const visible = (el: Element) =>
+          (el as HTMLElement).offsetParent !== null || el.getClientRects().length > 0;
+
+        const spent = (el: Element) =>
+          (el as HTMLButtonElement).disabled ||
+          el.getAttribute("aria-disabled") === "true" ||
+          el.closest("[disabled],[aria-disabled='true']") !== null;
+
+        const describe = (el: Element, fallback: string) =>
+          ((el.textContent ?? "").trim() || (el as HTMLInputElement).value || fallback).slice(0, 40);
+
+        const take = (el: Element, kind: string, fallbackLabel: string) => {
+          if (spent(el) || done.test(describe(el, ""))) {
+            return { label: describe(el, fallbackLabel), kind: kind, done: true };
+          }
+          el.setAttribute("data-cf-checkin", "1");
+          return { label: describe(el, fallbackLabel), kind: kind, done: false };
+        };
+
+        // An explicit selector is taken at its word: first visible match.
+        if (sel) {
+          const hit = Array.from(document.querySelectorAll(sel)).find(visible);
+          return hit ? take(hit, "selector", sel) : null;
+        }
+
+        // Direct text nodes only, so the element holding the label is found rather than
+        // every wrapper around it.
         const ownText = (el: Element) =>
           Array.from(el.childNodes)
             .filter((n) => n.nodeType === 3)
@@ -1029,71 +1246,132 @@ async function findInAppCheckin(
             .join("")
             .trim();
 
-        const visible = (el: HTMLElement) =>
-          el.offsetParent !== null || el.getClientRects().length > 0;
+        // Ranked candidates for one labelled element: the real control it sits in, an
+        // ancestor that behaves like one, a control inside the same card, or the text.
+        const candidatesFor = (el: Element): Array<{ el: Element; kind: string }> => {
+          const out: Array<{ el: Element; kind: string }> = [];
+          const semantic = el.closest(CONTROL_SEL);
+          if (semantic && visible(semantic)) out.push({ el: semantic, kind: "control" });
 
-        // The label may sit inside a real control, or on an element that merely has a
-        // click handler (mini apps bind these to divs freely). Walk out a few levels
-        // looking for either, then fall back to the label element itself.
-        const controlFor = (el: HTMLElement): HTMLElement => {
-          const semantic = el.closest(
-            "button,[role=button],a[href],input[type=submit],input[type=button]",
-          ) as HTMLElement | null;
-          if (semantic) return semantic;
-          let node: HTMLElement | null = el;
+          let node: Element | null = el;
           for (let i = 0; node && i < 3; i++, node = node.parentElement) {
-            if (getComputedStyle(node).cursor === "pointer") return node;
+            if (getComputedStyle(node as HTMLElement).cursor === "pointer") {
+              out.push({ el: node, kind: "pointer" });
+              break;
+            }
           }
-          return el;
+
+          // The label captions a card; the button that acts on it lives in that card.
+          let box: Element | null = el;
+          for (let i = 0; box && i < 4; i++, box = box.parentElement) {
+            const inside = Array.from(box.querySelectorAll(CONTROL_SEL)).filter(
+              (c) => visible(c) && label.test((c.textContent ?? "") || (c as HTMLInputElement).value || ""),
+            );
+            if (inside.length) {
+              out.push({ el: inside[0], kind: "in-card" });
+              break;
+            }
+          }
+
+          out.push({ el, kind: "text" });
+          return out;
         };
 
-        for (const el of Array.from(document.querySelectorAll("*")) as HTMLElement[]) {
+        const RANK = ["control", "pointer", "in-card", "text"];
+        let best: { el: Element; kind: string; fallback: string } | null = null;
+
+        for (const el of Array.from(document.querySelectorAll("*"))) {
           const text = (ownText(el) || (el as HTMLInputElement).value || "").trim();
           if (!text || text.length > 30 || !label.test(text)) continue;
           if (!visible(el)) continue;
 
-          const target = controlFor(el);
-          if (!visible(target)) continue;
-
-          // A disabled control is the app's way of saying the action is spent
-          const full = (target.textContent ?? "").trim();
-          const off =
-            (target as HTMLButtonElement).disabled ||
-            target.getAttribute("aria-disabled") === "true" ||
-            target.closest("[disabled],[aria-disabled='true']") !== null;
-          if (off || done.test(full)) return { label: (full || text).slice(0, 40), done: true };
-          target.setAttribute("data-cf-checkin", "1");
-          return { label: text, done: false };
+          for (const cand of candidatesFor(el)) {
+            if (!best || RANK.indexOf(cand.kind) < RANK.indexOf(best.kind)) {
+              best = { el: cand.el, kind: cand.kind, fallback: text };
+            }
+            break; // only this element's best candidate competes
+          }
+          // A real control is as good as it gets; no need to look further
+          if (best && best.kind === "control") break;
         }
-        return null;
+
+        return best ? take(best.el, best.kind, best.fallback) : null;
       },
       labelRe.source,
       IN_APP_DONE_RE.source,
+      selector ?? "",
     )
-    .catch(() => null);
+    .catch((err: any) => {
+      // Swallowing this once cost a long hunt: a lookup that throws looks exactly like
+      // an app with no checkin control on it.
+      console.warn(`[cloudflare] in-app lookup failed: ${err?.message ?? err}`);
+      return null;
+    }) as Promise<InAppTarget | null>;
 }
 
-// Presses one control inside the Mini App: the one named by `wanted`, or a
-// checkin-worded one when no label is given. Returns what happened, or undefined when
-// the label is nowhere on the page.
-async function clickInAppControl(page: Page, wanted?: string): Promise<string | undefined> {
-  const labelRe = wanted ? new RegExp(escapeRe(wanted), "i") : IN_APP_LABEL_RE;
+/** `css:<selector>` in a step names the element to press outright. */
+function parseSelectorStep(step: string): string | undefined {
+  const m = /^css:(.+)$/i.exec(step.trim());
+  return m ? m[1].trim() : undefined;
+}
 
-  const target = await findInAppCheckin(page, labelRe);
-  if (target?.done) return `already done: ${target.label}`;
+type ClickOutcome = {
+  /** What to show in the log. */
+  outcome: string;
+  /** The app said this action is already spent. */
+  done: boolean;
+  /** Nothing control-like was pressed, so the click may well have done nothing. */
+  weak: boolean;
+};
+
+/**
+ * Presses one control inside the Mini App: the one named by `wanted` (a label, or a
+ * `css:` selector), or a checkin-worded one when nothing is given. Returns what happened,
+ * or undefined when the label is nowhere on the page.
+ */
+async function clickInAppControl(
+  page: Page,
+  wanted?: string,
+): Promise<ClickOutcome | undefined> {
+  const selector = wanted ? parseSelectorStep(wanted) : undefined;
+  const labelRe = wanted && !selector ? new RegExp(escapeRe(wanted), "i") : IN_APP_LABEL_RE;
+
+  const target = await findInAppCheckin(page, labelRe, selector);
+  if (target?.done) {
+    return { outcome: `already done: ${target.label}`, done: true, weak: false };
+  }
+
+  // Nothing control-like matched. Before pressing inert text -- or giving up -- see
+  // whether the app is saying the action is already spent: a checkin done earlier today
+  // takes its button away but leaves the wording ("每日签到 … 今日已签到") behind, which
+  // still matches the label the job names.
+  if (!selector && (!target || target.kind === "text")) {
+    const text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+    if (IN_APP_DONE_RE.test(text) && (labelRe.test(text) || IN_APP_LABEL_RE.test(text))) {
+      return { outcome: "already done (from the page's own wording)", done: true, weak: false };
+    }
+  }
+
   if (target) {
     // Real (CDP) click: mini apps commonly bind pointer events, not synthetic clicks
-    await page.click("[data-cf-checkin='1']").catch(() => {});
+    const landed = await clickElement(page, "[data-cf-checkin='1']");
     await page.evaluate(() =>
       document.querySelector("[data-cf-checkin]")?.removeAttribute("data-cf-checkin"),
     ).catch(() => {});
-    return target.label;
+    if (!landed) {
+      console.warn("[cloudflare] in-app click did not land: the control has no on-screen box");
+      return { outcome: `${target.label} (could not be clicked)`, done: false, weak: true };
+    }
+    // "text" means the label itself was clicked for want of anything better, which for
+    // an app that binds its handler to a button does nothing at all -- say so.
+    const weak = target.kind === "text";
+    return {
+      outcome: weak ? `${target.label} (plain text, not a control)` : target.label,
+      done: false,
+      weak,
+    };
   }
 
-  // No control to press: apps that render the spent state as plain text (a label
-  // beside a disabled control) still say so in the page text.
-  const text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
-  if (labelRe.test(text) && IN_APP_DONE_RE.test(text)) return "already done";
   return undefined;
 }
 
@@ -1149,7 +1427,7 @@ async function fillInAppAnswer(page: Page, answer: string): Promise<boolean> {
     })
     .catch(() => false);
   if (!ok) return false;
-  await page.click("[data-cf-input='1']").catch(() => {});
+  await clickElement(page, "[data-cf-input='1']");
   await page.type("[data-cf-input='1']", answer, { delay: 60 }).catch(() => {});
   await page
     .evaluate(() => document.querySelector("[data-cf-input]")?.removeAttribute("data-cf-input"))
@@ -1201,8 +1479,10 @@ async function runInAppClicks(
       continue;
     }
 
-    const outcome = await clickInAppControl(page, step);
-    if (!outcome) {
+    // What the page reads now, so a click on something inert can be told from a real one
+    const before = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+    const click = await clickInAppControl(page, step);
+    if (!click) {
       // A label that never appears is worth reporting: the app may have changed
       if (step) done.push(`"${step}" not found`);
       failure = step
@@ -1210,9 +1490,21 @@ async function runInAppClicks(
         : "no checkin control was found in the app";
       break;
     }
-    done.push(outcome);
+    done.push(click.outcome);
     await sleep(IN_APP_STEP_MS, deadline);
-    if (outcome.startsWith("already done")) break;
+
+    // Pressing plain text is a guess. If the app did not react to it, nothing happened,
+    // and reporting success would log a checkin that was never made.
+    if (click.weak) {
+      const after = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+      if (after === before) {
+        failure =
+          `pressed "${click.outcome}" but it is not a control and the app did not react` +
+          " -- name the control exactly, or give a CSS selector (css:...)";
+        break;
+      }
+    }
+    if (click.done) break;
   }
 
   // Let the last step's request round-trip before the page text is scraped
@@ -1485,6 +1777,11 @@ async function attemptLoad(
       const interstitial = await isInterstitial(page);
       let widget = await hasTurnstileWidget(page);
 
+      // Not every app uses Turnstile: a Cap checkbox is solved in the browser instead.
+      if (!interstitial && !widget && (await hasCapWidget(page))) {
+        return solveCap(page, Math.min(Date.now() + CHALLENGE_TIMEOUT_MS, budgetDeadline));
+      }
+
       // A verify portal may load the Turnstile script and only render the widget once
       // its single button is pressed, so try that before concluding there is nothing.
       if (!interstitial && !widget && (await hasTurnstileScript(page))) {
@@ -1556,7 +1853,18 @@ async function attemptLoad(
       inAppAction = clicks.trace;
       inAppFailure = clicks.failure;
 
-      const after = await solveChallenge();
+      // A verification the app raises only once the checkin is pressed needs a moment to
+      // render. Asking once, immediately, sees nothing there and calls the step done --
+      // so while the app says it wants one, keep looking for it.
+      const challengeBy = Math.min(Date.now() + POST_CLICK_CHALLENGE_MS, budgetDeadline);
+      let after: boolean | null = null;
+      for (;;) {
+        after = await solveChallenge();
+        if (after !== null) break;
+        const body = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+        if (!VERIFY_REQUIRED_RE.test(body) || Date.now() >= challengeBy) break;
+        await sleep(POLL_MS, challengeBy);
+      }
       if (after !== null) {
         challenged = true;
         solved = after;
@@ -1592,6 +1900,9 @@ async function attemptLoad(
       reason: verdict.reason,
       navError,
       pageTitle,
+      // A challenge this exit was refused, or a page it never loaded, is worth retrying
+      // elsewhere; a control that is not on the page is not.
+      exitRelated: !!navError || (challenged && !verdict.ok) || !text.trim(),
       screenshot: opts.screenshot ? await screenshotOf(page) : undefined,
     };
   } catch (err: any) {
@@ -1601,7 +1912,15 @@ async function attemptLoad(
     } else {
       console.error(`[cloudflare] Failed to load ${finalHost}: ${msg}`);
     }
-    return { ok: false, challenged: false, text: "", finalHost, reason: msg, navError: msg };
+    return {
+      ok: false,
+      challenged: false,
+      text: "",
+      finalHost,
+      reason: msg,
+      navError: msg,
+      exitRelated: true,
+    };
   } finally {
     await browser?.close().catch(() => {});
     cleanup?.();
@@ -1680,6 +1999,13 @@ export async function loadCheckinUrl(
       refusedProxyIds: [...refusedProxyIds],
     };
     if (result.ok) return last;
+
+    // Nothing another exit can do about a failure inside the app itself
+    if (result.exitRelated === false) {
+      trace.push("failed inside the app, so no other exit was tried");
+      console.log("[cloudflare] failure is not about the exit; leaving the rest of the pool alone");
+      break;
+    }
   }
 
   return { ...last!, trace: [...trace], refusedProxyIds: [...refusedProxyIds] };
