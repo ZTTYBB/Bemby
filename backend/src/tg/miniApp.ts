@@ -162,6 +162,28 @@ export async function resolveMiniAppUrl(
 }
 
 /**
+ * Signs an address the operator typed rather than one read off a button. A
+ * `t.me/<bot>/<app>` link names its own bot and is resolved from the link; anything else
+ * is signed through `bot`, which is the only way Telegram will attach the init data.
+ * Unsigned means the app would load logged out, so the caller decides whether to go on.
+ */
+export async function openableMiniAppUrl(
+  client: TelegramClient,
+  url: string,
+  bot?: Api.TypeEntityLike,
+): Promise<{ url: string; signed: boolean }> {
+  const link = parseMiniAppLink(url);
+  if (link) {
+    const viaLink = await resolveMiniAppLink(client, link);
+    // The bare t.me link is a Telegram page rather than the app, so it is no fallback
+    return { url: viaLink.resolved ? viaLink.url : url, signed: viaLink.resolved };
+  }
+  if (!bot) return { url, signed: false };
+  const viaBot = await resolveMiniAppUrl(client, bot, url);
+  return { url: viaBot.url, signed: viaBot.resolved };
+}
+
+/**
  * Turns a matched inline button into an address a browser can open: plain URL
  * buttons as-is, Mini App buttons signed by Telegram. For a webview button the app's
  * owner is the message sender (or its via-bot); in a bot DM that is the chat peer

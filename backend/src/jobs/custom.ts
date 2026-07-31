@@ -28,7 +28,12 @@ import {
   type CfRunState,
   type LoadOptions,
 } from "./cloudflare";
-import { openableButtonUrl, webButtonOf, type WebButton } from "../tg/miniApp";
+import {
+  openableButtonUrl,
+  openableMiniAppUrl,
+  webButtonOf,
+  type WebButton,
+} from "../tg/miniApp";
 import { cfMaxCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
 import { cfTuning } from "./cfTuning";
 import type { CustomConfig, CustomStepLog } from "../types";
@@ -2440,6 +2445,120 @@ export async function runCustom(
                 step.result = cf.inAppAction
                   ? `Opened "${hit.web.text}", pressed "${cf.inAppAction}"`
                   : `Opened "${hit.web.text}" (nothing pressed inside the app)`;
+
+                if (action.failContains && cf.text.includes(action.failContains)) {
+                  throw new Error(`Page indicates failure: "${action.failContains}" detected`);
+                }
+                if (action.successContains && !cf.text.includes(action.successContains)) {
+                  throw new Error(
+                    `Expected success indicator "${action.successContains}" not found in the Mini App page`,
+                  );
+                }
+                break;
+              }
+
+              case "open_mini_app_url": {
+                // Placeholders expand as they do for a command, so one template URL can
+                // still carry a per-run value
+                const rawUrl = expandCommand(action.url ?? "").trim();
+                if (!rawUrl) throw new Error("This action needs a Mini App URL");
+                // Blank names the job's own bot, which is the common case: a template set
+                // up for one bot works for every account linked to it
+                const owner = action.contact?.trim() || botUsername;
+                step.label = `Open Mini App ${rawUrl}`;
+
+                const { url, signed } = await openableMiniAppUrl(client, rawUrl, owner);
+                step.cfMiniApp = true;
+                step.cfMiniAppSigned = signed;
+                if (!signed) {
+                  throw new Error(
+                    `Telegram would not sign this Mini App URL through ${owner}, so it cannot be ` +
+                      "opened logged in. Check the bot owns the app, or use its t.me/<bot>/<app> link.",
+                  );
+                }
+
+                const cfHost = (() => {
+                  try {
+                    return new URL(url).host;
+                  } catch {
+                    return "";
+                  }
+                })();
+
+                const tune = cfTuning();
+                const budgetMs =
+                  action.maxWaitMs && action.maxWaitMs > 0 ? action.maxWaitMs : tune.budgetMs;
+                const budgetKey = `mini:${i}`;
+                const actionDeadline = cfRun.deadlines.get(budgetKey) ?? Date.now() + budgetMs;
+                cfRun.deadlines.set(budgetKey, actionDeadline);
+                const budgetLeft = actionDeadline - Date.now();
+                if (budgetLeft < tune.minActionMs) {
+                  throw new Error(
+                    `Browser time for this action is spent (${Math.round(budgetMs / 1000)}s budget)`,
+                  );
+                }
+
+                const refused = cfRefusedFor(cfRun, cfHost);
+                const candidates = cfProxyCandidatesFor({
+                  primaryUrl: webProxyUrl,
+                  host: cfHost,
+                  proxyId: action.proxyId,
+                  tryAll: action.tryAllProxies ?? true,
+                  exclude: refused,
+                  max: action.tryAllProxies === false ? 1 : cfMaxCandidates(),
+                });
+                if (!candidates.length) {
+                  throw new Error(
+                    `Every available proxy (${refused.size}) was already refused for ${cfHost}`,
+                  );
+                }
+
+                const cf = await loadCheckinUrl(url, webProxyUrl, {
+                  miniApp: true,
+                  inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
+                  maxWaitMs: budgetLeft,
+                  screenshot: true,
+                  solveQuestion: async (question) => {
+                    const prompt =
+                      `A Telegram Mini App is asking a verification question before it will ` +
+                      `complete a checkin. The screen reads:\n\n${question}\n\n` +
+                      `Reply with ONLY the answer to type into the input, nothing else.`;
+                    const { response } = await callAI([], prompt, 512);
+                    step.aiPrompt = prompt;
+                    step.aiResponse = response;
+                    return response;
+                  },
+                  aiLocate: async (image, prompt) => {
+                    const { response } = await callAI([image], prompt, 512);
+                    step.aiPrompt = prompt;
+                    step.aiResponse = response;
+                    return response;
+                  },
+                  proxyCandidates: candidates,
+                  // Init data ages, so each attempt is signed afresh
+                  refreshUrl: async () => (await openableMiniAppUrl(client, rawUrl, owner)).url,
+                });
+                step.cfHost = cf.finalHost;
+                step.cfChallenged = cf.challenged;
+                step.cfPassed = cf.ok;
+                step.cfMiniAppAction = cf.inAppAction;
+                step.cfProxy = cf.proxyLabel;
+                step.cfAttempts = cf.attempts;
+                step.cfPageTitle = cf.pageTitle;
+                step.cfNavError = cf.navError;
+                step.cfTrace = cf.trace;
+                step.cfScreenshot = cf.screenshot;
+                for (const id of cf.refusedProxyIds ?? []) refused.add(id);
+                if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
+                step.responseHtml = escapeHtml(cf.text.slice(0, 2000)).replace(/\n/g, "<br>");
+                if (!cf.ok) {
+                  throw new Error(
+                    cf.reason ?? 'Could not pass the Cloudflare "I am not a bot" challenge',
+                  );
+                }
+                step.result = cf.inAppAction
+                  ? `Opened the Mini App, pressed "${cf.inAppAction}"`
+                  : "Opened the Mini App (nothing pressed inside it)";
 
                 if (action.failContains && cf.text.includes(action.failContains)) {
                   throw new Error(`Page indicates failure: "${action.failContains}" detected`);

@@ -186,6 +186,27 @@ export type CustomAction =
       tryAllProxies?: boolean;
     }
   | {
+      // Same as `open_mini_app`, but the address is given rather than hunted from a button
+      // in the chat. Telegram still signs it for the job's own account, so the app sees
+      // that user -- which is what makes one template usable across many accounts.
+      type: "open_mini_app_url";
+      /** Mini App address, or a t.me/<bot>/<app> link, which names its own bot. */
+      url: string;
+      /** Bot that owns the app, used to sign the URL. Blank uses the job's bot. */
+      contact?: string;
+      /** Controls to press inside the app, in order. Blank auto-detects a checkin control. */
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      /** Budget for the browser part of this action. Blank/0 uses the default. */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy list id, or "direct". Blank uses the job's. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
+      tryAllProxies?: boolean;
+    }
+  | {
       // Open a plain web page in the installed browser, passing any Cloudflare challenge,
       // and drive it with the sub-steps below. Nothing about this action goes through
       // Telegram: the URL is opened directly.

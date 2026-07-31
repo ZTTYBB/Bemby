@@ -378,6 +378,20 @@ export type CustomAction =
       verifyWaitMs?: number;
     }
   | {
+      /** Mini App opened at a given address rather than one found on a button. */
+      type: "open_mini_app_url";
+      url: string;
+      /** Bot that owns the app, used to sign the URL. Blank uses the job's bot. */
+      contact?: string;
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      maxWaitMs?: number;
+      proxyId?: string;
+      tryAllProxies?: boolean;
+    }
+  | {
       type: "open_mini_app";
       contact?: string;
       button?: string;
