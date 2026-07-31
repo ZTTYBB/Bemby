@@ -1295,14 +1295,79 @@
           </div>
         </div>
       </div>
+
+      <!-- Memory -->
+      <div class="card s-col-6">
+        <div class="card-body">
+          <div class="card-section-title">{{ t("settings.memorySection") }}</div>
+
+          <div v-if="memoryLoading" style="color: #888; font-size: 13px">
+            {{ t("common.loading") }}
+          </div>
+          <template v-else-if="memory">
+            <!-- A previous kill is the thing worth surfacing: the process could not log it -->
+            <div v-if="memory.lastBeforeCrash" class="error-msg">
+              {{ crashText }}
+              <div
+                v-if="memory.lastBeforeCrash.runs.length"
+                style="margin-top: 4px"
+              >
+                {{ t("settings.memoryCrashJobs") }}
+                {{
+                  memory.lastBeforeCrash.runs
+                    .map((r) => `${r.jobName} (#${r.logId})`)
+                    .join(", ")
+                }}
+              </div>
+            </div>
+
+            <div class="mem-rows">
+              <div class="mem-row">
+                <span>{{ t("settings.memoryCurrent") }}</span>
+                <strong>{{ memory.current.rssMb }} MB</strong>
+              </div>
+              <div class="mem-row">
+                <span>{{ t("settings.memoryPeak") }}</span>
+                <strong>{{ memory.peak?.rssMb ?? memory.current.rssMb }} MB</strong>
+              </div>
+              <div class="mem-row">
+                <span>{{ t("settings.memoryExternal") }}</span>
+                <strong>{{ memory.current.externalMb }} MB</strong>
+              </div>
+              <div class="mem-row">
+                <span>{{ t("settings.memoryHeap") }}</span>
+                <strong>{{ memory.current.heapUsedMb }} MB</strong>
+              </div>
+              <div v-if="memory.limitMb" class="mem-row">
+                <span>{{ t("settings.memoryLimit") }}</span>
+                <strong>{{ memory.limitMb }} MB ({{ memoryPercent }}%)</strong>
+              </div>
+            </div>
+            <p style="font-size: 12px; color: #888; margin: 8px 0 0">
+              {{ t("settings.memoryHint") }}
+            </p>
+          </template>
+          <div v-else class="error-msg">{{ t("settings.memoryUnavailable") }}</div>
+
+          <button
+            class="btn btn-ghost btn-sm"
+            style="margin-top: 10px"
+            :disabled="memoryLoading"
+            @click="loadMemory"
+          >
+            <i class="fa-solid fa-rotate"></i> {{ t("common.refresh") }}
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from "vue";
-import { settingsApi, authApi, dataApi, aiSuppliersApi } from "../api/client";
+import { settingsApi, authApi, dataApi, aiSuppliersApi, statusApi } from "../api/client";
 import type {
+  MemoryReport,
   ExportPayload,
   EncryptedEnvelope,
   UAPreset,
@@ -1642,7 +1707,37 @@ const credSaving = ref(false);
 const credMsg = ref("");
 const credError = ref("");
 
+// Memory: current/peak plus whatever the previous process was holding if it was killed
+const memory = ref<MemoryReport | null>(null);
+const memoryLoading = ref(true);
+const memoryPercent = computed(() => {
+  const m = memory.value;
+  if (!m?.limitMb) return 0;
+  return Math.round((m.current.rssMb / m.limitMb) * 100);
+});
+
+const crashText = computed(() => {
+  const c = memory.value?.lastBeforeCrash;
+  if (!c) return "";
+  return t("settings.memoryCrash")
+    .replace("{rss}", String(c.rssMb))
+    .replace("{external}", String(c.externalMb))
+    .replace("{at}", new Date(c.at).toLocaleString());
+});
+
+async function loadMemory() {
+  memoryLoading.value = true;
+  try {
+    memory.value = await statusApi.memory();
+  } catch {
+    memory.value = null;
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
 onMounted(async () => {
+  loadMemory();
   try {
     const s = await settingsApi.get();
     form.default_timezone = s.default_timezone;
@@ -2269,6 +2364,28 @@ async function saveCredentials() {
   letter-spacing: 0.05em;
   color: #888;
   margin-bottom: 10px;
+}
+
+.mem-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mem-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  gap: 12px;
+}
+
+.mem-row span {
+  color: #888;
+}
+
+.mem-row strong {
+  font-variant-numeric: tabular-nums;
 }
 
 .input-with-toggle {

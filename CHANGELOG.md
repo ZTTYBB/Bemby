@@ -4,6 +4,32 @@ All notable changes to Bemby are documented here.
 
 ---
 
+## v0.9.36-patch-1
+
+### 中文
+
+- **修复 Emby 观看导致内存耗尽（OOM）而进程被终止** -- 播放前的可用性探测只请求前 64KB，但当 Emby 服务器（或其前置反向代理）忽略 `Range` 头、以 `200` 返回整个文件时，探测代码会把整部影片读入内存。实测一个 800MB 的文件会使内存占用峰值达到约 2.5GB，在 2GB 内存的机器上进程会被系统直接终止。现改为只读取一个数据块即停止并释放连接，无论服务器如何响应都不再受文件大小影响。这也是"调度执行失败、手动执行却能成功"的原因：每次运行都会随机挑选影片，抽到大文件才会崩溃，而调度执行的次数远多于手动执行。
+- **修复真实观看在服务器忽略 `Range` 时拉取整部影片** -- 现按本次时间窗口所需的字节数为上限，超出即停止；HLS 分片与未知文件大小的情形保持原有行为。
+- **减少代理模式下的内存占用** -- Emby 观看此前每个请求都新建一个代理连接池，其保持连接直到超时才释放。现按代理地址复用同一个连接池。
+- **修复未完成的登录会话泄漏 Telegram 连接** -- 请求验证码后若未继续完成登录（关闭页面、批量添加已跳过等），该已连接的客户端会一直驻留到进程结束。现超过 15 分钟自动销毁并释放。
+- **限制同时保持的 Telegram 连接数** -- 每个已连接账户都会占用数 MB 内存；无人查看的连接在超过上限（默认 8，`TG_LIVE_CLIENT_MAX`）后按最久未使用顺序断开。正在查看的账户不会被断开。
+- **限制消息页面的媒体大小** -- 内联查看媒体需要将整个文件读入内存，超过上限（默认 25MB，`TG_MEDIA_MAX_MB`）的文件不再加载。发送文件的大小上限可通过 `TG_UPLOAD_MAX_MB` 调整。
+- **限制 Node 堆内存上限** -- 镜像默认设置 `--max-old-space-size=512`，适配 2GB 内存的机器；内存更大的机器可通过覆盖 `NODE_OPTIONS` 调整。
+- **新增内存监控** -- 设置页面新增<strong>内存使用</strong>卡片，显示当前占用、本次启动峰值、外部内存与可用上限。占用超过上限的 75%（`MEMORY_WARN_PERCENT`）时会在日志中告警并指出当时正在运行的任务。进程被系统强制终止时无法自行留下记录，因此内存数据会定期写入数据库；下次启动会报告上次退出前的占用量以及当时运行的任务，用于判断是否为内存不足所致。
+
+### English
+
+- **Fixed Emby Watch exhausting memory and getting the process killed** -- the playability probe asks for only the first 64KB, but when the Emby server (or a reverse proxy in front of it) ignores the `Range` header and answers `200` with the whole file, the probe read the entire movie into memory. Measured against an 800MB file, memory peaked at roughly 2.5GB, which is fatal on a 2GB machine. It now reads a single chunk and releases the connection, so the cost no longer depends on the file size however the server responds. This is also why scheduled runs failed while manual runs succeeded: each run picks a random item, so only an unlucky draw crashed, and the scheduler draws far more often than you do by hand.
+- **Fixed Real Watch pulling a whole movie when the server ignores `Range`** -- it now stops once it has the bytes this interval needs. HLS segments and unknown file sizes behave as before.
+- **Reduced memory use when a proxy is configured** -- Emby Watch built a new proxy connection pool for every request and left its keep-alive sockets open until they timed out. One pool per proxy address is now reused.
+- **Fixed unfinished logins leaking a Telegram connection** -- after requesting a code, a login that was never completed (tab closed, a bulk add that moved on) left its connected client in memory for the life of the process. Sessions older than 15 minutes are now destroyed.
+- **Bounded the number of simultaneous Telegram connections** -- every connected account costs several MB. Connections nobody is watching are dropped least-recently-used once past the limit (default 8, `TG_LIVE_CLIENT_MAX`). An account being watched is never dropped.
+- **Bounded media size in the Messenger** -- viewing media inline buffers the whole file in memory, so anything over the limit (default 25MB, `TG_MEDIA_MAX_MB`) is no longer loaded. The outgoing file size limit is configurable with `TG_UPLOAD_MAX_MB`.
+- **Capped the Node heap** -- the image now sets `--max-old-space-size=512`, which suits a 2GB machine. Override `NODE_OPTIONS` on a larger host.
+- **Added memory monitoring** -- Settings gained a <strong>Memory Usage</strong> card showing current, peak, external and the available limit. Passing 75% of the limit (`MEMORY_WARN_PERCENT`) logs a warning naming the job in flight. A process killed by the system cannot record its own death, so readings are written to the database periodically; the next start reports how much the previous process was holding and which job was running, which is what tells you whether it ran out of memory.
+
+---
+
 ## v0.9.36
 
 ### 中文

@@ -918,8 +918,26 @@ export const logsApi = {
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
+export type MemorySample = {
+  at: string;
+  rssMb: number;
+  externalMb: number;
+  heapUsedMb: number;
+  runs: Array<{ logId: number; jobName: string }>;
+};
+
+export type MemoryReport = {
+  limitMb: number | null;
+  current: MemorySample;
+  peak: MemorySample | null;
+  // Only set when the previous process was killed rather than stopped, which is how an
+  // OOM shows up: the process itself never gets to report it.
+  lastBeforeCrash: MemorySample | null;
+};
+
 export const statusApi = {
   get: () => api.get<ScheduleStatus[]>("/status").then((r) => r.data),
+  memory: () => api.get<MemoryReport>("/status/memory").then((r) => r.data),
 };
 
 // ── Settings ──────────────────────────────────────────────────────────────────

@@ -22,6 +22,11 @@ export function isJobRunning(logId: number): boolean {
   return registry.has(logId);
 }
 
+/** Log ids of the runs currently in flight, so a memory spike can be attributed. */
+export function runningLogIds(): number[] {
+  return [...registry.keys()];
+}
+
 // Live detail registry — holds a reference to the in-progress detailLogs array
 // so the logs API can stream partial results while a job is running.
 const liveDetails = new Map<number, any[]>();
