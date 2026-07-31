@@ -470,6 +470,9 @@ export type JobTemplate = {
   runEveryDaysMax?: number | null;
 };
 
+// Why Real Watch pulled no bytes, when the toggle was on.
+export type RealWatchNote = "no-stream-url" | "stream-failed";
+
 export type EmbywatchEpisode = {
   itemType: string;
   title: string;
@@ -482,6 +485,8 @@ export type EmbywatchEpisode = {
   watchedSeconds: number;
   markedWatched: boolean;
   streamedBytes?: number;
+  realWatchNote?: RealWatchNote;
+  realWatchTranscoded?: boolean;
 };
 
 export type EmbywatchLog = EmbywatchEpisode & {
@@ -913,8 +918,26 @@ export const logsApi = {
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
+export type MemorySample = {
+  at: string;
+  rssMb: number;
+  externalMb: number;
+  heapUsedMb: number;
+  runs: Array<{ logId: number; jobName: string }>;
+};
+
+export type MemoryReport = {
+  limitMb: number | null;
+  current: MemorySample;
+  peak: MemorySample | null;
+  // Only set when the previous process was killed rather than stopped, which is how an
+  // OOM shows up: the process itself never gets to report it.
+  lastBeforeCrash: MemorySample | null;
+};
+
 export const statusApi = {
   get: () => api.get<ScheduleStatus[]>("/status").then((r) => r.data),
+  memory: () => api.get<MemoryReport>("/status/memory").then((r) => r.data),
 };
 
 // ── Settings ──────────────────────────────────────────────────────────────────

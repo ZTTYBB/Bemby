@@ -115,6 +115,20 @@ describe('embywatch fetch routing', () => {
   });
 });
 
+// A one-chunk ReadableStream reader, as the probe path consumes responses via
+// getReader rather than buffering them. `bytes` of 0 models an unreadable file.
+function streamOf(bytes: number) {
+  let sent = false;
+  return {
+    read: vi.fn(() => {
+      if (sent || bytes === 0) return Promise.resolve({ done: true, value: undefined });
+      sent = true;
+      return Promise.resolve({ done: false, value: new Uint8Array(bytes) });
+    }),
+    cancel: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 // Routes mock responses by request URL so we can simulate auth + item pick +
 // stream probe independently.
 function routeFetch(
@@ -129,8 +143,7 @@ function routeFetch(
   });
   const probeRes = (status: number) => ({
     status,
-    body: { cancel: vi.fn() },
-    arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(status === 200 || status === 206 ? 1024 : 0)),
+    body: { cancel: vi.fn(), getReader: () => streamOf(status === 200 || status === 206 ? 1024 : 0) },
   });
   mockUndiciFetch.mockImplementation((url: string) => {
     if (url.includes('/Users/AuthenticateByName')) {
@@ -205,6 +218,38 @@ describe('embywatch playability verification', () => {
       .rejects.toThrow('No streamable items found');
   });
 
+  it('stops reading after the first chunk when the server ignores Range and returns the whole file', async () => {
+    // A proxy fronting Emby may answer 200 with the entire movie instead of a 206
+    // range. Buffering that would pull the whole file into memory and OOM the process,
+    // so the probe must take one chunk and cancel.
+    const reader = {
+      read: vi.fn().mockResolvedValue({ done: false, value: new Uint8Array(65_536) }),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+    mockUndiciFetch.mockImplementation((url: string) => {
+      if (url.includes('/Users/AuthenticateByName')) {
+        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', text: vi.fn().mockResolvedValue(JSON.stringify({ AccessToken: 'tok', User: { Id: 'u1', Name: 'Tester' } })) });
+      }
+      if (url.includes('/PlaybackInfo')) {
+        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', text: vi.fn().mockResolvedValue(JSON.stringify({ MediaSources: [{ Id: 's1' }] })) });
+      }
+      if (url.includes('/Videos/') && url.includes('/stream')) {
+        // 200 rather than 206: Range ignored, body is the entire file
+        return Promise.resolve({ status: 200, body: { cancel: vi.fn(), getReader: () => reader } });
+      }
+      if (url.includes('/Items')) {
+        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', text: vi.fn().mockResolvedValue(JSON.stringify({ Items: [{ Id: 'i1', Name: 'Ep', Type: 'Episode', RunTimeTicks: 6000_000_000, MediaSources: [{ Id: 's1' }] }] })) });
+      }
+      return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
+    });
+
+    const result = await runEmbywatch('https://emby.example.com', baseConfig);
+    expect(result.title).toBe('Ep');
+    // The endless body was read once and abandoned, never drained.
+    expect(reader.read).toHaveBeenCalledTimes(1);
+    expect(reader.cancel).toHaveBeenCalled();
+  });
+
   it('does not probe the stream when verifyPlayable is false', async () => {
     routeFetch(404);
 
@@ -218,65 +263,135 @@ describe('embywatch playability verification', () => {
   });
 });
 
-// Serves auth, item pick, a 1-byte size probe (Content-Range), and ranged data
-// reads (via a getReader stream) so Real Watch can pull and count real bytes.
-function routeRealWatch() {
+/**
+ * Serves auth, item pick, a 1-byte size probe and ranged data reads (via a
+ * getReader stream) so Real Watch can pull and count real bytes. The options
+ * cover the shapes proxied servers return: no size header, no direct play,
+ * transcode-only, HLS, and stream URLs that reject every read.
+ */
+function routeRealWatch(
+  opts: {
+    /** Total size the probe advertises; null serves no Content-Range at all. */
+    size?: number | null;
+    /** MediaSources[0] on the picked item; null strips it entirely. */
+    source?: any;
+    /** Status for the static /Videos/{id}/stream route. */
+    staticStatus?: number;
+    directStreamUrl?: string;
+    transcodingUrl?: string;
+    /** URL fragment → m3u8 body, for the HLS transcode path. */
+    playlists?: Record<string, string>;
+    /** Status for data (non-probe) reads on non-static media URLs. */
+    dataStatus?: number;
+    /** 416 any read that starts past byte 0, as a short file would. */
+    rejectOffsets?: boolean;
+  } = {},
+) {
+  const size = opts.size === undefined ? 60_000_000 : opts.size;
+  const source = opts.source === undefined ? { Id: 's1', Size: 60_000_000, Bitrate: 800_000 } : opts.source;
+  const staticStatus = opts.staticStatus ?? 206;
+  const dataStatus = opts.dataStatus ?? 206;
+
   const jsonRes = (body: unknown) => ({
     ok: true,
     status: 200,
     statusText: 'OK',
     text: vi.fn().mockResolvedValue(JSON.stringify(body)),
   });
+  const textRes = (body: string) => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    body: { cancel: vi.fn() },
+    text: vi.fn().mockResolvedValue(body),
+  });
+  const probeRes = (status: number) => ({
+    status,
+    headers: {
+      get: (h: string) =>
+        h.toLowerCase() === 'content-range' && size != null ? `bytes 0-0/${size}` : null,
+    },
+    body: { cancel: vi.fn() },
+  });
+  const dataRes = (status: number) => {
+    let read = 0;
+    const reader = {
+      read: vi.fn(() =>
+        read++ === 0
+          ? Promise.resolve({ done: false, value: new Uint8Array(4096) })
+          : Promise.resolve({ done: true, value: undefined }),
+      ),
+      cancel: vi.fn(),
+    };
+    return { status, headers: { get: () => null }, body: { getReader: () => reader, cancel: vi.fn() } };
+  };
+  const isProbe = (init: any) => (init?.headers?.Range ?? '') === 'bytes=0-0';
+  const offsetRejected = (init: any) =>
+    opts.rejectOffsets === true && !/^bytes=0-/.test(init?.headers?.Range ?? '');
+
   mockUndiciFetch.mockImplementation((url: string, init: any) => {
     if (url.includes('/Users/AuthenticateByName')) {
       return Promise.resolve(jsonRes({ AccessToken: 'tok', User: { Id: 'u1', Name: 'Tester' } }));
     }
+    if (url.includes('/PlaybackInfo')) {
+      return Promise.resolve(jsonRes({
+        MediaSources: [{ Id: 's1', DirectStreamUrl: opts.directStreamUrl, TranscodingUrl: opts.transcodingUrl }],
+      }));
+    }
+    for (const [fragment, body] of Object.entries(opts.playlists ?? {})) {
+      if (url.includes(fragment)) return Promise.resolve(textRes(body));
+    }
     if (url.includes('/Videos/') && url.includes('/stream')) {
-      const range: string = init?.headers?.Range ?? '';
-      if (range === 'bytes=0-0') {
-        return Promise.resolve({
-          status: 206,
-          headers: { get: (h: string) => (h.toLowerCase() === 'content-range' ? 'bytes 0-0/60000000' : null) },
-          body: { cancel: vi.fn() },
-        });
-      }
-      let read = 0;
-      const reader = {
-        read: vi.fn(() =>
-          read++ === 0
-            ? Promise.resolve({ done: false, value: new Uint8Array(4096) })
-            : Promise.resolve({ done: true, value: undefined }),
-        ),
-      };
-      return Promise.resolve({ status: 206, headers: { get: () => null }, body: { getReader: () => reader } });
+      if (isProbe(init)) return Promise.resolve(probeRes(staticStatus));
+      if (offsetRejected(init)) return Promise.resolve(dataRes(416));
+      return Promise.resolve(dataRes(opts.dataStatus ?? staticStatus));
+    }
+    if (url.includes('/videos/') || url.endsWith('.ts')) {
+      return Promise.resolve(isProbe(init) ? probeRes(200) : dataRes(dataStatus));
     }
     if (url.includes('/Items')) {
       return Promise.resolve(jsonRes({
-        Items: [{ Id: 'i1', Name: 'Ep', Type: 'Episode', RunTimeTicks: 6000_000_000, MediaSources: [{ Id: 's1', Size: 60_000_000, Bitrate: 800_000 }] }],
+        Items: [{
+          Id: 'i1',
+          Name: 'Ep',
+          Type: 'Episode',
+          RunTimeTicks: 6000_000_000,
+          MediaSources: source ? [source] : [],
+        }],
       }));
     }
     return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
   });
 }
 
+const realWatchConfig = { ...baseConfig, realWatch: true, verifyPlayable: false };
+
+// Data reads carrying a Range that isn't the 1-byte size probe.
+function dataReads() {
+  return mockUndiciFetch.mock.calls.filter(
+    c =>
+      typeof c[0] === 'string' &&
+      (c[1] as any)?.headers?.Range &&
+      !(c[1] as any).headers.Range.includes('0-0'),
+  );
+}
+
 describe('embywatch Real Watch', () => {
   it('streams actual media bytes with a position-following Range request', async () => {
     routeRealWatch();
 
-    const result = await runEmbywatch('https://emby.example.com', { ...baseConfig, realWatch: true, verifyPlayable: false });
+    const result = await runEmbywatch('https://emby.example.com', realWatchConfig);
     expect(result.streamedBytes).toBeGreaterThan(0);
+    expect(result.realWatchNote).toBeUndefined();
 
     // A ranged data read (not the 1-byte size probe) hit the static stream URL,
     // carrying the play session so the transfer ties to the reported session.
-    const dataFetch = mockUndiciFetch.mock.calls.find(
-      c =>
-        typeof c[0] === 'string' &&
-        c[0].includes('/stream') &&
-        c[0].includes('PlaySessionId=') &&
-        (c[1] as any)?.headers?.Range &&
-        !(c[1] as any).headers.Range.includes('0-0'),
+    const dataFetch = dataReads().find(
+      c => (c[0] as string).includes('/stream') && (c[0] as string).includes('PlaySessionId='),
     );
     expect(dataFetch).toBeTruthy();
+    // Size known, so the range is bounded at both ends
+    expect((dataFetch![1] as any).headers.Range).toMatch(/^bytes=\d+-\d+$/);
   });
 
   it('does not stream bytes when Real Watch is off', async () => {
@@ -289,6 +404,76 @@ describe('embywatch Real Watch', () => {
       c => typeof c[0] === 'string' && c[0].includes('/stream'),
     );
     expect(streamed).toBe(false);
+  });
+
+  it('streams open-ended when the server exposes no size or bitrate', async () => {
+    // Proxied servers often answer without Content-Range and strip Size/Bitrate
+    routeRealWatch({ size: null, source: { Id: 's1' } });
+
+    const result = await runEmbywatch('https://emby.example.com', realWatchConfig);
+    expect(result.streamedBytes).toBeGreaterThan(0);
+    expect(result.realWatchNote).toBeUndefined();
+
+    const dataFetch = dataReads()[0];
+    expect((dataFetch[1] as any).headers.Range).toMatch(/^bytes=\d+-$/);
+  });
+
+  it('falls back to the transcode stream when no direct play is offered', async () => {
+    routeRealWatch({
+      size: null,
+      staticStatus: 404,
+      source: { Id: 's1' },
+      transcodingUrl: '/videos/i1/stream.mkv?api_key=tok',
+    });
+
+    const result = await runEmbywatch('https://emby.example.com', realWatchConfig);
+    expect(result.streamedBytes).toBeGreaterThan(0);
+    expect(result.realWatchTranscoded).toBe(true);
+    expect(dataReads().some(c => (c[0] as string).includes('stream.mkv'))).toBe(true);
+  });
+
+  it('drains HLS segments when the transcode stream is a playlist', async () => {
+    routeRealWatch({
+      size: null,
+      staticStatus: 404,
+      source: { Id: 's1' },
+      transcodingUrl: '/videos/i1/master.m3u8?api_key=tok',
+      playlists: {
+        'master.m3u8': '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nmain.m3u8?api_key=tok\n',
+        'main.m3u8': '#EXTM3U\n#EXTINF:6.0,\nhls1/main/0.ts\n#EXTINF:6.0,\nhls1/main/1.ts\n',
+      },
+    });
+
+    const result = await runEmbywatch('https://emby.example.com', realWatchConfig);
+    expect(result.streamedBytes).toBeGreaterThan(0);
+    expect(result.realWatchTranscoded).toBe(true);
+    expect(mockUndiciFetch.mock.calls.some(c => typeof c[0] === 'string' && c[0].includes('hls1/main/0.ts'))).toBe(true);
+  });
+
+  it('retries from the start when an estimated offset lands past the end of the file', async () => {
+    routeRealWatch({ size: null, source: { Id: 's1' }, rejectOffsets: true });
+
+    const result = await runEmbywatch('https://emby.example.com', realWatchConfig);
+    expect(result.streamedBytes).toBeGreaterThan(0);
+    expect(result.realWatchNote).toBeUndefined();
+    expect(dataReads().some(c => (c[1] as any).headers.Range === 'bytes=0-')).toBe(true);
+  });
+
+  it('records why nothing streamed when the server serves no stream at all', async () => {
+    routeRealWatch({ staticStatus: 404, source: { Id: 's1' } });
+
+    const result = await runEmbywatch('https://emby.example.com', realWatchConfig);
+    expect(result.streamedBytes).toBe(0);
+    expect(result.realWatchNote).toBe('no-stream-url');
+  });
+
+  it('records a stream failure when the resolved URL rejects every read', async () => {
+    // The size probe succeeds, then the server 403s the actual data reads
+    routeRealWatch({ dataStatus: 403 });
+
+    const result = await runEmbywatch('https://emby.example.com', realWatchConfig);
+    expect(result.streamedBytes).toBe(0);
+    expect(result.realWatchNote).toBe('stream-failed');
   });
 });
 
@@ -428,7 +613,7 @@ function routeProxy(opts: {
     const vid = url.match(/\/Videos\/([^/]+)\/stream/);
     if (vid) {
       const bad = (opts.offlineIds ?? []).includes(vid[1]);
-      return Promise.resolve({ status: bad ? 404 : 206, body: { cancel: vi.fn() }, arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(bad ? 0 : 1024)) });
+      return Promise.resolve({ status: bad ? 404 : 206, body: { cancel: vi.fn(), getReader: () => streamOf(bad ? 0 : 1024) } });
     }
     // Ancestors chain: /Items/{id}/Ancestors — real Emby's membership signal.
     // Return the configured chain, or 404 (like an aliasing proxy) so the code

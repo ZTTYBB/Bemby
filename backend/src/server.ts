@@ -24,6 +24,7 @@ import tgClientRouter from "./routes/tgClient";
 import { requireAuth, getJwtSecret } from "./middleware/auth";
 import { startScheduler } from "./scheduler";
 import { attachWebSocket } from "./tg/wsHandler";
+import { startMemoryMonitor, markCleanShutdown } from "./monitor/memory";
 
 // Validate critical env vars before accepting any requests
 getJwtSecret();
@@ -114,5 +115,20 @@ const server = createServer(app);
 attachWebSocket(server);
 server.listen(PORT, BIND_HOST, () => {
   console.log(`Bemby admin: http://${DISPLAY_HOST}:${PORT}`);
+  // Before the scheduler, so the "previous process died at NNN MB" line prints above the
+  // interrupted-runs line it explains
+  startMemoryMonitor();
   startScheduler();
 });
+
+// An OOM kill is SIGKILL and cannot be trapped, which is the point: a clean stop leaves
+// this marker, so its absence on the next boot means the process was killed rather than
+// asked to stop.
+for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  process.on(sig, () => {
+    markCleanShutdown();
+    server.close(() => process.exit(0));
+    // Don't wait on lingering keep-alive sockets past the usual container stop grace
+    setTimeout(() => process.exit(0), 5_000).unref();
+  });
+}

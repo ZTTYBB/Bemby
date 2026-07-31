@@ -105,6 +105,15 @@ const ENTITY_CACHE_MAX = 1_000;
 const AVATAR_CACHE_MAX = 300;
 const READ_OUTBOX_CACHE_MAX = 1_000;
 
+// A live client per account is several MB of GramJS state plus a connection, so on a
+// small host the account count, not idle time, is what runs memory out. Evict the
+// least recently used client nobody is watching once past this many.
+const LIVE_CLIENT_MAX = Number(process.env.TG_LIVE_CLIENT_MAX ?? 8);
+
+// Inline media is buffered whole to serve it, so a large video would spike the heap by
+// its full size. Anything bigger is refused rather than risking the process.
+const MEDIA_MAX_BYTES = Number(process.env.TG_MEDIA_MAX_MB ?? 25) * 1024 * 1024;
+
 function hasSubscribers(entry: LiveEntry): boolean {
   return (
     entry.subscribers.size > 0 ||
@@ -119,6 +128,26 @@ function trimCache(cache: Map<string, unknown>, max: number): void {
   for (const key of cache.keys()) {
     if (cache.size <= max) return;
     cache.delete(key);
+  }
+}
+
+/**
+ * Drops the least recently used clients once the registry is over LIVE_CLIENT_MAX.
+ * Entries with subscribers (someone is watching that account) and `keepId` (the one
+ * just handed out) are never evicted, so the cap can be exceeded when more accounts
+ * than that are genuinely being watched at once.
+ */
+function evictSurplusClients(keepId?: number): void {
+  if (liveClients.size <= LIVE_CLIENT_MAX) return;
+  const candidates = [...liveClients.entries()]
+    .filter(([id, e]) => id !== keepId && !hasSubscribers(e))
+    .sort((a, b) => a[1].lastActiveAt - b[1].lastActiveAt);
+
+  for (const [accountId, entry] of candidates) {
+    if (liveClients.size <= LIVE_CLIENT_MAX) return;
+    liveClients.delete(accountId);
+    entry.client.destroy().catch(() => {});
+    console.log(`[tg] Evicted idle live client for account ${accountId} (over LIVE_CLIENT_MAX)`);
   }
 }
 
@@ -138,6 +167,9 @@ export function sweepLiveClients(now = Date.now()): void {
     trimCache(entry.avatarCache, AVATAR_CACHE_MAX);
     trimCache(entry.readOutboxCache, READ_OUTBOX_CACHE_MAX);
   }
+  // A client whose subscribers have gone becomes evictable, so re-check the cap here
+  // rather than only when a new one is created.
+  evictSurplusClients();
 }
 
 // unref() so the sweep never keeps the process (or test runner) alive
@@ -487,6 +519,7 @@ export async function getLiveClient(accountId: number): Promise<LiveEntry> {
     lastActiveAt: Date.now(),
   };
   liveClients.set(accountId, entry);
+  evictSurplusClients(accountId);
 
   client.addEventHandler((event: NewMessageEvent) => {
     const msg = event.message as Api.Message;
@@ -1186,7 +1219,16 @@ export async function fetchPhoto(
   let mimeType = "image/jpeg";
   if (msg.media instanceof Api.MessageMediaDocument) {
     const doc = (msg.media as Api.MessageMediaDocument).document;
-    if (doc instanceof Api.Document && doc.mimeType) mimeType = doc.mimeType;
+    if (doc instanceof Api.Document) {
+      if (doc.mimeType) mimeType = doc.mimeType;
+      const size = Number(doc.size ?? 0);
+      if (size > MEDIA_MAX_BYTES) {
+        console.warn(
+          `[tg] Refusing ${(size / 1048576).toFixed(0)}MB media in ${chatId}: over the ${(MEDIA_MAX_BYTES / 1048576).toFixed(0)}MB inline limit (TG_MEDIA_MAX_MB)`,
+        );
+        return null;
+      }
+    }
   }
 
   const data = await entry.client.downloadMedia(msg, {});

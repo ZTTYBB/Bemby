@@ -567,9 +567,12 @@ router.post("/:accountId/messages/:chatId", async (req, res) => {
 // POST /:accountId/messages/:chatId/file -- send a photo or document.
 // Body is the raw file bytes (application/octet-stream); metadata is passed as
 // query params so we skip base64/multipart overhead.
+// The body is held in memory for the whole upload, so on a small host this bound is
+// real memory per concurrent send -- lower it with TG_UPLOAD_MAX_MB.
+const UPLOAD_LIMIT = `${Number(process.env.TG_UPLOAD_MAX_MB ?? 50)}mb`;
 router.post(
   "/:accountId/messages/:chatId/file",
-  raw({ type: () => true, limit: "50mb" }),
+  raw({ type: () => true, limit: UPLOAD_LIMIT }),
   async (req, res) => {
     const accountId = Number(req.params.accountId);
     const chatId = req.params.chatId;

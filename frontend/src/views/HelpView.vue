@@ -1035,8 +1035,9 @@
                   <td>真实观看（拉取实际字节）</td>
                   <td>
                     除进度上报外，以真实播放速率从 Emby
-                    服务器直连拉取实际媒体字节，使服务器产生与真实客户端一致的串流流量，日志中会记录本次<strong>已串流</strong>的数据量。注意：单次运行可能消耗数百
-                    MB 至数 GB 下行流量。
+                    服务器直连拉取实际媒体字节，使服务器产生与真实客户端一致的串流流量，日志中会记录本次<strong>已串流</strong>的数据量。服务器不提供直连播放时会退回转码地址（含
+                    HLS），并在日志中标注<strong>转码</strong>；完全无法拉流时，日志会写明原因而不是只显示
+                    0 MB。注意：单次运行可能消耗数百 MB 至数 GB 下行流量。
                   </td>
                 </tr>
                 <tr>
@@ -1403,8 +1404,12 @@
                     pulled from the Emby server at real playback pace (direct
                     play), so the server records genuine streaming traffic like a
                     real client; the log stores how much was
-                    <strong>Streamed</strong>. Note: a single run can use
-                    hundreds of MB to several GB of download bandwidth.
+                    <strong>Streamed</strong>. When the server offers no direct
+                    play it falls back to the transcode stream (including HLS)
+                    and the log marks it <strong>transcoded</strong>; when no
+                    bytes can be pulled at all, the log states why instead of
+                    just showing 0 MB. Note: a single run can use hundreds of MB
+                    to several GB of download bandwidth.
                   </td>
                 </tr>
                 <tr>
@@ -1909,6 +1914,27 @@
               随时更改管理员用户名或密码，确认更改时需输入当前密码。
               使用默认密码（<code>changeme</code>）登录时，系统将强制要求更改密码后方可继续访问。
             </p>
+            <p class="help-para" style="margin-top: 14px">
+              <strong>内存使用</strong> -- 显示当前占用（RSS）、本次启动峰值、外部内存与可用上限。
+              <strong>外部内存</strong>指缓冲区与下载内容，不计入 JS 堆，因此也不受
+              <code>--max-old-space-size</code> 限制 --
+              内存问题往往出现在这一项，而堆内存看起来完全正常。
+            </p>
+            <p class="help-note">
+              占用超过上限的 75% 时，日志中会出现一条告警，并指出当时正在运行的任务。
+            </p>
+            <p class="help-note">
+              进程因内存不足被系统强制终止时，来不及在日志中留下任何记录，只会突然中断。
+              因此内存数据会定期写入数据库：下次启动时，若上次未正常退出，卡片顶部会显示上次退出前的占用量、
+              外部内存以及当时正在运行的任务。若该数值接近上限，即可确认是内存不足导致；
+              此时日志中对应的任务会显示为「被服务器重启中断」。正常停止或重启容器不会触发该提示。
+            </p>
+            <p class="help-note">
+              在内存较小的机器（如 2GB）上，可通过环境变量降低占用：<code>TG_LIVE_CLIENT_MAX</code>
+              限制同时保持的 Telegram 连接数，<code>TG_MEDIA_MAX_MB</code> 与
+              <code>TG_UPLOAD_MAX_MB</code> 限制消息页面收发文件的大小，<code>NODE_OPTIONS</code>
+              调整 Node 堆内存上限。详见 <code>env.example</code>。
+            </p>
           </template>
           <template v-else>
             <div class="card-section-title">Settings</div>
@@ -2049,6 +2075,36 @@
               confirm the change. If the default password (<code>changeme</code>)
               is still in use, the app forces a password change on next login
               before any other page is accessible.
+            </p>
+            <p class="help-para" style="margin-top: 14px">
+              <strong>Memory Usage</strong> -- shows current usage (RSS), the
+              peak for this run, external memory, and the available limit.
+              <strong>External</strong> is buffers and downloads. It sits outside
+              the JS heap, so <code>--max-old-space-size</code> does not bound it
+              -- memory trouble usually shows up here while the heap looks
+              perfectly normal.
+            </p>
+            <p class="help-note">
+              Passing 75% of the limit writes a warning to the log, naming the
+              job that was running at the time.
+            </p>
+            <p class="help-note">
+              A process killed by the system for running out of memory gets no
+              chance to record it -- the log simply stops. Readings are therefore
+              written to the database periodically, and if the previous process
+              did not exit cleanly the card shows how much it was holding, its
+              external memory, and which job was running. A figure near the limit
+              confirms it ran out of memory; the affected runs appear in the log
+              as "Interrupted by server restart". Stopping or restarting the
+              container normally does not trigger this notice.
+            </p>
+            <p class="help-note">
+              On a small machine (2GB, say) these environment variables reduce
+              usage: <code>TG_LIVE_CLIENT_MAX</code> bounds how many Telegram
+              connections are held at once, <code>TG_MEDIA_MAX_MB</code> and
+              <code>TG_UPLOAD_MAX_MB</code> bound the size of files received and
+              sent in the Messenger, and <code>NODE_OPTIONS</code> sets the Node
+              heap ceiling. See <code>env.example</code> for the full list.
             </p>
           </template>
         </div>

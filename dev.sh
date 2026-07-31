@@ -53,12 +53,24 @@ echo "Installing dependencies..."
 BACKEND_PID=""
 FRONTEND_PID=""
 
+# Each service is a chain: subshell -> npm -> sh -c -> tsx/vite -> the node that
+# listens. Killing only the pid we hold leaves the rest of the chain alive, and a
+# surviving `tsx watch` keeps its ~80MB and respawns the server we just stopped, so
+# walk the tree and kill depth-first.
+kill_tree() {
+  local pid=$1
+  [ -z "$pid" ] && return 0
+  local kid
+  for kid in $(pgrep -P "$pid" 2>/dev/null); do kill_tree "$kid"; done
+  kill -9 "$pid" 2>/dev/null || true
+}
+
 cleanup() {
   echo ""
   echo "Stopping..."
-  [ -n "$BACKEND_PID" ]  && kill "$BACKEND_PID"  2>/dev/null || true
-  [ -n "$FRONTEND_PID" ] && kill "$FRONTEND_PID" 2>/dev/null || true
-  wait
+  kill_tree "$BACKEND_PID"
+  kill_tree "$FRONTEND_PID"
+  wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -76,6 +88,21 @@ kill_port() {
 for PORT in $BACKEND_PORT $FRONTEND_PORT; do
   kill_port "$PORT"
 done
+
+# kill_port only reaches whatever holds the socket, so watchers orphaned by an earlier
+# run (a killed terminal, a crash before the trap fired) survive it and pile up at
+# ~80MB each. Match on this checkout's paths so other projects are left alone.
+kill_stale_watchers() {
+  local pattern pids
+  for pattern in "$SCRIPT_DIR/backend/node_modules/.bin/tsx" \
+                 "$SCRIPT_DIR/frontend/node_modules/.bin/vite"; do
+    pids=$(pgrep -f "$pattern" 2>/dev/null | grep -v "^$$\$")
+    [ -z "$pids" ] && continue
+    echo "Killing stale watcher(s): $(echo "$pids" | tr '\n' ' ')"
+    kill -9 $pids 2>/dev/null || true
+  done
+}
+kill_stale_watchers
 
 # ── Start services ────────────────────────────────────────────────────────────
 echo ""

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, getDefaultTgApiCredentials } from "../db/database";
 import { runJob, type JobDetailLog } from "../jobs/runner";
+import { collectRunWarnings, completedMessage } from "../jobs/runWarnings";
 import {
   sendTgNotify,
   buildFailureMessage,
@@ -464,9 +465,10 @@ router.post("/:id/run", async (req, res) => {
   runJob(job, account, detailLogs, signal)
     .then(() => {
       const detail = detailLogs.length ? JSON.stringify(detailLogs) : null;
+      const warnings = collectRunWarnings(job.jobType, detailLogs);
       db.prepare(
-        "UPDATE job_logs SET status = 'success', message = 'Completed', detail = ? WHERE id = ?",
-      ).run(detail, logId);
+        "UPDATE job_logs SET status = 'success', message = ?, detail = ? WHERE id = ?",
+      ).run(completedMessage(warnings), detail, logId);
       if (account?.sessionString) {
         const cfg = getNotifyConfig();
         if (cfg.events.includes("success") && cfg.username) {

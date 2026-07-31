@@ -39,10 +39,33 @@ type PendingAuth = {
   phoneNumber: string;
   phoneCodeHash: string;
   step: "code" | "2fa";
+  startedAt: number;
 };
 
 // In-memory pending auth sessions keyed by account ID
 const pending = new Map<number, PendingAuth>();
+
+// Each entry holds a connected TelegramClient, so an auth nobody finishes (the
+// browser tab closed at the code prompt, a bulk add that moved on) would pin a
+// live connection for the life of the process. Telegram expires login codes in
+// minutes, so anything older than this is certainly dead.
+const PENDING_AUTH_TTL_MS = 15 * 60_000;
+const PENDING_SWEEP_INTERVAL_MS = 5 * 60_000;
+
+export function sweepPendingAuth(now = Date.now()): number {
+  let dropped = 0;
+  for (const [accountId, entry] of pending) {
+    if (now - entry.startedAt < PENDING_AUTH_TTL_MS) continue;
+    pending.delete(accountId);
+    entry.client.destroy().catch(() => undefined);
+    dropped++;
+  }
+  if (dropped) console.log(`[tgAuth] Dropped ${dropped} abandoned auth session(s)`);
+  return dropped;
+}
+
+// unref() so the sweep never keeps the process (or test runner) alive
+setInterval(() => sweepPendingAuth(), PENDING_SWEEP_INTERVAL_MS).unref();
 
 // Bound on the connect+sendCode round trip. GramJS's connectionRetries limits
 // reconnect attempts but not total wall-clock time, so a dead/slow proxy or an
@@ -111,6 +134,7 @@ export async function requestCode(
       phoneNumber,
       phoneCodeHash: sent.phoneCodeHash,
       step: "code",
+      startedAt: Date.now(),
     });
     return { isCodeViaApp };
   } catch (err) {
@@ -170,6 +194,9 @@ export async function submitCode(
   } catch (err: any) {
     if (err?.errorMessage === "SESSION_PASSWORD_NEEDED") {
       entry.step = "2fa";
+      // Reaching the password prompt restarts the clock, so a slow 2FA entry
+      // isn't swept out from under the user
+      entry.startedAt = Date.now();
       return { needsPassword: true };
     }
     throw err;
@@ -790,6 +817,7 @@ export async function startPasskeyLogin(
           phoneNumber: "",
           phoneCodeHash: "",
           step: "2fa",
+          startedAt: Date.now(),
         });
         return { needsPassword: true };
       }

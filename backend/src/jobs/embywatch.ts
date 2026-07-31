@@ -1,7 +1,7 @@
 import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
 import { lookup } from 'node:dns';
 import { db } from '../db/database';
-import type { EmbywatchConfig, EmbywatchEpisode, EmbywatchLog } from '../types';
+import type { EmbywatchConfig, EmbywatchEpisode, EmbywatchLog, RealWatchNote } from '../types';
 import { expandCommand } from './checkin';
 
 // Per-username cache of the expanded device name. Persisting it keeps random
@@ -52,8 +52,27 @@ const ipv4Agent = new Agent({
   connect: { lookup: (hostname, opts, cb) => lookup(hostname, { ...opts, family: 4 }, cb) },
 });
 
+// One dispatcher per proxy URL, reused for the life of the process. A fresh ProxyAgent
+// per request leaves its keep-alive sockets open until they time out, so a long watch
+// session paid a new tunnel handshake every call and dragged RSS up with it. The map is
+// bounded by the number of configured proxies.
+const proxyAgents = new Map<string, ProxyAgent>();
+
+function dispatcherFor(proxyUrl?: string): Agent | ProxyAgent {
+  if (!proxyUrl) return ipv4Agent;
+  let agent = proxyAgents.get(proxyUrl);
+  if (!agent) {
+    agent = new ProxyAgent(proxyUrl);
+    proxyAgents.set(proxyUrl, agent);
+  }
+  return agent;
+}
+
 const DEFAULT_UA = 'SenPlayer/6.1.2 CFNetwork/1490.0.4 Darwin/23.2.0';
 const PROGRESS_INTERVAL_S = 30;
+// Real Watch pace assumed (~4 Mbps) when the server exposes neither a file size
+// nor a bitrate, so streaming still happens instead of being skipped.
+const ASSUMED_BYTES_PER_SECOND = 500_000;
 // Emby uses 100-nanosecond ticks (same as .NET TimeSpan)
 const TICKS_PER_SECOND = 10_000_000;
 
@@ -152,7 +171,7 @@ async function embyRequest<T = any>(
       headers,
       body,
       signal: opts.signal ?? opts.cancelSignal,
-      dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+      dispatcher: dispatcherFor(opts.proxyUrl),
     } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
   } catch (err: any) {
     throwIfAborted(opts.cancelSignal);
@@ -246,15 +265,24 @@ async function probeStream(url: string, opts: { ua: string; proxyUrl?: string; s
         Range: `bytes=0-${PROBE_RANGE_BYTES}`,
       },
       signal: opts.signal,
-      dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+      dispatcher: dispatcherFor(opts.proxyUrl),
     } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
 
     if (res.status !== 200 && res.status !== 206) {
       await res.body?.cancel?.();
       return false;
     }
-    const buf = await res.arrayBuffer();
-    return buf.byteLength > 0;
+    // Read one chunk and stop, rather than buffering the response. A 200 here means the
+    // server ignored the Range header and is sending the whole file (common when a proxy
+    // fronts Emby), so reading it in full would pull an entire movie into memory.
+    const reader = res.body?.getReader?.();
+    if (!reader) return false;
+    try {
+      const { done, value } = await reader.read();
+      return !done && (value?.byteLength ?? 0) > 0;
+    } finally {
+      try { await reader.cancel?.(); } catch { /* already closed */ }
+    }
   } catch {
     // A cancelled job must abort, not be read as an unplayable item
     throwIfAborted(opts.signal);
@@ -273,7 +301,7 @@ async function getClientStreamUrl(
   baseUrl: string,
   itemId: string,
   mediaSourceId: string,
-  opts: MediaOpts & { directOnly?: boolean }
+  opts: MediaOpts & { directOnly?: boolean; transcodeOnly?: boolean }
 ): Promise<string | undefined> {
   try {
     const info = await embyRequest<any>(baseUrl, `/Items/${itemId}/PlaybackInfo?UserId=${opts.userId}`, {
@@ -287,10 +315,13 @@ async function getClientStreamUrl(
     });
     const sources: any[] = info?.MediaSources ?? [];
     const source = sources.find(s => s.Id === mediaSourceId) ?? sources[0];
-    // directOnly avoids the TranscodingUrl fallback so Real Watch stays direct play
+    // directOnly keeps Real Watch on direct play; transcodeOnly is its last-resort
+    // fallback for servers that advertise no direct stream at all
     const path: string | undefined = opts.directOnly
       ? source?.DirectStreamUrl
-      : (source?.DirectStreamUrl ?? source?.TranscodingUrl ?? undefined);
+      : opts.transcodeOnly
+        ? source?.TranscodingUrl
+        : (source?.DirectStreamUrl ?? source?.TranscodingUrl ?? undefined);
     if (!path) return undefined;
     if (/^https?:\/\//i.test(path)) return path;
     return `${baseUrl.replace(/\/$/, '')}${path.startsWith('/') ? '' : '/'}${path}`;
@@ -350,80 +381,184 @@ function buildStaticStreamUrl(
   return `${baseUrl.replace(/\/$/, '')}/Videos/${itemId}/stream?${params.toString()}`;
 }
 
-// Learn the total file size from a 1-byte ranged request, so we can map a
-// playback position to a byte offset when the item metadata lacks Size/Bitrate.
-async function probeStreamSize(url: string, opts: { ua: string; proxyUrl?: string; signal?: AbortSignal }): Promise<number> {
+type StreamProbe = { ok: boolean; size: number };
+
+// Learn whether a stream URL is servable and, when it says so, its total size, so
+// we can map a playback position to a byte offset. Servers behind proxies often
+// answer without a length (chunked, redirected, or transcoding), which is fine:
+// the caller streams open-ended instead of skipping Real Watch.
+async function probeStreamSize(url: string, opts: { ua: string; proxyUrl?: string; signal?: AbortSignal }): Promise<StreamProbe> {
   try {
     const res = (await undiciFetch(url, {
       method: 'GET',
       headers: { 'User-Agent': opts.ua, Range: 'bytes=0-0' },
       signal: opts.signal,
-      dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+      dispatcher: dispatcherFor(opts.proxyUrl),
     } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
     const contentRange = res.headers.get('content-range');
     const contentLength = res.headers.get('content-length');
     await res.body?.cancel?.();
+    const ok = res.status === 200 || res.status === 206;
+    if (!ok) return { ok: false, size: 0 };
     if (contentRange) {
       const m = /\/(\d+)\s*$/.exec(contentRange);
-      if (m) return Number(m[1]);
+      if (m) return { ok, size: Number(m[1]) };
     }
-    if (res.status === 200 && contentLength) return Number(contentLength);
-    return 0;
+    if (res.status === 200 && contentLength) return { ok, size: Number(contentLength) };
+    return { ok, size: 0 };
   } catch {
     throwIfAborted(opts.signal);
-    return 0;
+    return { ok: false, size: 0 };
   }
 }
 
-// Resolve the URL Real Watch streams from. Prefer the static direct-play route;
-// fall back to the direct-stream URL PlaybackInfo advertises for setups where a
-// proxy only routes that form.
+// An HLS playlist is a text manifest, not media bytes, so its length says nothing
+// about the media and it has to be drained segment by segment.
+function isHlsUrl(url: string): boolean {
+  return /\.m3u8(\?|$)/i.test(url);
+}
+
+type ResolvedStream = { url: string; size: number; transcoding: boolean; hls: boolean };
+
+function withPlaySession(url: string, playSessionId: string): string {
+  return /PlaySessionId=/.test(url) ? url : appendParam(url, 'PlaySessionId', playSessionId);
+}
+
+/**
+ * Resolve the URL Real Watch streams from, in the order a real client would
+ * settle on one: the static direct-play route, then the direct-stream URL
+ * PlaybackInfo advertises (some proxies only route that form), and finally the
+ * transcode stream for servers that offer no direct play at all. Transcoded bytes
+ * are still real traffic, they just cost the server more.
+ */
 async function resolveRealStreamUrl(
   baseUrl: string,
   itemId: string,
   mediaSourceId: string,
   opts: MediaOpts & { playSessionId: string; deviceId: string }
-): Promise<{ url: string; size: number } | undefined> {
+): Promise<ResolvedStream | undefined> {
   const staticUrl = buildStaticStreamUrl(baseUrl, itemId, mediaSourceId, opts);
-  const staticSize = await probeStreamSize(staticUrl, opts);
-  if (staticSize > 0) return { url: staticUrl, size: staticSize };
+  const staticProbe = await probeStreamSize(staticUrl, opts);
+  if (staticProbe.ok) return { url: staticUrl, size: staticProbe.size, transcoding: false, hls: false };
 
   const direct = await getClientStreamUrl(baseUrl, itemId, mediaSourceId, { ...opts, directOnly: true });
-  if (!direct) return undefined;
-  const url = /PlaySessionId=/.test(direct) ? direct : appendParam(direct, 'PlaySessionId', opts.playSessionId);
-  return { url, size: await probeStreamSize(url, opts) };
+  if (direct) {
+    const url = withPlaySession(direct, opts.playSessionId);
+    const probe = await probeStreamSize(url, opts);
+    if (probe.ok) return { url, size: probe.size, transcoding: false, hls: isHlsUrl(url) };
+  }
+
+  // Direct play is unavailable or unservable: fall back to the transcode stream.
+  const transcode = await getClientStreamUrl(baseUrl, itemId, mediaSourceId, { ...opts, transcodeOnly: true });
+  if (!transcode) return undefined;
+  const url = withPlaySession(transcode, opts.playSessionId);
+  const probe = await probeStreamSize(url, opts);
+  if (!probe.ok) return undefined;
+  const hls = isHlsUrl(url);
+  return { url, size: hls ? 0 : probe.size, transcoding: true, hls };
 }
 
-// Download a byte range at real playback pace and discard it. Reading the body
-// generates the same streaming traffic a real player would, without buffering
-// the whole chunk in memory.
+/**
+ * Download bytes from a URL at real playback pace and discard them, so the
+ * transfer looks like a player buffering without holding the chunk in memory.
+ * `end` may be omitted for an open-ended range when the file size is unknown;
+ * `maxBytes` then bounds how much of it is read before the body is released.
+ */
 async function drainRange(
   url: string,
   start: number,
-  end: number,
-  opts: { ua: string; proxyUrl?: string; signal?: AbortSignal }
+  end: number | undefined,
+  opts: { ua: string; proxyUrl?: string; signal?: AbortSignal; maxBytes?: number }
 ): Promise<number> {
   const res = (await undiciFetch(url, {
     method: 'GET',
-    headers: { 'User-Agent': opts.ua, Range: `bytes=${start}-${end}` },
+    headers: { 'User-Agent': opts.ua, Range: `bytes=${start}-${end ?? ''}` },
     signal: opts.signal,
-    dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+    dispatcher: dispatcherFor(opts.proxyUrl),
   } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
 
   if (res.status !== 200 && res.status !== 206) {
     await res.body?.cancel?.();
     throw new Error(`stream returned ${res.status}`);
   }
+  // Cap how much of the body is read: `end` gives the requested window, maxBytes bounds an
+  // open-ended range, and an HLS segment (neither set) is read to EOF. A server that ignores
+  // Range answers 200 with the whole file, so without a cap one interval would pull the
+  // entire movie. Stopping only once the cap is passed lets a compliant 206 finish on `done`,
+  // which leaves its socket reusable.
+  const cap = Math.min(end != null ? end - start + 1 : Infinity, opts.maxBytes ?? Infinity);
   let bytes = 0;
   const reader = res.body?.getReader?.();
   if (reader) {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) bytes += value.byteLength;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) bytes += value.byteLength;
+        if (bytes > cap) break;
+      }
+    } finally {
+      try { await reader.cancel?.(); } catch { /* already closed */ }
     }
   }
   return bytes;
+}
+
+// Fetch a text body (HLS playlists), returning undefined rather than throwing so
+// a manifest hiccup only disables streaming for the segment.
+async function fetchText(url: string, opts: { ua: string; proxyUrl?: string; signal?: AbortSignal }): Promise<string | undefined> {
+  try {
+    const res = (await undiciFetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': opts.ua },
+      signal: opts.signal,
+      dispatcher: dispatcherFor(opts.proxyUrl),
+    } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
+    if (!res.ok) {
+      await res.body?.cancel?.();
+      return undefined;
+    }
+    return await res.text();
+  } catch {
+    throwIfAborted(opts.signal);
+    return undefined;
+  }
+}
+
+type HlsSegment = { url: string; duration: number };
+
+/**
+ * Resolve an HLS master/media playlist to its segment list. A master playlist
+ * (variant streams only) is followed one level to its first variant.
+ */
+async function loadHlsSegments(
+  playlistUrl: string,
+  opts: { ua: string; proxyUrl?: string; signal?: AbortSignal },
+  depth = 0,
+): Promise<HlsSegment[]> {
+  const body = await fetchText(playlistUrl, opts);
+  if (!body) return [];
+  const lines = body.split(/\r?\n/).map(l => l.trim());
+  const abs = (uri: string) => new URL(uri, playlistUrl).toString();
+
+  if (lines.some(l => l.startsWith('#EXT-X-STREAM-INF'))) {
+    if (depth > 0) return [];
+    const idx = lines.findIndex(l => l.startsWith('#EXT-X-STREAM-INF'));
+    const variant = lines.slice(idx + 1).find(l => l && !l.startsWith('#'));
+    return variant ? loadHlsSegments(abs(variant), opts, depth + 1) : [];
+  }
+
+  const segments: HlsSegment[] = [];
+  let duration = 0;
+  for (const line of lines) {
+    if (line.startsWith('#EXTINF:')) {
+      duration = Number.parseFloat(line.slice('#EXTINF:'.length)) || 0;
+    } else if (line && !line.startsWith('#')) {
+      segments.push({ url: abs(line), duration });
+      duration = 0;
+    }
+  }
+  return segments;
 }
 
 // A single playable unit: the raw Emby item plus the ids/runtime we need.
@@ -458,6 +593,108 @@ function mediaOpts(ctx: PlayCtx): MediaOpts {
   return { token: ctx.token, ua: ctx.ua, userId: ctx.userId, deviceName: ctx.deviceName, proxyUrl: ctx.proxyUrl, signal: ctx.signal };
 }
 
+// Pulls the bytes a player would consume between two playback positions.
+type Streamer = {
+  transcoding: boolean;
+  pull: (fromSeconds: number, toSeconds: number) => Promise<number>;
+};
+
+/**
+ * Build the Real Watch byte puller for a segment: resolve a stream URL, work out
+ * a playback rate, and pick the strategy that suits what the server exposes
+ * (ranged reads when the size is known, open-ended reads when it isn't, segment
+ * reads for HLS). Returns undefined only when no URL is servable at all.
+ */
+async function buildStreamer(serverUrl: string, ctx: PlayCtx, seg: Segment): Promise<Streamer | undefined> {
+  const { itemId, mediaSourceId, item, runtimeSeconds } = seg;
+  const net = { ua: ctx.ua, proxyUrl: ctx.proxyUrl, signal: ctx.signal };
+
+  const resolved = await resolveRealStreamUrl(serverUrl, itemId, mediaSourceId, {
+    ...mediaOpts(ctx),
+    playSessionId: ctx.playSessionId,
+    deviceId: ctx.deviceName.replace(/\s+/g, '-'),
+  });
+  if (!resolved) return undefined;
+
+  const source = item.MediaSources?.[0];
+  const fileSize = resolved.size > 0 ? resolved.size : Number(source?.Size) || 0;
+  const bytesPerSecond =
+    fileSize > 0 && runtimeSeconds > 0
+      ? fileSize / runtimeSeconds
+      : Number(source?.Bitrate) > 0
+        ? Number(source.Bitrate) / 8
+        : ASSUMED_BYTES_PER_SECOND;
+
+  const kind = resolved.hls ? 'HLS transcode' : resolved.transcoding ? 'transcode' : 'direct';
+  const rate = `~${Math.round((bytesPerSecond * 8) / 1000)} kbps`;
+  console.log(
+    `[embywatch] Real Watch — ${rate} ${kind} stream for "${item.Name}"${fileSize > 0 ? '' : ' (size unknown)'}`,
+  );
+
+  if (resolved.hls) {
+    const segments = await loadHlsSegments(resolved.url, net);
+    if (!segments.length) return undefined;
+    // Walk the playlist in step with playback, skipping past what the reported
+    // position has already covered so a resume doesn't re-download the start.
+    // Only when the playlist spans that position though: a transcode session
+    // started mid-item lists segments from the current position, not from zero.
+    const playlistSeconds = segments.reduce((s, e) => s + e.duration, 0);
+    let cursor = 0;
+    let covered = 0;
+    return {
+      transcoding: true,
+      pull: async (from, to) => {
+        while (
+          playlistSeconds > from &&
+          cursor < segments.length &&
+          covered + segments[cursor].duration <= from
+        ) {
+          covered += segments[cursor].duration;
+          cursor++;
+        }
+        const window = Math.max(0, to - from);
+        let bytes = 0;
+        let pulled = 0;
+        while (cursor < segments.length && pulled < window) {
+          const s = segments[cursor];
+          bytes += await drainRange(s.url, 0, undefined, net);
+          pulled += s.duration > 0 ? s.duration : window;
+          covered += s.duration;
+          cursor++;
+        }
+        return bytes;
+      },
+    };
+  }
+
+  const offsetAt = (sec: number): number => {
+    const at = Math.max(0, Math.floor(sec * bytesPerSecond));
+    return fileSize > 0 ? Math.min(fileSize - 1, at) : at;
+  };
+  // With an unknown size the byte offset is only an estimate, so it can land past
+  // the end of the file. The first 416 drops us back to reading from the start.
+  let useOffsets = true;
+  return {
+    transcoding: resolved.transcoding,
+    pull: async (from, to) => {
+      const start = useOffsets ? offsetAt(from) : 0;
+      if (fileSize > 0) {
+        const end = Math.max(start, offsetAt(to) - 1);
+        return drainRange(resolved.url, start, end, net);
+      }
+      // Size unknown: read open-ended and stop at this window's byte budget.
+      const maxBytes = Math.max(1, Math.floor((to - from) * bytesPerSecond));
+      try {
+        return await drainRange(resolved.url, start, undefined, { ...net, maxBytes });
+      } catch (e: any) {
+        if (start === 0 || !/416/.test(String(e?.message))) throw e;
+        useOffsets = false;
+        return drainRange(resolved.url, 0, undefined, { ...net, maxBytes });
+      }
+    },
+  };
+}
+
 /** POST /Sessions/Playing → progress loop (+ Real Watch byte streaming) → /Sessions/Playing/Stopped. */
 async function playSegment(
   serverUrl: string,
@@ -465,8 +702,8 @@ async function playSegment(
   seg: Segment,
   startSeconds: number,
   watchSeconds: number,
-): Promise<{ streamedBytes: number }> {
-  const { itemId, mediaSourceId, item, runtimeSeconds } = seg;
+): Promise<{ streamedBytes: number; note?: RealWatchNote; transcoded?: boolean }> {
+  const { itemId, mediaSourceId } = seg;
   const startTicks = startSeconds * TICKS_PER_SECOND;
 
   await embyRequest(serverUrl, '/Sessions/Playing', {
@@ -482,57 +719,33 @@ async function playSegment(
     },
   });
 
-  // Real Watch: resolve a direct-play stream and the byte-per-second rate so each
-  // interval can pull the media bytes a real client would, in step with the
-  // reported position. Disabled gracefully if the rate can't be determined.
+  // Real Watch: resolve a stream and pull the media bytes a real client would,
+  // in step with the reported position. When nothing is servable we record why,
+  // so the log explains itself instead of just reporting 0 bytes.
   let streamedBytes = 0;
-  let streamUrl: string | undefined;
-  let bytesPerSecond = 0;
-  let fileSize = 0;
+  let streamer: Streamer | undefined;
+  let note: RealWatchNote | undefined;
   if (ctx.realWatch) {
-    const source = item.MediaSources?.[0];
-    bytesPerSecond =
-      Number(source?.Size) > 0 && runtimeSeconds > 0
-        ? Number(source.Size) / runtimeSeconds
-        : Number(source?.Bitrate) > 0
-          ? Number(source.Bitrate) / 8
-          : 0;
-    fileSize = Number(source?.Size) || 0;
-    const deviceId = ctx.deviceName.replace(/\s+/g, '-');
-    const resolved = await resolveRealStreamUrl(serverUrl, itemId, mediaSourceId, {
-      ...mediaOpts(ctx),
-      playSessionId: ctx.playSessionId,
-      deviceId,
-    });
-    if (resolved) {
-      streamUrl = resolved.url;
-      if (resolved.size > 0) fileSize = resolved.size;
-      if (bytesPerSecond === 0 && fileSize > 0 && runtimeSeconds > 0) bytesPerSecond = fileSize / runtimeSeconds;
-    }
-    if (!streamUrl || bytesPerSecond === 0 || fileSize === 0) {
-      console.warn('[embywatch] Real Watch: could not resolve a streamable direct-play URL/bitrate, streaming disabled for this segment');
-      streamUrl = undefined;
-    } else {
-      console.log(`[embywatch] Real Watch — ~${Math.round((bytesPerSecond * 8) / 1000)} kbps direct stream for "${item.Name}"`);
+    streamer = await buildStreamer(serverUrl, ctx, seg);
+    if (!streamer) {
+      note = 'no-stream-url';
+      console.warn('[embywatch] Real Watch: the server serves no direct-play or transcode stream — streaming skipped for this segment');
     }
   }
-
-  const offsetAt = (sec: number): number =>
-    fileSize > 0 && bytesPerSecond > 0 ? Math.min(fileSize - 1, Math.max(0, Math.floor(sec * bytesPerSecond))) : 0;
 
   let elapsed = 0;
   try {
     while (elapsed < watchSeconds) {
       const wait = Math.min(PROGRESS_INTERVAL_S, watchSeconds - elapsed);
 
-      if (streamUrl) {
+      if (streamer) {
         // Pull this interval's byte window while waiting, so real streaming
         // traffic tracks the reported position like an actual player.
-        const rangeStart = offsetAt(startSeconds + elapsed);
-        const rangeEnd = Math.max(rangeStart, offsetAt(startSeconds + elapsed + wait) - 1);
+        const from = startSeconds + elapsed;
         await Promise.all([
           sleep(wait * 1000, ctx.signal),
-          drainRange(streamUrl, rangeStart, rangeEnd, { ua: ctx.ua, proxyUrl: ctx.proxyUrl, signal: ctx.signal })
+          streamer
+            .pull(from, from + wait)
             .then(b => {
               streamedBytes += b;
             })
@@ -567,7 +780,10 @@ async function playSegment(
 
   await reportStopped(serverUrl, ctx, seg, startSeconds + watchSeconds);
 
-  return { streamedBytes };
+  // A resolved stream that yielded nothing means every ranged read failed.
+  if (ctx.realWatch && !note && streamedBytes === 0) note = 'stream-failed';
+
+  return { streamedBytes, note, transcoded: streamer?.transcoding };
 }
 
 // The Stopped report deliberately ignores the job's cancel signal — it is the
@@ -884,10 +1100,14 @@ async function runSequencePlay(
     const watchSeconds = Math.min(budget, episodeRemaining);
 
     let segStreamed = 0;
+    let segNote: RealWatchNote | undefined;
+    let segTranscoded = false;
     if (watchSeconds > 0) {
       console.log(`[embywatch] Watching "${cur.item.Name}" (${cur.item.Type}) from ${curStart}s for ${watchSeconds}s`);
       const played = await playSegment(serverUrl, ctx, cur, curStart, watchSeconds);
       segStreamed = played.streamedBytes;
+      segNote = played.note;
+      segTranscoded = played.transcoded === true;
       totalStreamed += segStreamed;
     }
 
@@ -914,6 +1134,8 @@ async function runSequencePlay(
         watchedSeconds: watchSeconds,
         markedWatched: marked,
         streamedBytes: ctx.realWatch ? segStreamed : undefined,
+        realWatchNote: segNote,
+        realWatchTranscoded: segTranscoded ? true : undefined,
       });
     }
 
@@ -935,6 +1157,11 @@ async function runSequencePlay(
     markedWatched: false,
   };
 
+  // Surface the first segment's failure reason at the top level, so a run that
+  // streamed nothing says why rather than showing a bare 0 MB.
+  const runNote = episodes.find(e => e.realWatchNote)?.realWatchNote;
+  const runTranscoded = episodes.some(e => e.realWatchTranscoded);
+
   if (ctx.realWatch) {
     console.log(`[embywatch] Real Watch streamed ${(totalStreamed / 1_048_576).toFixed(1)} MB across ${episodes.length} segment(s)`);
   }
@@ -945,6 +1172,8 @@ async function runSequencePlay(
     // watchedSeconds reflects the whole sequence so the total matches playDuration
     watchedSeconds: totalWatched,
     streamedBytes: ctx.realWatch ? totalStreamed : undefined,
+    realWatchNote: totalStreamed === 0 ? runNote : undefined,
+    realWatchTranscoded: runTranscoded ? true : undefined,
     sequencePlay: true,
     episodesCompleted,
     episodes,
@@ -1025,7 +1254,7 @@ export async function runEmbywatch(
 
   console.log(`[embywatch] Watching "${item.Name}" (${item.Type}) from ${startSeconds}s, duration ${watchDuration}s`);
 
-  const { streamedBytes } = await playSegment(serverUrl, ctx, picked, startSeconds, watchDuration);
+  const { streamedBytes, note, transcoded } = await playSegment(serverUrl, ctx, picked, startSeconds, watchDuration);
 
   // 6. Optionally mark the item as watched (enabled by default)
   let markedWatched = false;
@@ -1048,5 +1277,7 @@ export async function runEmbywatch(
     watchedSeconds: watchDuration,
     markedWatched,
     streamedBytes: ctx.realWatch ? streamedBytes : undefined,
+    realWatchNote: note,
+    realWatchTranscoded: transcoded ? true : undefined,
   };
 }

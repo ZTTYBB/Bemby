@@ -22,6 +22,13 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# V8 sizes its default heap from the memory it can see, which is generous: ~4GB on a 24GB
+# host, and still roughly half of RAM on a small one. Node only collects hard as it nears
+# that ceiling, so on a 2GB box the heap alone can grow past what is left after SQLite, the
+# Telegram clients and (where enabled) a browser -- the OOM killer arrives first. Capping it
+# makes GC start early enough to matter. Override the whole variable on a larger host.
+ENV NODE_OPTIONS="--max-old-space-size=512"
+
 # su-exec lets the entrypoint fix data-dir ownership as root, then drop to `node`
 RUN apk add --no-cache su-exec
 

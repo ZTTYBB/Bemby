@@ -802,6 +802,11 @@ const zh = {
       totalWatched: "总观看时长",
       yes: "是",
       no: "否",
+      transcoded: "转码",
+      realWatchNote: {
+        "no-stream-url": "真实观看不可用：服务器未提供可拉取的直连或转码地址",
+        "stream-failed": "真实观看失败：拉流请求全部被服务器拒绝",
+      },
     },
     dev: {
       timing: "计时",
@@ -833,6 +838,18 @@ const zh = {
     scheduleGapHint:
       "自动错开各任务的运行时间，至少间隔该分钟数，避免多个任务在同一分钟并发执行。0 表示关闭，已排定的任务在下次调度时生效。",
     embyDefaults: "Emby 观看默认值",
+    memorySection: "内存使用",
+    memoryCurrent: "当前占用 (RSS)",
+    memoryPeak: "本次启动峰值",
+    memoryExternal: "外部内存 (缓冲区)",
+    memoryHeap: "JS 堆",
+    memoryLimit: "可用上限",
+    memoryHint:
+      "外部内存为缓冲区与下载内容，不受 --max-old-space-size 限制。超过上限会被系统直接终止进程，日志不会留下记录。",
+    memoryCrash:
+      "上次进程未正常退出。终止前占用 {rss} MB（外部 {external} MB），时间 {at}。若接近上限，说明是被系统因内存不足终止。",
+    memoryCrashJobs: "当时正在运行：",
+    memoryUnavailable: "无法读取内存信息。",
     labelPlayDuration: "默认播放时长（秒）",
     labelDeviceName: "设备名称",
     deviceNameVars: "支持变量：{username} Emby 用户名，以及随机 {word:4}、{num:4}、{alpha:8}、{uuid}。",
@@ -1846,6 +1863,13 @@ const en: typeof zh = {
       totalWatched: "Total watched",
       yes: "Yes",
       no: "No",
+      transcoded: "transcoded",
+      realWatchNote: {
+        "no-stream-url":
+          "Real Watch unavailable: the server serves no direct-play or transcode stream",
+        "stream-failed":
+          "Real Watch failed: every stream request was rejected by the server",
+      },
     },
     dev: {
       timing: "Timing",
@@ -1879,6 +1903,18 @@ const en: typeof zh = {
     scheduleGapHint:
       "Automatically spaces scheduled jobs at least this many minutes apart so they don't run in the same minute. 0 disables; already-scheduled jobs pick it up at their next scheduling.",
     embyDefaults: "Emby Watch Defaults",
+    memorySection: "Memory Usage",
+    memoryCurrent: "Current (RSS)",
+    memoryPeak: "Peak this run",
+    memoryExternal: "External (buffers)",
+    memoryHeap: "JS heap",
+    memoryLimit: "Available limit",
+    memoryHint:
+      "External memory is buffers and downloads; --max-old-space-size does not bound it. Exceeding the limit gets the process killed outright, leaving nothing in the log.",
+    memoryCrash:
+      "The previous process did not exit cleanly. It was holding {rss} MB ({external} MB external) at {at}. A figure near the limit means the system killed it for running out of memory.",
+    memoryCrashJobs: "Running at the time:",
+    memoryUnavailable: "Memory information is unavailable.",
     labelPlayDuration: "Default Play Duration (seconds)",
     labelDeviceName: "Device Name",
     deviceNameVars: "Supports variables: {username} (Emby username), and random {word:4}, {num:4}, {alpha:8}, {uuid}.",
