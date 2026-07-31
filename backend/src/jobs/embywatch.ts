@@ -52,6 +52,22 @@ const ipv4Agent = new Agent({
   connect: { lookup: (hostname, opts, cb) => lookup(hostname, { ...opts, family: 4 }, cb) },
 });
 
+// One dispatcher per proxy URL, reused for the life of the process. A fresh ProxyAgent
+// per request leaves its keep-alive sockets open until they time out, so a long watch
+// session paid a new tunnel handshake every call and dragged RSS up with it. The map is
+// bounded by the number of configured proxies.
+const proxyAgents = new Map<string, ProxyAgent>();
+
+function dispatcherFor(proxyUrl?: string): Agent | ProxyAgent {
+  if (!proxyUrl) return ipv4Agent;
+  let agent = proxyAgents.get(proxyUrl);
+  if (!agent) {
+    agent = new ProxyAgent(proxyUrl);
+    proxyAgents.set(proxyUrl, agent);
+  }
+  return agent;
+}
+
 const DEFAULT_UA = 'SenPlayer/6.1.2 CFNetwork/1490.0.4 Darwin/23.2.0';
 const PROGRESS_INTERVAL_S = 30;
 // Real Watch pace assumed (~4 Mbps) when the server exposes neither a file size
@@ -155,7 +171,7 @@ async function embyRequest<T = any>(
       headers,
       body,
       signal: opts.signal ?? opts.cancelSignal,
-      dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+      dispatcher: dispatcherFor(opts.proxyUrl),
     } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
   } catch (err: any) {
     throwIfAborted(opts.cancelSignal);
@@ -249,15 +265,24 @@ async function probeStream(url: string, opts: { ua: string; proxyUrl?: string; s
         Range: `bytes=0-${PROBE_RANGE_BYTES}`,
       },
       signal: opts.signal,
-      dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+      dispatcher: dispatcherFor(opts.proxyUrl),
     } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
 
     if (res.status !== 200 && res.status !== 206) {
       await res.body?.cancel?.();
       return false;
     }
-    const buf = await res.arrayBuffer();
-    return buf.byteLength > 0;
+    // Read one chunk and stop, rather than buffering the response. A 200 here means the
+    // server ignored the Range header and is sending the whole file (common when a proxy
+    // fronts Emby), so reading it in full would pull an entire movie into memory.
+    const reader = res.body?.getReader?.();
+    if (!reader) return false;
+    try {
+      const { done, value } = await reader.read();
+      return !done && (value?.byteLength ?? 0) > 0;
+    } finally {
+      try { await reader.cancel?.(); } catch { /* already closed */ }
+    }
   } catch {
     // A cancelled job must abort, not be read as an unplayable item
     throwIfAborted(opts.signal);
@@ -368,7 +393,7 @@ async function probeStreamSize(url: string, opts: { ua: string; proxyUrl?: strin
       method: 'GET',
       headers: { 'User-Agent': opts.ua, Range: 'bytes=0-0' },
       signal: opts.signal,
-      dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+      dispatcher: dispatcherFor(opts.proxyUrl),
     } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
     const contentRange = res.headers.get('content-range');
     const contentLength = res.headers.get('content-length');
@@ -449,24 +474,31 @@ async function drainRange(
     method: 'GET',
     headers: { 'User-Agent': opts.ua, Range: `bytes=${start}-${end ?? ''}` },
     signal: opts.signal,
-    dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+    dispatcher: dispatcherFor(opts.proxyUrl),
   } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
 
   if (res.status !== 200 && res.status !== 206) {
     await res.body?.cancel?.();
     throw new Error(`stream returned ${res.status}`);
   }
+  // Cap how much of the body is read: `end` gives the requested window, maxBytes bounds an
+  // open-ended range, and an HLS segment (neither set) is read to EOF. A server that ignores
+  // Range answers 200 with the whole file, so without a cap one interval would pull the
+  // entire movie. Stopping only once the cap is passed lets a compliant 206 finish on `done`,
+  // which leaves its socket reusable.
+  const cap = Math.min(end != null ? end - start + 1 : Infinity, opts.maxBytes ?? Infinity);
   let bytes = 0;
   const reader = res.body?.getReader?.();
   if (reader) {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) bytes += value.byteLength;
-      if (opts.maxBytes != null && bytes >= opts.maxBytes) {
-        await reader.cancel?.();
-        break;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) bytes += value.byteLength;
+        if (bytes > cap) break;
       }
+    } finally {
+      try { await reader.cancel?.(); } catch { /* already closed */ }
     }
   }
   return bytes;
@@ -480,7 +512,7 @@ async function fetchText(url: string, opts: { ua: string; proxyUrl?: string; sig
       method: 'GET',
       headers: { 'User-Agent': opts.ua },
       signal: opts.signal,
-      dispatcher: opts.proxyUrl ? new ProxyAgent(opts.proxyUrl) : ipv4Agent,
+      dispatcher: dispatcherFor(opts.proxyUrl),
     } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
     if (!res.ok) {
       await res.body?.cancel?.();

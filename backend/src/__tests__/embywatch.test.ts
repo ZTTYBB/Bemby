@@ -115,6 +115,20 @@ describe('embywatch fetch routing', () => {
   });
 });
 
+// A one-chunk ReadableStream reader, as the probe path consumes responses via
+// getReader rather than buffering them. `bytes` of 0 models an unreadable file.
+function streamOf(bytes: number) {
+  let sent = false;
+  return {
+    read: vi.fn(() => {
+      if (sent || bytes === 0) return Promise.resolve({ done: true, value: undefined });
+      sent = true;
+      return Promise.resolve({ done: false, value: new Uint8Array(bytes) });
+    }),
+    cancel: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 // Routes mock responses by request URL so we can simulate auth + item pick +
 // stream probe independently.
 function routeFetch(
@@ -129,8 +143,7 @@ function routeFetch(
   });
   const probeRes = (status: number) => ({
     status,
-    body: { cancel: vi.fn() },
-    arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(status === 200 || status === 206 ? 1024 : 0)),
+    body: { cancel: vi.fn(), getReader: () => streamOf(status === 200 || status === 206 ? 1024 : 0) },
   });
   mockUndiciFetch.mockImplementation((url: string) => {
     if (url.includes('/Users/AuthenticateByName')) {
@@ -203,6 +216,38 @@ describe('embywatch playability verification', () => {
 
     await expect(runEmbywatch('https://emby.example.com', baseConfig))
       .rejects.toThrow('No streamable items found');
+  });
+
+  it('stops reading after the first chunk when the server ignores Range and returns the whole file', async () => {
+    // A proxy fronting Emby may answer 200 with the entire movie instead of a 206
+    // range. Buffering that would pull the whole file into memory and OOM the process,
+    // so the probe must take one chunk and cancel.
+    const reader = {
+      read: vi.fn().mockResolvedValue({ done: false, value: new Uint8Array(65_536) }),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+    mockUndiciFetch.mockImplementation((url: string) => {
+      if (url.includes('/Users/AuthenticateByName')) {
+        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', text: vi.fn().mockResolvedValue(JSON.stringify({ AccessToken: 'tok', User: { Id: 'u1', Name: 'Tester' } })) });
+      }
+      if (url.includes('/PlaybackInfo')) {
+        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', text: vi.fn().mockResolvedValue(JSON.stringify({ MediaSources: [{ Id: 's1' }] })) });
+      }
+      if (url.includes('/Videos/') && url.includes('/stream')) {
+        // 200 rather than 206: Range ignored, body is the entire file
+        return Promise.resolve({ status: 200, body: { cancel: vi.fn(), getReader: () => reader } });
+      }
+      if (url.includes('/Items')) {
+        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', text: vi.fn().mockResolvedValue(JSON.stringify({ Items: [{ Id: 'i1', Name: 'Ep', Type: 'Episode', RunTimeTicks: 6000_000_000, MediaSources: [{ Id: 's1' }] }] })) });
+      }
+      return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', text: vi.fn().mockResolvedValue('') });
+    });
+
+    const result = await runEmbywatch('https://emby.example.com', baseConfig);
+    expect(result.title).toBe('Ep');
+    // The endless body was read once and abandoned, never drained.
+    expect(reader.read).toHaveBeenCalledTimes(1);
+    expect(reader.cancel).toHaveBeenCalled();
   });
 
   it('does not probe the stream when verifyPlayable is false', async () => {
@@ -568,7 +613,7 @@ function routeProxy(opts: {
     const vid = url.match(/\/Videos\/([^/]+)\/stream/);
     if (vid) {
       const bad = (opts.offlineIds ?? []).includes(vid[1]);
-      return Promise.resolve({ status: bad ? 404 : 206, body: { cancel: vi.fn() }, arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(bad ? 0 : 1024)) });
+      return Promise.resolve({ status: bad ? 404 : 206, body: { cancel: vi.fn(), getReader: () => streamOf(bad ? 0 : 1024) } });
     }
     // Ancestors chain: /Items/{id}/Ancestors — real Emby's membership signal.
     // Return the configured chain, or 404 (like an aliasing proxy) so the code
