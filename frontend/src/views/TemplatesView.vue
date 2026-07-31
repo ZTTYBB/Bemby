@@ -1466,7 +1466,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           type: 'open_mini_app' as const,
           ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
           ...(a.button.trim() ? { button: a.button.trim() } : {}),
-          ...(a.appButton.trim() ? { appButtons: a.appButton.split('>').map(x => x.trim()).filter(Boolean) } : {}),
+          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),

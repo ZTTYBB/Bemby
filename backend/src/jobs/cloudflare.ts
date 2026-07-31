@@ -228,10 +228,12 @@ export function miniAppVerdict(state: {
   inAppFailure?: string;
   /** Navigation or renderer trouble seen on the way. */
   navError?: string;
+  /** Visible text before the in-app steps ran, to tell a live prompt from page furniture. */
+  priorText?: string;
   /** Overrides the configured "a page this short rendered nothing" length. */
   blankTextLen?: number;
 }): { ok: boolean; reason?: string } {
-  const { challenged, solved, text, inAppAction, inAppFailure, navError } = state;
+  const { challenged, solved, text, inAppAction, inAppFailure, navError, priorText } = state;
   const blankLen = state.blankTextLen ?? cfTuning().blankTextLen;
 
   if (!challenged && text.trim().length < blankLen && !inAppAction) {
@@ -244,8 +246,11 @@ export function miniAppVerdict(state: {
   }
   if (solved && inAppFailure) return { ok: false, reason: inAppFailure };
   // The app's own wording wins over our reading of the page: if it is still asking to be
-  // verified, the checkin did not go through, whatever the challenge detection saw.
-  if (solved && VERIFY_REQUIRED_RE.test(text)) {
+  // verified, the checkin did not go through, whatever the challenge detection saw. It has
+  // to be a live prompt though -- a verify portal headed "Complete the verification" says
+  // that whatever the outcome, and vetoing on it fails every exit in the pool. Wording that
+  // was already there before the steps ran only counts when nothing else on the page moved.
+  if (solved && VERIFY_REQUIRED_RE.test(text) && isLivePrompt(text, priorText)) {
     return {
       ok: false,
       reason:
@@ -262,6 +267,17 @@ export function miniAppVerdict(state: {
     };
   }
   return { ok: true };
+}
+
+/**
+ * Whether a verify-required prompt is the page answering what we just did, rather than
+ * standing text. New wording is always live. Wording that was already there is only live
+ * if the page is otherwise unchanged, which means the steps achieved nothing.
+ */
+function isLivePrompt(text: string, priorText?: string): boolean {
+  if (priorText == null) return true;
+  if (!VERIFY_REQUIRED_RE.test(priorText)) return true;
+  return text.trim() === priorText.trim();
 }
 
 /** Why a plain page load did not get through, in plain words, for the job log. */
@@ -570,7 +586,7 @@ export function turnstilePassed(token: string, onInterstitial: boolean): boolean
 // Text a page shows when the challenge was refused outright. Recognising it ends the
 // attempt at once instead of waiting out the timeout, so the next exit can be tried.
 const REFUSED_RE =
-  /人机验证失败|人機驗證失敗|验证失败|驗證失敗|verification failed|challenge failed|请刷新页面重试|請刷新頁面重試/i;
+  /人机验证失败|人機驗證失敗|验证失败|驗證失敗|verification failed|challenge failed|请刷新页面重试|請刷新頁面重試|invalid turnstile token|error occurred during verification/i;
 
 // An app asking for a human check in its own wording, typically in a dialog raised by
 // pressing the checkin control. The widget behind it renders a moment later, so this is
@@ -578,9 +594,16 @@ const REFUSED_RE =
 const VERIFY_REQUIRED_RE =
   /请完成人机验证|請完成人機驗證|完成人机验证|完成人機驗證|需要人机验证|需要人機驗證|complete the (?:human )?verification|verify you are human/i;
 
-// Text a verify portal shows once the identity check has gone through.
-const SUCCESS_RE =
-  /success|verified|verification complete|completed|已(驗|验)[證证]|(驗|验)[證证](成功|完成|通過|通过)|已通過|已通过/i;
+// Text a verify portal shows once the identity check has gone through. An adverb may sit
+// between the words ("驗證已經通過"), so a short gap is allowed -- but never one carrying a
+// negation, which would read "驗證未通過" as a pass.
+const NOT_NEGATED = "[^未不沒没無无失]";
+const SUCCESS_RE = new RegExp(
+  "success|verified|verification complete|completed|已(驗|验)[證证]" +
+    `|(驗|验)[證证]${NOT_NEGATED}{0,3}(成功|完成|通過|通过)` +
+    `|已${NOT_NEGATED}{0,2}(通過|通过)`,
+  "i",
+);
 
 // Some verify portals only engage Turnstile after the user clicks a button. A
 // real (CDP) click is required -- Turnstile ignores untrusted element.click()
@@ -1053,11 +1076,35 @@ async function fillInAppAnswer(page: Page, answer: string): Promise<boolean> {
  * it got. `ok` is false when a step the caller asked for could not be carried out,
  * so a page where nothing was pressed is not mistaken for a completed checkin.
  */
+/**
+ * `delay(2500)` (or `delay(2.5s)`) as a step: wait before the next one runs, for an app
+ * that needs a moment to settle. Returns null for anything that is not a delay step.
+ */
+export function parseDelayStep(step: string | undefined): number | null {
+  const m = /^delay\(\s*(\d+(?:\.\d+)?)\s*(ms|s)?\s*\)$/i.exec(step?.trim() ?? "");
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(m[2]?.toLowerCase() === "s" ? n * 1000 : n);
+}
+
+/**
+ * `{aiBtn}`, or `{aiBtn:the checkin button}` to say which one. Returns null for anything
+ * that is not an AI-button step.
+ */
+export function parseAiBtnStep(step: string | undefined): { hint?: string } | null {
+  const m = /^\{\s*aibtn\s*(?::([\s\S]*))?\}$/i.exec(step?.trim() ?? "");
+  if (!m) return null;
+  const hint = m[1]?.trim();
+  return hint ? { hint } : {};
+}
+
 async function runInAppClicks(
   page: Page,
   steps: string[],
   deadline: number,
   solveQuestion?: (question: string) => Promise<string>,
+  aiLocate?: (image: string, prompt: string) => Promise<string>,
 ): Promise<{ trace?: string; ok: boolean; failure?: string }> {
   const tune = cfTuning();
   const done: string[] = [];
@@ -1068,6 +1115,55 @@ async function runInAppClicks(
       failure = "ran out of time before the in-app steps finished";
       break;
     }
+    const pause = parseDelayStep(step);
+    if (pause !== null) {
+      // Bounded by the action budget, so a long delay cannot outlive it
+      await sleep(pause, deadline);
+      done.push(`waited ${pause}ms`);
+      continue;
+    }
+
+    // Same machinery as the `ai_web_button` page step: outline every control, number it,
+    // and let the model pick from the picture rather than guess at coordinates.
+    const aiBtn = parseAiBtnStep(step);
+    if (aiBtn) {
+      if (!aiLocate) {
+        failure = "{aiBtn} needs an AI model, and none is configured";
+        break;
+      }
+      const marks = await markWebElements(page, CLICKABLE_SELECTOR, MAX_WEB_MARKS);
+      if (!marks.length) {
+        await clearWebMarkBadges(page);
+        failure = "{aiBtn} found no control to press in the app";
+        break;
+      }
+      const marked = await screenshotOf(page, 60);
+      await clearWebMarkBadges(page);
+      if (!marked) {
+        failure = "{aiBtn} could not capture the app page for the AI";
+        break;
+      }
+      const prompt = buildWebAiPrompt({ type: "ai_web_button", hint: aiBtn.hint }, marks, false);
+      const reply = await aiLocate(marked, prompt).catch((err: any) => {
+        throw new Error(`{aiBtn} could not reach the AI: ${err?.message ?? err}`);
+      });
+      const { mark } = parseWebAiReply(reply ?? "");
+      const chosen = mark ? marks.find((m) => m.n === mark) : undefined;
+      if (!chosen) {
+        done.push(`{aiBtn} chose nothing usable`);
+        failure = `{aiBtn}: the AI named no control on the page (replied "${oneLine(reply)}")`;
+        break;
+      }
+      const what = chosen.text ? `<${chosen.tag}> "${chosen.text}"` : `<${chosen.tag}>`;
+      if (!(await clickElement(page, `[data-bemby-mark='${mark}']`))) {
+        failure = `{aiBtn}: ${what} has no on-screen box to press`;
+        break;
+      }
+      done.push(`{aiBtn} pressed ${what}`);
+      await sleep(tune.inAppStepMs, deadline);
+      continue;
+    }
+
     if (step === "{input}" || step === "{aiInput}") {
       const question = await inAppQuestion(page);
       let answer: string | undefined;
@@ -1879,12 +1975,17 @@ async function attemptLoad(
     // A Mini App checkin is a tap inside the app, not the page load itself.
     let inAppAction: string | undefined;
     let inAppFailure: string | undefined;
+    // Standing text, captured before the steps run, so a verify prompt the page has always
+    // shown can be told from one raised by pressing the control.
+    let priorText: string | undefined;
     if (opts.miniApp && solved) {
+      priorText = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
       const clicks = await runInAppClicks(
         page,
         opts.inAppClicks ?? [],
         budgetDeadline,
         opts.solveQuestion,
+        opts.aiLocate,
       );
       inAppAction = clicks.trace;
       inAppFailure = clicks.failure;
@@ -1898,7 +1999,9 @@ async function attemptLoad(
         after = await solveChallenge();
         if (after !== null) break;
         const body = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
-        if (!VERIFY_REQUIRED_RE.test(body) || Date.now() >= challengeBy) break;
+        // Standing wording is not the app asking; waiting it out just spends the budget.
+        if (!VERIFY_REQUIRED_RE.test(body) || !isLivePrompt(body, priorText)) break;
+        if (Date.now() >= challengeBy) break;
         await sleep(tune.pollMs, challengeBy);
       }
       if (after !== null) {
@@ -1924,7 +2027,7 @@ async function attemptLoad(
     const navError = troubles.length ? troubles.join("; ") : undefined;
 
     const verdict = opts.miniApp
-      ? miniAppVerdict({ challenged, solved, text, inAppAction, inAppFailure, navError })
+      ? miniAppVerdict({ challenged, solved, text, inAppAction, inAppFailure, navError, priorText })
       : webSteps
         ? // A sub-step that could not be carried out is a failure even with no challenge in
           // the way: the page was never driven to where the caller wanted it.

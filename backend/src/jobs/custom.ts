@@ -2404,6 +2404,14 @@ export async function runCustom(
                     step.aiResponse = response;
                     return response;
                   },
+                  // Backs the {aiBtn} in-app step: the model is shown the marked-up app
+                  // page and names the control to press
+                  aiLocate: async (image, prompt) => {
+                    const { response } = await callAI([image], prompt, 512);
+                    step.aiPrompt = prompt;
+                    step.aiResponse = response;
+                    return response;
+                  },
                   // Cloudflare judges the exit IP too, so the action can pin an exit of
                   // its own and decide whether the rest of the pool stands by
                   proxyCandidates: candidates,
