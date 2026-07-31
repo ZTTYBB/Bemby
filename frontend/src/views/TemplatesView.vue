@@ -235,7 +235,7 @@
           <!-- Custom: target bot + action chain -->
           <template v-if="form.jobType === 'custom'">
             <div class="form-group">
-              <label class="form-label">{{ t('jobs.custom.labelTarget') }} <span style="color:#e63946">*</span></label>
+              <label class="form-label">{{ t('jobs.custom.labelTarget') }}</label>
               <input v-model.trim="form.botUsername" class="form-input" placeholder="BotUsername" />
             </div>
 
@@ -1784,7 +1784,8 @@ async function saveTemplate() {
   formError.value = '';
   if (!form.name) { formError.value = t('jobs.errors.nameRequired'); return; }
   if (form.jobType === 'custom') {
-    if (!form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
+    // No target bot needed: an action can name its own contact, or drive a page that
+    // never touches Telegram. The ones that do need it say so when they run.
     if (customActions.value.length === 0) { formError.value = t('jobs.errors.customActionsRequired'); return; }
   }
   if (form.jobType === 'embywatch') {

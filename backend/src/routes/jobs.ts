@@ -281,9 +281,13 @@ router.post("/", (req, res) => {
     resolvedType === "checkin" ||
     resolvedType === "custom" ||
     resolvedType === "autoreg";
-  if (!name || (needsAccount && !accountId) || !botUsername) {
+  // A custom job need not target a bot at all: its actions can each name their own
+  // contact, or drive a page that never touches Telegram.
+  if (!name || (needsAccount && !accountId) || (resolvedType !== "custom" && !botUsername)) {
     res.status(400).json({
-      error: "name and botUsername are required; accountId is required for checkin, custom and autoreg jobs",
+      error:
+        "name is required; botUsername is required for every type except custom; " +
+        "accountId is required for checkin, custom and autoreg jobs",
     });
     return;
   }

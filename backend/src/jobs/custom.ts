@@ -31,6 +31,7 @@ import {
 import {
   openableButtonUrl,
   openableMiniAppUrl,
+  parseMiniAppLink,
   webButtonOf,
   type WebButton,
 } from "../tg/miniApp";
@@ -673,6 +674,36 @@ export async function runCustom(
 ): Promise<CustomJobLog> {
   const log: CustomJobLog = { steps: [] };
   const jobMaxRetries = config.maxRetries ?? 1;
+
+  // A custom job need not target a bot: its steps can each name their own contact, or
+  // drive a page that never touches Telegram. The ones that do fall back to it are named
+  // here, rather than failing later on a peer that cannot be resolved from "".
+  if (!botUsername.trim()) {
+    const actions = config.actions ?? [];
+    const at = actions.findIndex((a) => {
+      switch (a.type) {
+        case "open_mini_app":
+          return !a.contact?.trim();
+        case "open_mini_app_url":
+          // A t.me/<bot>/<app> link names its own bot, so it needs no fallback
+          return !a.contact?.trim() && !parseMiniAppLink(a.url ?? "");
+        case "send_contact_message":
+        case "join_group":
+        case "subscribe_channel":
+        case "open_url":
+        case "delay":
+          return false;
+        default:
+          return true;
+      }
+    });
+    if (at >= 0) {
+      throw new Error(
+        `Step ${at + 1} (${actions[at].type}) needs a target bot, but this job has none. ` +
+          "Set one on the job, or give the step its own contact.",
+      );
+    }
+  }
 
   const client = new TelegramClient(
     new StringSession(sessionString),

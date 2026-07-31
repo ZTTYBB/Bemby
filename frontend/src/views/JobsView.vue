@@ -354,7 +354,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">{{ t('jobs.custom.labelTarget') }} <span style="color:#e63946">*</span></label>
+              <label class="form-label">{{ t('jobs.custom.labelTarget') }}</label>
               <input v-model.trim="form.botUsername" class="form-input" placeholder="BotUsername" />
             </div>
           </div>
@@ -2046,7 +2046,8 @@ async function saveJob() {
   if (!form.name) { formError.value = t('jobs.errors.nameRequired'); return; }
   if ((form.jobType === 'checkin' || form.jobType === 'custom' || form.jobType === 'autoreg') && !form.accountId) { formError.value = t('jobs.errors.accountRequired'); return; }
   if (form.jobType === 'custom') {
-    if (!form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
+    // No target bot needed: an action can name its own contact, or drive a page that
+    // never touches Telegram. The ones that do need it say so when they run.
     if (customActions.value.length === 0) { formError.value = t('jobs.errors.customActionsRequired'); return; }
   }
   if (form.jobType === 'autoreg' && !form.templateId) {
@@ -2061,7 +2062,7 @@ async function saveJob() {
     // Strip any accidental protocol prefix the user may have typed into the host field
     form.botUsername = `${embyServer.protocol}://${embyServer.host.replace(/^https?:\/\//, '')}${portPart}`;
   }
-  if (!form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
+  if (form.jobType !== 'custom' && !form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
   if (form.jobType === 'checkin' || form.jobType === 'autoreg') form.botUsername = form.botUsername.replace(/^@+/, '');
   if (form.jobType === 'embywatch' && (!embyCfg.username || !embyCfg.password)) {
     formError.value = t('jobs.errors.embyCredRequired');
