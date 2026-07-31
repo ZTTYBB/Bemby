@@ -72,16 +72,24 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # xvfb pulls libgl1 -> libglx-mesa0 -> libgl1-mesa-dri -> libllvm*: a software OpenGL
-# rasteriser that Chromium does not use, because it renders through its own bundled
-# SwiftShader/ANGLE. The LLVM runtime behind it is the bulk of it, ~100MB installed on its
-# own. They are hard dependencies, so dpkg has to be told to drop them anyway; the GL
-# dispatch library Xvfb links against (libgl1) stays.
+# rasteriser worth ~100MB, almost all of it the LLVM runtime. They are hard dependencies,
+# so dpkg has to be told to drop them anyway; the GL dispatch library Xvfb links against
+# (libgl1) stays.
+#
+# This is only safe because the browser is launched with --use-gl=angle
+# --use-angle=swiftshader (see cfBrowser.ts), which renders through Chromium's own bundled
+# SwiftShader and never asks the system for GL. Forcing the driver out leaves libglx-mesa0
+# installed but gutted, so anything that does ask gets "GLX is not present" and ANGLE fails
+# to initialise -- it does not fall back by itself. Removing those flags means putting these
+# packages back.
 #
 # The LLVM runtime is matched by pattern rather than named: its package tracks the Debian
 # release (libllvm15 on bookworm), and a base-image bump must not quietly stop removing it.
 #
-# The smoke test is the guard: if removing the driver ever does stop the X server coming
-# up, the build fails here rather than every Cloudflare job failing with ECONNREFUSED.
+# The smoke test only proves the X server still comes up. It cannot launch the browser to
+# check the rest: CloakBrowser is downloaded into the data dir at runtime, so there is no
+# binary in the image. The runtime equivalent is the self-test in Settings, which reports a
+# missing WebGL as a warning.
 # The proof is the display socket, not the child's PID -- an Xvfb that died would still be
 # an unreaped zombie that `kill -0` reports as alive.
 RUN set -eu; \

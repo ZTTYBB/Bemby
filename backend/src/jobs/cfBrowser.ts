@@ -698,6 +698,13 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
           "--no-sandbox",
           "--disable-setuid-sandbox",
           "--disable-dev-shm-usage",
+          // Render through Chromium's own bundled SwiftShader rather than the system GL
+          // stack. The image purges Mesa to stay small, which leaves no GLX for ANGLE to
+          // start from ("GLX is not present"), and ANGLE does not fall back on its own.
+          // This keeps WebGL present, which matters: a browser reporting none reads as
+          // automation. Do not drop these without putting Mesa back in the image.
+          "--use-gl=angle",
+          "--use-angle=swiftshader",
           // A profile that is reused must not reopen the last session or offer to restore a
           // crashed one, either of which would leave a dialog over the page
           "--no-first-run",

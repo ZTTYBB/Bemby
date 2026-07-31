@@ -1792,10 +1792,36 @@ export async function testBrowser(proxyUrl?: string): Promise<{
       screenshot: await screenshotOf(page),
     };
   } catch (err: any) {
-    return { ok: false, executable, error: err?.message ?? String(err) };
+    const message = err?.message ?? String(err);
+    const diagnosis = launchFailureReason(message);
+    return {
+      ok: false,
+      executable,
+      // Chromium's whole stderr rides along on a launch failure; keep enough to work with
+      error: message.length > 1200 ? `${message.slice(0, 1200)}…` : message,
+      warnings: diagnosis ? [diagnosis] : undefined,
+    };
   } finally {
     await launched?.close();
   }
+}
+
+/**
+ * Names a launch failure whose cause is buried in the browser log it carries, so the panel
+ * leads with something to act on rather than a wall of Chromium stderr.
+ */
+function launchFailureReason(message: string): string | undefined {
+  if (/GLX is not present|EGL_NOT_INITIALIZED|ANGLE Display::initialize/i.test(message)) {
+    return (
+      "The browser could not start a GL display. This image ships no system GL, so the " +
+      "browser has to run on its own bundled SwiftShader -- check the --use-gl=angle and " +
+      "--use-angle=swiftshader launch flags are still in place, or reinstall the image."
+    );
+  }
+  if (/Failed to launch|ENOENT|no such file or directory/i.test(message)) {
+    return "The browser binary could not be started. Re-download it from this panel.";
+  }
+  return undefined;
 }
 
 /** JPEG of what the browser is looking at, small enough to keep in a job log. */
