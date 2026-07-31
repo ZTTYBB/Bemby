@@ -1,6 +1,6 @@
 import { Router, raw } from "express";
-import dns from "dns";
-import net from "net";
+import { assertPublicUrl, isFrameable } from "../tg/safeFetch";
+import { issueWebviewTicket, type WebviewMode } from "../tg/webviewTickets";
 import {
   getLiveClient,
   loadDialogs,
@@ -68,191 +68,6 @@ function tgError(err: any, accountId: number, res: Response): void {
 
 const router = Router();
 
-// Reject IPs in private/reserved ranges to prevent SSRF against internal services.
-function isBlockedIp(ip: string): boolean {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split(".").map(Number);
-    return (
-      a === 0 ||
-      a === 127 ||
-      a === 10 ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 169 && b === 254)
-    );
-  }
-  if (net.isIPv6(ip)) {
-    const lower = ip.toLowerCase();
-    return lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd");
-  }
-  return true; // reject unrecognised formats
-}
-
-async function assertPublicUrl(rawUrl: string): Promise<void> {
-  const parsed = new URL(rawUrl);
-  if (!/^https?:$/i.test(parsed.protocol)) throw new Error("Only http(s) allowed");
-  const hostname = parsed.hostname;
-  if (net.isIP(hostname)) {
-    if (isBlockedIp(hostname)) throw new Error("Private IP not allowed");
-    return;
-  }
-  // Resolve to IP before fetching so literal hostname tricks don't bypass the check
-  const { address } = await dns.promises.lookup(hostname).catch(async () =>
-    dns.promises.lookup(hostname, { family: 6 }),
-  );
-  if (isBlockedIp(address)) throw new Error("Private IP not allowed");
-}
-
-// SSRF-safe fetch: validates the initial URL and every redirect target against
-// assertPublicUrl before following it, so a public host cannot 3xx-redirect the
-// request to localhost / cloud-metadata / other internal services.
-async function ssrfSafeFetch(
-  startUrl: string,
-  init: RequestInit,
-  maxHops = 5,
-): Promise<globalThis.Response> {
-  let current = startUrl;
-  for (let hop = 0; hop <= maxHops; hop++) {
-    await assertPublicUrl(current);
-    const resp = await fetch(current, { ...init, redirect: "manual" });
-    if (resp.status >= 300 && resp.status < 400) {
-      const location = resp.headers.get("location");
-      if (!location) return resp;
-      current = new URL(location, current).toString();
-      continue;
-    }
-    return resp;
-  }
-  throw new Error("Too many redirects");
-}
-
-// GET /miniapp-proxy -- proxy mini app content through the backend.
-// For HTML: rewrites <script src> and <link href> (stylesheet/modulepreload) so all
-// JS/CSS also flows through this proxy, bypassing CORS and X-Frame-Options on the bot server.
-// The fragment (#tgWebAppData=...) stays in the iframe src so window.location.hash works normally.
-router.get("/miniapp-proxy", async (req, res) => {
-  const url = req.query.url as string;
-  const token = (req.query.token as string) ?? "";
-  if (!url || !/^https?:\/\//i.test(url)) {
-    res.status(400).json({ error: "valid url required" });
-    return;
-  }
-  try {
-    await assertPublicUrl(url);
-  } catch {
-    res.status(400).json({ error: "URL not allowed" });
-    return;
-  }
-  try {
-    const upstream = await ssrfSafeFetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Linux; Android 11; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36 Telegram/10.0",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-
-    const contentType = upstream.headers.get("content-type") ?? "text/html";
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.removeHeader("X-Frame-Options");
-    res.removeHeader("Content-Security-Policy");
-
-    if (contentType.includes("text/html")) {
-      let html = await upstream.text();
-      const finalUrl = (upstream.url || url).split("#")[0];
-      const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
-
-      // Strip any <base href> the bot's own HTML injects -- it would redirect our
-      // relative proxy URLs to the bot server instead of our backend
-      html = html.replace(/<base\b[^>]*>/gi, "");
-
-      const toProxyUrl = (resourceUrl: string): string => {
-        if (!resourceUrl || resourceUrl.startsWith("data:") || resourceUrl.includes("/miniapp-proxy")) {
-          return resourceUrl;
-        }
-        const abs = /^https?:\/\//i.test(resourceUrl)
-          ? resourceUrl
-          : new URL(resourceUrl, finalUrl).toString();
-        // Relative path -- without <base href> this resolves against our backend origin correctly
-        return `/api/tg-client/miniapp-proxy?url=${encodeURIComponent(abs)}${tokenParam}`;
-      };
-
-      const toAbsUrl = (resourceUrl: string): string => {
-        if (!resourceUrl || resourceUrl.startsWith("data:") || /^https?:\/\//i.test(resourceUrl)) {
-          return resourceUrl;
-        }
-        try { return new URL(resourceUrl, finalUrl).toString(); } catch { return resourceUrl; }
-      };
-
-      // Rewrite <script src="..."> through proxy -- strip crossorigin (same-origin after rewrite)
-      html = html.replace(
-        /(<script\b)([^>]*?)\s(src\s*=\s*)(["'])([^"']+)\4/gi,
-        (m, tag, attrs, srcAttr, q, src) => {
-          const cleanAttrs = attrs.replace(/\bcrossorigin\b(?:\s*=\s*["'][^"']*["'])?/gi, "").trimEnd();
-          return `${tag}${cleanAttrs} ${srcAttr}${q}${toProxyUrl(src)}${q}`;
-        },
-      );
-
-      // Rewrite <link href="..."> for stylesheets, modulepreload, and script preloads through proxy
-      html = html.replace(/<link\b[^>]+>/gi, (linkTag) => {
-        const isScriptResource =
-          /rel\s*=\s*["']?(stylesheet|modulepreload)["']?/i.test(linkTag) ||
-          (/rel\s*=\s*["']?preload["']?/i.test(linkTag) && /\bas\s*=\s*["']?script["']?/i.test(linkTag));
-        if (!isScriptResource) {
-          // For icon, dns-prefetch, etc. just make relative URLs absolute
-          return linkTag.replace(/(href\s*=\s*)(["'])([^"']+)\2/i, (_m, attr, q, href) => `${attr}${q}${toAbsUrl(href)}${q}`);
-        }
-        return linkTag
-          .replace(/\bcrossorigin\b(?:\s*=\s*["'][^"']*["'])?/gi, "")
-          .replace(/(href\s*=\s*)(["'])([^"']+)\2/i, (_m, attr, q, href) => `${attr}${q}${toProxyUrl(href)}${q}`);
-      });
-
-      // Make all remaining relative src= absolute so images/fonts load from the bot server
-      // without needing a <base href> (which would break our relative proxy URLs above)
-      html = html.replace(
-        /(\bsrc\s*=\s*)(["'])(?!data:|https?:\/\/|\/\/|\/api\/)([^"']+)\2/gi,
-        (_m, attr, q, src) => `${attr}${q}${toAbsUrl(src)}${q}`,
-      );
-
-      // Inject an ES module importmap so Vite dynamic chunk imports (e.g. import('/chunk.js'))
-      // are redirected through our proxy instead of hitting our backend root unauthenticated.
-      // Scope is limited to modules loaded from our proxy URL so it doesn't affect other imports.
-      const botOrigin = new URL(finalUrl).origin;
-      const encodedBase = encodeURIComponent(`${botOrigin}/`);
-      const proxyBase = token
-        ? `/api/tg-client/miniapp-proxy?token=${encodeURIComponent(token)}&url=${encodedBase}`
-        : `/api/tg-client/miniapp-proxy?url=${encodedBase}`;
-      const importMap = JSON.stringify({
-        scopes: {
-          "/api/tg-client/miniapp-proxy": {
-            "/": proxyBase,
-            [`${botOrigin}/`]: proxyBase,
-          },
-        },
-      });
-      const importMapTag = `<script type="importmap">${importMap}</script>`;
-      // Must appear before any <script type="module">
-      if (/<script\b[^>]*type\s*=\s*["']module["']/i.test(html)) {
-        html = html.replace(
-          /<script\b[^>]*type\s*=\s*["']module["']/i,
-          `${importMapTag}\n$&`,
-        );
-      } else {
-        html = html.replace(/<head[^>]*>/i, (m) => `${m}\n${importMapTag}`);
-      }
-
-      res.send(html);
-    } else {
-      const buf = await upstream.arrayBuffer();
-      res.send(Buffer.from(buf));
-    }
-  } catch (err: any) {
-    res.status(502).json({ error: err.message });
-  }
-});
-
 // GET /frameable?url= -- probe whether a page allows cross-origin framing
 router.get("/frameable", async (req, res) => {
   const url = req.query.url as string;
@@ -269,109 +84,36 @@ router.get("/frameable", async (req, res) => {
   res.json({ frameable: await isFrameable(url) });
 });
 
-// GET /web-proxy?url=&token= -- proxy a page that refuses framing so the
-// messenger viewer can still render it. The frontend shows the result in an
-// iframe WITHOUT allow-same-origin, so proxied scripts run in an opaque origin
-// and cannot reach Bemby's storage or API. Subresources are rewritten to load
-// directly from the site; link navigation is routed back through the proxy.
-router.get("/web-proxy", async (req, res) => {
-  const url = req.query.url as string;
-  const token = (req.query.token as string) ?? "";
+// POST /webview/ticket -- an address for the viewer to show a page that refuses framing.
+// Requested here, where the caller is authenticated, so the address handed to the iframe
+// carries only the ticket: the page can read its own URL, and a session token there would be
+// a session token given to the site. See tg/webviewTickets.
+router.post("/webview/ticket", (req, res) => {
+  const { url, mode } = req.body as { url?: string; mode?: WebviewMode };
   if (!url || !/^https?:\/\//i.test(url)) {
     res.status(400).json({ error: "valid url required" });
     return;
   }
   try {
-    await assertPublicUrl(url);
-  } catch {
-    res.status(400).json({ error: "URL not allowed" });
-    return;
-  }
-  try {
-    const upstream = await ssrfSafeFetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
+    const ticket = issueWebviewTicket(url, mode === "app" ? "app" : "page");
+    // The fragment stays on the address the browser holds -- a Mini App reads the account it
+    // is signed for from `#tgWebAppData`, and a fragment is never sent to a server anyway
+    const [target, fragment] = splitFragment(url);
+    res.json({
+      proxyUrl:
+        `/api/webview/proxy?t=${encodeURIComponent(ticket.id)}` +
+        `&url=${encodeURIComponent(target)}${fragment ? `#${fragment}` : ""}`,
+      expiresAt: ticket.expiresAt,
     });
-
-    const contentType = upstream.headers.get("content-type") ?? "text/html";
-    res.setHeader("Content-Type", contentType);
-    res.removeHeader("X-Frame-Options");
-    res.removeHeader("Content-Security-Policy");
-
-    if (!contentType.includes("text/html")) {
-      const buf = await upstream.arrayBuffer();
-      res.send(Buffer.from(buf));
-      return;
-    }
-
-    let html = await upstream.text();
-    const finalUrl = (upstream.url || url).split("#")[0];
-    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
-
-    const toAbs = (resourceUrl: string): string => {
-      try {
-        return new URL(resourceUrl, finalUrl).toString();
-      } catch {
-        return resourceUrl;
-      }
-    };
-
-    // A <base> or meta CSP from the page would break the proxied copy
-    html = html.replace(/<base\b[^>]*>/gi, "");
-    html = html.replace(
-      /<meta\b[^>]+http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi,
-      "",
-    );
-
-    // Route link navigation back through the proxy so clicking around keeps
-    // working (a direct navigation would hit the framing block again)
-    html = html.replace(
-      /(<a\b[^>]*?\shref\s*=\s*)(["'])([^"']+)\2/gi,
-      (m, prefix, q, href) => {
-        if (/^(#|mailto:|tel:|javascript:|data:)/i.test(href)) return m;
-        const abs = toAbs(href);
-        if (!/^https?:\/\//i.test(abs)) return m;
-        return `${prefix}${q}/api/tg-client/web-proxy?url=${encodeURIComponent(abs)}${tokenParam}${q}`;
-      },
-    );
-
-    // Everything else (images, scripts, styles, forms) loads directly from
-    // the site -- make relative URLs absolute
-    html = html.replace(
-      /(\b(?:src|action)\s*=\s*)(["'])(?!data:|https?:\/\/|\/\/|#)([^"']+)\2/gi,
-      (_m, attr, q, val) => `${attr}${q}${toAbs(val)}${q}`,
-    );
-    html = html.replace(/<link\b[^>]+>/gi, (linkTag) =>
-      linkTag.replace(
-        /(href\s*=\s*)(["'])(?!data:|https?:\/\/|\/\/|#)([^"']+)\2/i,
-        (_m, attr, q, href) => `${attr}${q}${toAbs(href)}${q}`,
-      ),
-    );
-    html = html.replace(
-      /(\bsrcset\s*=\s*)(["'])([^"']+)\2/gi,
-      (_m, attr, q, val) => {
-        const rewritten = val
-          .split(",")
-          .map((part: string) => {
-            const [u, ...rest] = part.trim().split(/\s+/);
-            if (!u || /^(data:|https?:\/\/|\/\/)/i.test(u)) return part.trim();
-            return [toAbs(u), ...rest].join(" ");
-          })
-          .join(", ");
-        return `${attr}${q}${rewritten}${q}`;
-      },
-    );
-
-    res.send(html);
   } catch (err: any) {
-    res.status(502).json({ error: err.message });
+    res.status(400).json({ error: err?.message ?? "url not allowed" });
   }
 });
+
+function splitFragment(url: string): [string, string] {
+  const at = url.indexOf("#");
+  return at === -1 ? [url, ""] : [url.slice(0, at), url.slice(at + 1)];
+}
 
 // GET /:accountId/folders
 router.get("/:accountId/folders", async (req, res) => {
@@ -1110,39 +852,6 @@ router.get("/:accountId/bot-commands/:chatId", async (req, res) => {
 });
 
 // True when the response headers allow embedding the page in an iframe from another origin
-function headersAllowFraming(headers: Headers): boolean {
-  const xfo = (headers.get("x-frame-options") ?? "").toLowerCase();
-  if (xfo.includes("deny") || xfo.includes("sameorigin")) return false;
-  const csp = headers.get("content-security-policy") ?? "";
-  const m = csp.match(/frame-ancestors([^;]*)/i);
-  // frame-ancestors listing anything but a wildcard will not include our origin
-  if (m && !m[1].trim().toLowerCase().split(/\s+/).includes("*")) return false;
-  return true;
-}
-
-// Probes a URL to check whether it can be shown in the messenger webview iframe
-async function isFrameable(url: string): Promise<boolean> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 5000);
-  try {
-    let resp = await fetch(url, {
-      method: "HEAD",
-      redirect: "follow",
-      signal: ctrl.signal,
-    });
-    if (resp.status === 405 || resp.status === 501) {
-      resp = await fetch(url, { redirect: "follow", signal: ctrl.signal });
-      resp.body?.cancel().catch(() => {});
-    }
-    return headersAllowFraming(resp.headers);
-  } catch {
-    // Unreachable from the backend; let the browser iframe try anyway
-    return true;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 // POST /:accountId/webview/resolve -- resolve a mini app URL to an authenticated web app URL
 router.post("/:accountId/webview/resolve", async (req, res) => {
   const accountId = Number(req.params.accountId);
@@ -1163,8 +872,11 @@ router.post("/:accountId/webview/resolve", async (req, res) => {
       botChatId,
       peerChatId,
     );
-    // TG-issued webview URLs are made to be framed; probe only unresolved ones
-    const frameable = resolved || (await isFrameable(webAppUrl));
+    // Probed even when Telegram signed the URL. A signed URL is not a frameable one: apps
+    // increasingly send `frame-ancestors 'self' https://web.telegram.org` (or X-Frame-Options
+    // SAMEORIGIN), which keeps working in Telegram's own clients while our origin is refused.
+    // Assuming otherwise showed the operator a dead panel reading "refused to connect".
+    const frameable = await isFrameable(webAppUrl);
     res.json({ webAppUrl, resolved, frameable });
   } catch (err: any) {
     tgError(err, accountId, res);

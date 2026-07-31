@@ -21,6 +21,7 @@ import debugRouter from "./routes/debug";
 import aiSuppliersRouter from "./routes/ai-suppliers";
 import templatesRouter from "./routes/templates";
 import tgClientRouter from "./routes/tgClient";
+import webviewProxyRouter from "./routes/webviewProxy";
 import { requireAuth, getJwtSecret } from "./middleware/auth";
 import { startScheduler } from "./scheduler";
 import { attachWebSocket } from "./tg/wsHandler";
@@ -51,6 +52,17 @@ const corsOrigins = (process.env.CORS_ORIGIN ?? "")
 const allowedOrigins = corsOrigins.length
   ? corsOrigins
   : ["http://localhost:5173", "http://127.0.0.1:5173"];
+// The messenger's page viewer, mounted ahead of everything else on purpose. It authenticates
+// with its own ticket rather than a session token (see routes/webviewProxy), answers its own
+// preflights -- the sandboxed page is an opaque origin, which the CORS whitelist below would
+// turn away -- and forwards request bodies untouched, which needs the raw bytes rather than
+// the JSON parser's object.
+app.use(
+  "/api/webview",
+  express.raw({ type: "*/*", limit: "10mb" }),
+  webviewProxyRouter,
+);
+
 app.use(cors({ origin: allowedOrigins }));
 app.use(express.json({ limit: "5mb" }));
 

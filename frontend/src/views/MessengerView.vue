@@ -2923,14 +2923,23 @@ async function openMiniApp(
       botChatId,
       activeChatId.value,
     );
-    // Sites that refuse framing would show a blank panel -- open externally
-    if (openMiniAppInApp.value && frameable) {
-      webViewPanel.value = { url: webAppUrl, title };
-    } else {
-      window.open(webAppUrl, "_blank", "noopener");
+    if (!openMiniAppInApp.value) {
+      // The resolve happens after the click and can outlive the gesture that lets a popup
+      // through, so a blocked window falls back to the chooser and a real click
+      if (!window.open(webAppUrl, "_blank", "noopener")) askOpenLink(webAppUrl);
+      return;
     }
+    if (frameable) {
+      webViewPanel.value = { url: webAppUrl, title };
+      return;
+    }
+    // Most apps now refuse to be framed by anything but Telegram, so the panel shows a
+    // proxied copy: same page, served from here with those headers dropped, sandboxed into
+    // an opaque origin and reached with a ticket that is good for that site alone.
+    const { proxyUrl } = await tgClientApi.webviewTicket(webAppUrl, "app");
+    webViewPanel.value = { url: proxyUrl, title, proxied: true };
   } catch {
-    window.open(url, "_blank", "noopener");
+    if (!window.open(url, "_blank", "noopener")) askOpenLink(url);
   }
 }
 
@@ -2957,12 +2966,16 @@ async function openLinkInBemby() {
   linkChooserUrl.value = null;
   if (frameable) {
     webViewPanel.value = { url, title };
-  } else {
-    const token = localStorage.getItem("token") ?? "";
-    const proxiedUrl = `/api/tg-client/web-proxy?url=${encodeURIComponent(
-      url,
-    )}&token=${encodeURIComponent(token)}`;
-    webViewPanel.value = { url: proxiedUrl, title, proxied: true };
+    return;
+  }
+  // A proxied page is served from Bemby's origin, so its scripts can read the address it was
+  // given. That address carries a ticket good only for this one site -- never the session
+  // token, which would hand the page the whole API.
+  try {
+    const { proxyUrl } = await tgClientApi.webviewTicket(url, "page");
+    webViewPanel.value = { url: proxyUrl, title, proxied: true };
+  } catch {
+    if (!window.open(url, "_blank", "noopener")) askOpenLink(url);
   }
 }
 

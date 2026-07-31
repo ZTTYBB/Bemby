@@ -1662,6 +1662,16 @@ export const tgClientApi = {
       .get<{ frameable: boolean }>("/tg-client/frameable", { params: { url } })
       .then((r) => r.data),
 
+  // An address for the viewer iframe carrying a ticket instead of the session token, which
+  // the page itself would be able to read off its own URL
+  webviewTicket: (url: string, mode: "app" | "page") =>
+    api
+      .post<{ proxyUrl: string; expiresAt: number }>("/tg-client/webview/ticket", {
+        url,
+        mode,
+      })
+      .then((r) => r.data),
+
   clearAccountCache: (accountId: number) =>
     api
       .delete<{ ok: boolean }>(`/tg-client/${accountId}/cache`)
