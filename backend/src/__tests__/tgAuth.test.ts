@@ -27,7 +27,7 @@ vi.mock('telegram/sessions', () => ({
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TelegramClient } from 'telegram';
-import { requestCode } from '../auth/tgAuth';
+import { requestCode, sweepPendingAuth } from '../auth/tgAuth';
 import type { TgProxy } from '../types';
 
 beforeEach(() => vi.clearAllMocks());
@@ -78,5 +78,38 @@ describe('requestCode', () => {
 
     const opts = vi.mocked(TelegramClient).mock.calls[0][3] as Record<string, unknown>;
     expect(opts).toHaveProperty('proxy', proxy);
+  });
+});
+
+// ---- abandoned session sweep -----------------------------------------------
+
+// A pending entry holds a connected TelegramClient. An auth nobody finishes (tab
+// closed at the code prompt, bulk add moved on) would otherwise pin that
+// connection for the life of the process.
+describe('sweepPendingAuth', () => {
+  const TTL_MS = 15 * 60_000;
+
+  // pending is module-level, so the sessions the tests above abandoned are still in
+  // it. Clear them first so these assertions count only their own entry.
+  beforeEach(() => {
+    sweepPendingAuth(Date.now() + TTL_MS * 1000);
+    mockDestroy.mockClear();
+  });
+
+  it('leaves a session that is still within its TTL', async () => {
+    await requestCode(201, 12345, 'apihash', '+61400000001');
+
+    expect(sweepPendingAuth(Date.now() + TTL_MS - 1_000)).toBe(0);
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  it('destroys and drops a session left past its TTL', async () => {
+    await requestCode(202, 12345, 'apihash', '+61400000001');
+
+    expect(sweepPendingAuth(Date.now() + TTL_MS + 1)).toBe(1);
+    expect(mockDestroy).toHaveBeenCalledTimes(1);
+
+    // Already gone, so a second sweep has nothing to do
+    expect(sweepPendingAuth(Date.now() + TTL_MS * 10)).toBe(0);
   });
 });

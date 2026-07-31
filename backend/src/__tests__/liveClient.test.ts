@@ -6,7 +6,7 @@ const {
   MockUser, MockChat, MockChannel,
   MockPeerUser, MockPeerChannel, MockPeerChat,
   MockMessage, MockChatInvite, MockChatInviteAlready, MockChatInvitePeek,
-  MockMessageMediaPhoto, MockMessageMediaDocument, MockReplyInlineMarkup,
+  MockMessageMediaPhoto, MockMessageMediaDocument, MockDocument, MockReplyInlineMarkup,
   MockTelegramClient, mockClientInstance,
   mockAddEventHandler, mockGetDialogs, mockGetMessages, mockSendMessage, mockInvoke,
 } = vi.hoisted(() => {
@@ -21,7 +21,8 @@ const {
   class MockChatInviteAlready { constructor(d: Record<string, any>) { Object.assign(this, d); } }
   class MockChatInvitePeek { constructor(d: Record<string, any>) { Object.assign(this, d); } }
   class MockMessageMediaPhoto {}
-  class MockMessageMediaDocument {}
+  class MockMessageMediaDocument { constructor(d: Record<string, any> = {}) { Object.assign(this, d); } }
+  class MockDocument { constructor(d: Record<string, any> = {}) { Object.assign(this, d); } }
   class MockReplyInlineMarkup {
     rows: Array<{ buttons: Array<{ text: string }> }>;
     constructor(d: any) { this.rows = d.rows; }
@@ -52,7 +53,7 @@ const {
     MockUser, MockChat, MockChannel,
     MockPeerUser, MockPeerChannel, MockPeerChat,
     MockMessage, MockChatInvite, MockChatInviteAlready, MockChatInvitePeek,
-    MockMessageMediaPhoto, MockMessageMediaDocument, MockReplyInlineMarkup,
+    MockMessageMediaPhoto, MockMessageMediaDocument, MockDocument, MockReplyInlineMarkup,
     MockTelegramClient, mockClientInstance,
     mockAddEventHandler, mockGetDialogs, mockGetMessages, mockSendMessage, mockInvoke,
   };
@@ -70,6 +71,7 @@ vi.mock('telegram', () => ({
     Message:             MockMessage,
     MessageMediaPhoto:   MockMessageMediaPhoto,
     MessageMediaDocument: MockMessageMediaDocument,
+    Document:            MockDocument,
     ReplyInlineMarkup:   MockReplyInlineMarkup,
     contacts: {
       GetContacts:    vi.fn().mockImplementation((d: any) => d),
@@ -139,6 +141,7 @@ import {
   subscribeToMessages,
   sweepLiveClients,
   parseMiniAppLink,
+  fetchPhoto,
 } from '../tg/liveClient';
 import { db } from '../db/database';
 
@@ -791,6 +794,41 @@ describe('parseMiniAppLink', () => {
   });
 });
 
+// ---- fetchPhoto size cap ---------------------------------------------------
+
+describe('fetchPhoto', () => {
+  // The whole file is buffered to serve it, so an oversized document has to be
+  // refused before the download rather than spiking the heap by its full size.
+  function mediaMessage(sizeBytes: number) {
+    return new MockMessage({
+      id: 5,
+      media: new MockMessageMediaDocument({
+        document: new MockDocument({ size: sizeBytes, mimeType: 'video/mp4' }),
+      }),
+    });
+  }
+
+  it('refuses a document larger than the inline limit without downloading it', async () => {
+    const entry = await getLiveClient(700);
+    entry.entityCache.set('u1', new MockUser({ id: 1n }) as any);
+    mockGetMessages.mockResolvedValueOnce([mediaMessage(80 * 1024 * 1024)]);
+
+    expect(await fetchPhoto(entry as any, 'u1', 5)).toBeNull();
+    expect(mockClientInstance.downloadMedia).not.toHaveBeenCalled();
+  });
+
+  it('serves a document within the limit', async () => {
+    const entry = await getLiveClient(701);
+    entry.entityCache.set('u1', new MockUser({ id: 1n }) as any);
+    mockGetMessages.mockResolvedValueOnce([mediaMessage(2 * 1024 * 1024)]);
+    mockClientInstance.downloadMedia.mockResolvedValueOnce(Buffer.from('abc'));
+
+    const result = await fetchPhoto(entry as any, 'u1', 5);
+    expect(result?.mimeType).toBe('video/mp4');
+    expect(result?.buf.toString()).toBe('abc');
+  });
+});
+
 // ---- sweepLiveClients (issue #14: memory growth) ----------------------------
 
 describe('sweepLiveClients', () => {
@@ -842,6 +880,40 @@ describe('sweepLiveClients', () => {
 
     sweepLiveClients(later + IDLE_MS + 1);
     expect(mockClientInstance.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  // LIVE_CLIENT_MAX defaults to 8. On a small host it is the number of connected
+  // accounts, not idle time, that exhausts memory, so the cap has to bite before
+  // the idle window elapses.
+  it('evicts the least recently used client once over LIVE_CLIENT_MAX', async () => {
+    for (let i = 0; i < 9; i++) await getLiveClient(500 + i);
+
+    // The 9th admission pushes the registry over the cap and drops the oldest
+    expect(mockClientInstance.destroy).toHaveBeenCalledTimes(1);
+
+    // The evicted one is rebuilt on next use; the most recent is still cached
+    MockTelegramClient.mockClear();
+    await getLiveClient(500);
+    expect(MockTelegramClient).toHaveBeenCalledTimes(1);
+    MockTelegramClient.mockClear();
+    await getLiveClient(508);
+    expect(MockTelegramClient).not.toHaveBeenCalled();
+  });
+
+  it('never evicts a watched client, even when that leaves the cap exceeded', async () => {
+    const unsubscribes = [];
+    for (let i = 0; i < 10; i++) {
+      await getLiveClient(600 + i);
+      unsubscribes.push(subscribeToMessages(600 + i, () => {}));
+    }
+
+    // Every entry has a subscriber, so there is nothing eligible to drop
+    expect(mockClientInstance.destroy).not.toHaveBeenCalled();
+
+    // Dropping the subscribers makes them evictable again on the next sweep
+    unsubscribes.forEach((u) => u());
+    sweepLiveClients(Date.now());
+    expect(mockClientInstance.destroy).toHaveBeenCalled();
   });
 
   it('trims oversized caches on a live entry without evicting it', async () => {
