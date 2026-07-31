@@ -1713,7 +1713,6 @@
 <script setup lang="ts">
 import {
   ref,
-  reactive,
   computed,
   watch,
   onMounted,
@@ -1726,7 +1725,6 @@ import {
   type Account,
   type TgDialog,
   type TgMessage,
-  type TgReaction,
   type TgBotCommand,
   type TgContact,
   type TgFolder,
@@ -3629,6 +3627,7 @@ async function sendThreadMessage() {
       html: null,
       date: result.date,
       fromMe: true,
+      isRead: false,
       fromId: null,
       fromName: null,
       hasPhoto: false,
@@ -3738,7 +3737,7 @@ async function scrollBottom(force = false) {
 // Scroll to the first unread message when opening a chat with unread messages.
 // Falls back to scrolling to the bottom when all loaded messages are unread
 // (meaning there are more unread messages further back) or when there are none.
-async function scrollToUnread(unreadCount: number): Promise<void> {
+async function scrollToUnread(): Promise<void> {
   await nextTick();
   const el = messagesEl.value;
   if (!el) return;
@@ -3830,17 +3829,6 @@ function friendlyTgError(raw: string): string {
   )
     return "Network error connecting to Telegram. Check your server connection and try again.";
   return raw;
-}
-
-// Returns true for errors that a reconnect can potentially fix.
-function isAuthError(raw: string): boolean {
-  return (
-    raw.includes("AUTH_KEY_DUPLICATED") ||
-    raw.includes("AUTH_KEY_INVALID") ||
-    raw.includes("AUTH_KEY_UNREGISTERED") ||
-    raw.includes("SESSION_REVOKED") ||
-    raw.includes("SESSION_EXPIRED")
-  );
 }
 
 async function reconnectAccount() {
@@ -4229,7 +4217,7 @@ async function fetchMessages(fresh = false) {
     } else {
       firstUnreadId.value = null;
     }
-    await scrollToUnread(unreadCount);
+    await scrollToUnread();
     scheduleBotMsgWatch();
   } catch (e: any) {
     if (ctrl.signal.aborted) return;
@@ -4458,6 +4446,7 @@ async function sendMessage() {
       html: null,
       date: result.date,
       fromMe: true,
+      isRead: false,
       fromId: null,
       fromName: null,
       hasPhoto: false,

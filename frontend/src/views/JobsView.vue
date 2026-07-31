@@ -1091,7 +1091,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
-import { jobsApi, accountsApi, statusApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type ScheduleStatus, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig } from '../api/client';
+import { jobsApi, accountsApi, statusApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type ScheduleStatus, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig, type CheckinConfig } from '../api/client';
 import { t, locale } from '../i18n';
 import { usePersistedRef } from '../composables/usePersistedRef';
 import { formatAccountLabel, loadAccountDisplaySetting } from '../composables/accountDisplay';
@@ -1883,7 +1883,7 @@ function handleEmbyHostPaste(event: ClipboardEvent) {
   if (portStr) embyServer.port = Number(portStr);
 }
 
-function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Record<string, string> | null {
+function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | CheckinConfig | null {
   if (form.jobType === 'autoreg') {
     // Template-linked jobs take their whole config from the template
     if (form.templateId) return null;

@@ -434,6 +434,14 @@ export type CustomConfig = {
   proxyId?: string;
 };
 
+export type CheckinConfig = {
+  successContains?: string;
+  failContains?: string;
+  proxyId?: string;
+  /** Open a Cloudflare-gated checkin URL in a browser to pass the "I am not a bot" check. */
+  cfChallenge?: boolean;
+};
+
 export type AutoregConfig = {
   groupId: string;
   codePrefix: string;
@@ -1044,6 +1052,8 @@ export type Settings = {
   account_display_with_tg_name?: string;
   /** Days to keep job logs; "0" keeps all logs. */
   log_retention_days?: string;
+  /** Minimum minutes between scheduled runs; "0" disables staggering. */
+  schedule_min_gap_minutes?: string;
   /** "true" once the user has enabled the on-demand Cloudflare solver. */
   cf_solver_enabled?: string;
   /** Server-computed: "true" when the Cloudflare-solver browser is installed. */

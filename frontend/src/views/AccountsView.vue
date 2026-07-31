@@ -3354,11 +3354,6 @@ const allSelected = computed(
     accounts.value.length > 0 &&
     accounts.value.every((a) => selectedIds.value.has(a.id)),
 );
-const someSelected = computed(
-  () =>
-    accounts.value.some((a) => selectedIds.value.has(a.id)) &&
-    !allSelected.value,
-);
 
 function toggleSelectAll() {
   if (allSelected.value) {
