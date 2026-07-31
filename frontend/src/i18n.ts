@@ -1181,6 +1181,14 @@ const zh = {
           label: "空白页判定字数",
           hint: "页面可见文字少于此字数即视为没有渲染出内容（通常是浏览器或网络异常），该次尝试记为失败而不是成功。",
         },
+        windowWidth: {
+          label: "浏览器窗口宽度（像素）",
+          hint: "0 表示由浏览器自行决定。需与高度同时设置，两者都不小于 400 才生效。",
+        },
+        windowHeight: {
+          label: "浏览器窗口高度（像素）",
+          hint: "0 表示由浏览器自行决定。页面没有模拟视口，窗口就是视口：加高可让长页面（如抽奖页底部的参与按钮）一屏显示完，截图和 {aiBtn} 才能看到它。超过 1080 时虚拟屏幕会随之加大，但需重启应用后生效。",
+        },
       },
     },
     adminCreds: "管理员",
@@ -2492,6 +2500,14 @@ const en: typeof zh = {
         blankTextLen: {
           label: "Blank-page text length",
           hint: "A page with less visible text than this counts as having rendered nothing — usually a browser or network fault — and the attempt fails rather than passing.",
+        },
+        windowWidth: {
+          label: "Browser window width (px)",
+          hint: "0 leaves the size to the browser. Both width and height must be set, and at least 400, before either applies.",
+        },
+        windowHeight: {
+          label: "Browser window height (px)",
+          hint: "0 leaves the size to the browser. The page has no emulated viewport, so the window is the viewport: a taller one fits a long page on one screen — such as a giveaway page whose join button sits below the fold — which is all a screenshot and {aiBtn} can see. Above 1080 the virtual screen grows to match, which needs an app restart.",
         },
       },
     },

@@ -344,6 +344,40 @@ function displaySocket(display: string): string {
   return `/tmp/.X11-unix/X${display.replace(/^:/, "").split(".")[0]}`;
 }
 
+/** The desktop the browser opens on when nothing asks for more room. */
+const DEFAULT_SCREEN = { width: 1920, height: 1080 };
+
+/**
+ * The window geometry the settings ask for, or undefined for Chromium's own choice.
+ *
+ * Both numbers are needed: half a size is not a window. Anything implausibly small is
+ * ignored rather than clamped -- a 100px window renders a mobile layout nothing on the page
+ * expects, and silently correcting it would hide the typo.
+ */
+function configuredWindow(): { width: number; height: number } | undefined {
+  const { windowWidth: width, windowHeight: height } = cfTuning();
+  if (width < 400 || height < 400) return undefined;
+  return { width, height };
+}
+
+/** The screen this process started, so a window asking for more room can be reported. */
+let startedScreen: { width: number; height: number } | undefined;
+
+/**
+ * One X server serves the whole process and it is sized when the first browser launches, so
+ * a size raised afterwards has nothing to grow into and the window is clipped to the screen.
+ * Silently rendering shorter than asked is the confusing outcome; saying so is not.
+ */
+function warnIfWindowExceedsScreen(win?: { width: number; height: number }): void {
+  if (!win || !startedScreen) return;
+  if (win.width <= startedScreen.width && win.height + 140 <= startedScreen.height) return;
+  console.warn(
+    `[cfBrowser] the window size in settings (${win.width}x${win.height}) does not fit the ` +
+      `virtual screen already running (${startedScreen.width}x${startedScreen.height}), so the ` +
+      "page will be clipped to it. Restart the app to start a screen that holds it.",
+  );
+}
+
 /**
  * Starts one X server on a free display number. The socket appearing is what proves it
  * came up: a process that died is still an unreaped child that looks alive.
@@ -354,10 +388,18 @@ async function startXvfb(): Promise<string | undefined> {
     if (existsSync(displaySocket(display))) continue;
 
     // Sized to the desktop the stealth build reports to a page, so the window it opens
-    // sits inside a screen of a plausible size rather than filling a small one
-    const proc = spawn("Xvfb", [display, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"], {
-      stdio: "ignore",
-    });
+    // sits inside a screen of a plausible size rather than filling a small one. A window
+    // configured taller or wider than that gets a screen grown to hold it: one that does not
+    // fit is clipped, and the page then renders shorter than the size that was asked for.
+    const want = configuredWindow();
+    const width = Math.max(DEFAULT_SCREEN.width, want?.width ?? 0);
+    // Room for the window frame and the browser's own chrome above the page
+    const height = Math.max(DEFAULT_SCREEN.height, (want?.height ?? 0) + 140);
+    const proc = spawn(
+      "Xvfb",
+      [display, "-screen", "0", `${width}x${height}x24`, "-nolisten", "tcp"],
+      { stdio: "ignore" },
+    );
     // Not on the path at all, as opposed to started and then exited
     let missing = false;
     const died = new Promise<false>((resolve) => {
@@ -378,7 +420,8 @@ async function startXvfb(): Promise<string | undefined> {
     if (await Promise.race([died, up])) {
       // Killed with the app so a restart does not leave X servers behind
       process.once("exit", () => proc.kill());
-      console.log(`[cfBrowser] started Xvfb on ${display}`);
+      startedScreen = { width, height };
+      console.log(`[cfBrowser] started Xvfb on ${display} at ${width}x${height}`);
       return display;
     }
     proc.kill();
@@ -655,6 +698,8 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
   applyCfFontEnv();
 
   const display = await ensureDisplay();
+  const win = configuredWindow();
+  warnIfWindowExceedsScreen(win);
   const key = exitKey(proxyUrl);
   const geo = cfExitGeo(key);
   const profile = claimProfile(key);
@@ -713,6 +758,10 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
           // A window Chromium considers occluded gets its timers, rendering and observer
           // callbacks throttled, which stalls anything waiting on them
           "--window-position=0,0",
+          // The page runs with no emulated viewport (CloakBrowser passes viewport: null so
+          // outerWidth cannot contradict innerWidth), so the window is the viewport and this
+          // flag is what sizes it. Left out entirely when unset, so Chromium picks as before.
+          ...(win ? [`--window-size=${win.width},${win.height}`] : []),
           "--disable-backgrounding-occluded-windows",
           "--disable-renderer-backgrounding",
           "--disable-background-timer-throttling",

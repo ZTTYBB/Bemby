@@ -44,6 +44,14 @@ export type CfTuning = {
   maxProfiles: number;
   /** A page with less visible text than this counts as having rendered nothing. */
   blankTextLen: number;
+  /** Browser window width in pixels. 0 leaves the size to Chromium. */
+  windowWidth: number;
+  /**
+   * Browser window height in pixels. 0 leaves the size to Chromium. The page has no
+   * emulated viewport, so the window is the viewport: a taller one puts more of a long
+   * Mini App page on screen, which is all a screenshot and `{aiBtn}` can see.
+   */
+  windowHeight: number;
 };
 
 /** The values the solver shipped with. */
@@ -66,6 +74,8 @@ export const CF_TUNING_DEFAULTS: CfTuning = {
   maxPoolCandidates: 200,
   maxProfiles: 12,
   blankTextLen: 10,
+  windowWidth: 0,
+  windowHeight: 0,
 };
 
 /** Range each value is held to, so a typo cannot wedge a job for an hour. */
@@ -88,6 +98,8 @@ export const CF_TUNING_LIMITS: Record<keyof CfTuning, { min: number; max: number
   maxPoolCandidates: { min: 1, max: 500 },
   maxProfiles: { min: 0, max: 200 },
   blankTextLen: { min: 0, max: 5_000 },
+  windowWidth: { min: 0, max: 3_840 },
+  windowHeight: { min: 0, max: 4_320 },
 };
 
 export const CF_TUNING_FIELDS = Object.keys(CF_TUNING_DEFAULTS) as Array<keyof CfTuning>;
