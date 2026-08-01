@@ -1666,7 +1666,7 @@ export const tgClientApi = {
   // the page itself would be able to read off its own URL
   webviewTicket: (url: string, mode: "app" | "page") =>
     api
-      .post<{ proxyUrl: string; expiresAt: number }>("/tg-client/webview/ticket", {
+      .post<{ proxyUrl: string; isolated: boolean; expiresAt: number }>("/tg-client/webview/ticket", {
         url,
         mode,
       })

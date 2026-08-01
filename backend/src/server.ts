@@ -22,6 +22,8 @@ import aiSuppliersRouter from "./routes/ai-suppliers";
 import templatesRouter from "./routes/templates";
 import tgClientRouter from "./routes/tgClient";
 import webviewProxyRouter from "./routes/webviewProxy";
+import webviewSiteRouter from "./routes/webviewSite";
+import { isWebviewHost, webviewPublicOrigin } from "./tg/webviewTickets";
 import { requireAuth, getJwtSecret } from "./middleware/auth";
 import { startScheduler } from "./scheduler";
 import { attachWebSocket } from "./tg/wsHandler";
@@ -52,6 +54,17 @@ const corsOrigins = (process.env.CORS_ORIGIN ?? "")
 const allowedOrigins = corsOrigins.length
   ? corsOrigins
   : ["http://localhost:5173", "http://127.0.0.1:5173"];
+// A request naming the viewer origin is a framed page asking for itself, not a call on
+// Bemby: the whole host belongs to that page, from the root down, which is the only way its
+// router works. Mounted first so nothing else claims a path from it.
+const viewerOrigin = webviewPublicOrigin();
+if (viewerOrigin) {
+  console.log(`[webview] serving framed pages on ${viewerOrigin}`);
+  app.use((req, res, next) =>
+    isWebviewHost(req.headers.host, viewerOrigin) ? webviewSiteRouter(req, res, next) : next(),
+  );
+}
+
 // The messenger's page viewer, mounted ahead of everything else on purpose. It authenticates
 // with its own ticket rather than a session token (see routes/webviewProxy), answers its own
 // preflights -- the sandboxed page is an opaque origin, which the CORS whitelist below would

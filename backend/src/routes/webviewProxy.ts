@@ -3,6 +3,7 @@ import { assertPublicUrl, ssrfSafeFetch } from "../tg/safeFetch";
 import {
   resolveWebviewTicket,
   ticketAllowsUrl,
+  webviewProxyPath,
   type WebviewMode,
   type WebviewTicket,
 } from "../tg/webviewTickets";
@@ -19,14 +20,17 @@ import {
 //     site it was issued for. This router is therefore mounted outside `requireAuth` -- the
 //     ticket is the whole credential, and it grants nothing of Bemby's.
 //
+// The address is shaped as a path -- /api/webview/r/<ticket>/https/host/rest -- rather than a
+// query, because everything the page loads is resolved against it. A query-shaped address
+// cannot stand in for a directory: relative imports resolve to the wrong place and an import
+// map naming it is rejected outright ("since specifierKey ended in a slash, so must the
+// address"), which is what stopped an earlier version loading anything but the first file.
+//
 // Because the origin is opaque, the page's own requests reach us cross-origin (`Origin:
 // null`), which is why the responses carry `Access-Control-Allow-Origin: *` and preflights
 // are answered here.
 
 const router = Router();
-
-/** The path a proxied page's own requests come back to. */
-const PROXY_PATH = "/api/webview/proxy";
 
 /** Headers that belong to this hop, or to Bemby, and must not be passed upstream. */
 const DROP_REQUEST_HEADERS = new Set([
@@ -39,7 +43,7 @@ const DROP_REQUEST_HEADERS = new Set([
   "content-length",
   // Bemby's own cookies must never reach the site
   "cookie",
-  // Ours to set: the site is entitled to think the request came from its own page
+  // Ours to set, below
   "origin",
   "referer",
   "accept-encoding",
@@ -52,30 +56,45 @@ const UA_PAGE =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
   "Chrome/126 Safari/537.36";
 
-function allowCors(res: Parameters<Parameters<typeof router.options>[1]>[1], reqHeaders?: string) {
-  // The sandboxed page is an opaque origin, so `*` is the only value that matches it. No
-  // credentials are involved: cookies are never forwarded either way.
-  res.setHeader("Access-Control-Allow-Origin", "*");
+/** The site's own domain, for telling its resources from a third party's. */
+function baseDomain(host: string): string {
+  const labels = host.toLowerCase().split(".");
+  return labels.length <= 2 ? labels.join(".") : labels.slice(-2).join(".");
+}
+
+function sameParty(host: string, domain: string): boolean {
+  const h = host.toLowerCase();
+  return h === domain || h.endsWith(`.${domain}`);
+}
+
+function allowCors(
+  res: { setHeader: (k: string, v: string) => void },
+  reqHeaders?: string,
+  origin?: string,
+): void {
+  // The sandboxed page has an opaque origin, so it sends `Origin: null`. Echoing whatever it
+  // sent -- rather than `*` -- is what lets a credentialed request through: a browser rejects
+  // a wildcard outright when the fetch was made with `credentials: "include"`, and an app
+  // built for a real Telegram webview commonly does exactly that. `*` remains the fallback for
+  // a request that carries no origin at all.
+  res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  if (origin) res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", reqHeaders || "*");
+  res.setHeader("Access-Control-Expose-Headers", "*");
   res.setHeader("Access-Control-Max-Age", "600");
 }
 
 /**
  * Injected ahead of the page's own scripts.
  *
- * A proxied page believes it is served from Bemby, which breaks it in three ways that no
- * amount of rewriting the HTML can fix: requests it builds at runtime point at the wrong
- * origin, storage throws because the origin is opaque, and the Telegram bridge has no host
- * to talk to. Each is patched here rather than left to fail silently.
+ * Rewritten HTML only covers what the page ships with. A request it builds at runtime still
+ * points at Bemby, storage still throws because the origin is opaque, and the Telegram bridge
+ * still has no host to talk to. Each is patched here rather than left to fail silently.
  */
-function runtimeShim(base: string, domain: string, ticketId: string, mode: WebviewMode): string {
-  const config = JSON.stringify({
-    base,
-    domain,
-    proxy: `${PROXY_PATH}?t=${encodeURIComponent(ticketId)}&url=`,
-    path: PROXY_PATH,
-  });
+function runtimeShim(base: string, domain: string, prefix: string, mode: WebviewMode): string {
+  const config = JSON.stringify({ base, domain, prefix });
 
   // telegram-web-app.js posts its events to the host client. In a frame it would postMessage
   // to a Telegram origin, which is not us, so the message is dropped and calls made during
@@ -103,24 +122,28 @@ function runtimeShim(base: string, domain: string, ticketId: string, mode: Webvi
     return host === CFG.domain || host.slice(-(CFG.domain.length + 1)) === "." + CFG.domain;
   }
 
-  // The address a request should really go to. Relative URLs resolve against the page's own
-  // address on the site, not against Bemby; a URL the page built from location.origin is
-  // read as one of its own paths; anything on another party's domain is left to go direct,
-  // since the ticket would not cover it anyway.
+  function viaProxy(u) {
+    return CFG.prefix + u.protocol.replace(":", "") + "/" + u.host + u.pathname + u.search;
+  }
+
+  // Where a request should really go. A relative URL already resolves through the proxy path,
+  // so it comes back here untouched; one the page built from its own root is read as a path on
+  // the site; a third party's is left to go direct, since the ticket would refuse it anyway.
   function route(raw) {
-    var u = String(raw == null ? "" : raw);
-    if (!u || /^(data:|blob:|javascript:|about:|mailto:|tel:|#)/i.test(u)) return raw;
+    var s = String(raw == null ? "" : raw);
+    if (!s || /^(data:|blob:|javascript:|about:|mailto:|tel:|#)/i.test(s)) return raw;
     var abs;
-    try { abs = new URL(u, CFG.base).toString(); } catch (e) { return raw; }
+    try { abs = new URL(s, document.baseURI).toString(); } catch (e) { return raw; }
     if (abs.indexOf(here) === 0) {
       var rest = abs.slice(here.length);
-      if (rest.indexOf(CFG.path) === 0) return raw;
+      if (rest.indexOf(CFG.prefix) === 0) return raw;
       try { abs = new URL(rest, CFG.base).toString(); } catch (e) { return raw; }
     }
-    var host;
-    try { host = new URL(abs).hostname; } catch (e) { return raw; }
-    if (!sameParty(host)) return abs;
-    return CFG.proxy + encodeURIComponent(abs);
+    var parsed;
+    try { parsed = new URL(abs); } catch (e) { return raw; }
+    if (!/^https?:$/i.test(parsed.protocol)) return raw;
+    if (!sameParty(parsed.hostname)) return abs;
+    return viaProxy(parsed);
   }
 
   var origFetch = window.fetch;
@@ -157,9 +180,35 @@ function runtimeShim(base: string, domain: string, ticketId: string, mode: Webvi
     window.EventSource.prototype = ES.prototype;
   }
 
-  // Storage throws outright in an opaque origin, and an app that stores a token on boot dies
-  // on the first line. In-memory stand-ins last as long as the panel is open, which is the
-  // life of the session anyway.
+  // A bundle preloads its own chunks and stylesheets by building <link> and <script> elements
+  // as it runs. Those carry a URL rather than an import specifier, so no import map covers
+  // them and they would be asked of Bemby's root. Both ways a URL reaches an element are
+  // patched: the property and the attribute.
+  function patchUrlProperty(proto, name) {
+    var desc = Object.getOwnPropertyDescriptor(proto, name);
+    if (!desc || !desc.set) return;
+    Object.defineProperty(proto, name, {
+      configurable: true,
+      enumerable: desc.enumerable,
+      get: desc.get,
+      set: function (value) { desc.set.call(this, route(value)); }
+    });
+  }
+  if (window.HTMLLinkElement) patchUrlProperty(HTMLLinkElement.prototype, "href");
+  if (window.HTMLScriptElement) patchUrlProperty(HTMLScriptElement.prototype, "src");
+  if (window.HTMLImageElement) patchUrlProperty(HTMLImageElement.prototype, "src");
+
+  var setAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name, value) {
+    if (typeof name === "string" && (name.toLowerCase() === "src" || name.toLowerCase() === "href")) {
+      return setAttribute.call(this, name, route(value));
+    }
+    return setAttribute.apply(this, arguments);
+  };
+
+  // Storage throws outright in an opaque origin, and an app that keeps a token dies on the
+  // first line that touches it. In-memory stand-ins last as long as the panel is open, which
+  // is the life of the session anyway.
   function memoryStore() {
     var map = {};
     return {
@@ -182,52 +231,43 @@ function runtimeShim(base: string, domain: string, ticketId: string, mode: Webvi
     if (!usable) {
       try { Object.defineProperty(window, name, { value: memoryStore(), configurable: true }); } catch (e) {}
     }
-  });
-
-${telegramBridge}
+  });${telegramBridge}
 })();</script>`;
 }
 
-/** Rewrites a page so its subresources and links come back through this proxy. */
-function rewriteHtml(
-  html: string,
-  finalUrl: string,
-  ticket: WebviewTicket,
-  domain: string,
-): string {
-  const proxyPrefix = `${PROXY_PATH}?t=${encodeURIComponent(ticket.id)}&url=`;
-  const toProxy = (resourceUrl: string): string => {
-    if (!resourceUrl || resourceUrl.startsWith("data:") || resourceUrl.includes(PROXY_PATH)) {
-      return resourceUrl;
-    }
+/** Rewrites a page so what it ships with comes back through this proxy. */
+function rewriteHtml(html: string, finalUrl: string, ticket: WebviewTicket): string {
+  const prefix = `${webviewProxyPath(ticket.id)}/`;
+  const domain = baseDomain(new URL(finalUrl).hostname);
+
+  // Only the site's own resources are proxied. A third party's stay as they are: the ticket
+  // covers one site, so proxying them would earn a 403 -- which is exactly how the Telegram
+  // SDK went missing and took the whole app down with it.
+  const toProxy = (raw: string): string => {
+    if (!raw || /^(data:|blob:|javascript:|about:|mailto:|tel:|#)/i.test(raw)) return raw;
+    // Idempotent: several rules below touch the same attribute -- a `<script src>` is matched
+    // by the script rule and again by the generic one -- and prefixing twice produces an
+    // address the site answers with its index page, which fails as a module for its MIME type.
+    if (raw.startsWith(prefix)) return raw;
+    let abs: URL;
     try {
-      return `${proxyPrefix}${encodeURIComponent(new URL(resourceUrl, finalUrl).toString())}`;
+      abs = new URL(raw, finalUrl);
     } catch {
-      return resourceUrl;
+      return raw;
     }
-  };
-  const toAbs = (resourceUrl: string): string => {
-    if (!resourceUrl || resourceUrl.startsWith("data:") || /^https?:\/\//i.test(resourceUrl)) {
-      return resourceUrl;
-    }
-    try {
-      return new URL(resourceUrl, finalUrl).toString();
-    } catch {
-      return resourceUrl;
-    }
+    if (!/^https?:$/i.test(abs.protocol)) return raw;
+    if (!sameParty(abs.hostname, domain)) return abs.toString();
+    return `${prefix}${abs.protocol.replace(":", "")}/${abs.host}${abs.pathname}${abs.search}`;
   };
 
-  // A <base href> would send our relative proxy URLs back to the site, and a meta CSP would
-  // hold the proxied copy to rules written for the original origin
+  // A <base href> would resolve the page's own relative URLs off the proxy path, and a meta
+  // CSP would hold the copy to rules written for the original origin
   let out = html.replace(/<base\b[^>]*>/gi, "");
-  out = out.replace(
-    /<meta\b[^>]+http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi,
-    "",
-  );
+  out = out.replace(/<meta\b[^>]+http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi, "");
 
-  // Scripts and stylesheets come through the proxy: a module is fetched with CORS, which the
-  // site will not grant an opaque origin. The whole opening tag is rewritten rather than the
-  // attributes before `src`, since `crossorigin` is as likely to sit after it.
+  // Scripts and stylesheets: the whole opening tag is rewritten rather than the attributes
+  // before `src`, since `crossorigin` is as likely to sit after it -- and a module fetched
+  // with CORS is one the site will not grant an opaque origin.
   out = out.replace(/<script\b[^>]*>/gi, (tag) => {
     if (!/\ssrc\s*=\s*["']/i.test(tag)) return tag;
     return tag
@@ -237,38 +277,25 @@ function rewriteHtml(
         (_m, attr, q, src) => `${attr}${q}${toProxy(src)}${q}`,
       );
   });
-  out = out.replace(/<link\b[^>]+>/gi, (linkTag) => {
-    const isScriptResource =
-      /rel\s*=\s*["']?(stylesheet|modulepreload)["']?/i.test(linkTag) ||
-      (/rel\s*=\s*["']?preload["']?/i.test(linkTag) &&
-        /\bas\s*=\s*["']?script["']?/i.test(linkTag));
-    if (!isScriptResource) {
-      return linkTag.replace(
-        /(href\s*=\s*)(["'])([^"']+)\2/i,
-        (_m, attr, q, href) => `${attr}${q}${toAbs(href)}${q}`,
-      );
-    }
-    return linkTag
+  out = out.replace(/<link\b[^>]+>/gi, (linkTag) =>
+    linkTag
       .replace(/\bcrossorigin\b(?:\s*=\s*["'][^"']*["'])?/gi, "")
       .replace(
         /(href\s*=\s*)(["'])([^"']+)\2/i,
         (_m, attr, q, href) => `${attr}${q}${toProxy(href)}${q}`,
-      );
-  });
-
-  // Images, fonts and form targets load straight from the site, so they only need absolving
-  // of the missing <base href>
+      ),
+  );
   out = out.replace(
-    /(\b(?:src|action)\s*=\s*)(["'])(?!data:|https?:\/\/|\/\/|#|\/api\/)([^"']+)\2/gi,
-    (_m, attr, q, val) => `${attr}${q}${toAbs(val)}${q}`,
+    /(\b(?:src|action|poster)\s*=\s*)(["'])([^"']+)\2/gi,
+    (_m, attr, q, val) => `${attr}${q}${toProxy(val)}${q}`,
   );
   out = out.replace(/(\bsrcset\s*=\s*)(["'])([^"']+)\2/gi, (_m, attr, q, val: string) => {
     const rewritten = val
       .split(",")
       .map((part) => {
         const [u, ...rest] = part.trim().split(/\s+/);
-        if (!u || /^(data:|https?:\/\/|\/\/)/i.test(u)) return part.trim();
-        return [toAbs(u), ...rest].join(" ");
+        if (!u) return part.trim();
+        return [toProxy(u), ...rest].join(" ");
       })
       .join(", ");
     return `${attr}${q}${rewritten}${q}`;
@@ -277,63 +304,71 @@ function rewriteHtml(
   // A plain page is browsed, so its links stay inside the viewer. An app routes its own
   // navigation through the shim instead.
   if (ticket.mode === "page") {
-    out = out.replace(
-      /(<a\b[^>]*?\shref\s*=\s*)(["'])([^"']+)\2/gi,
-      (m, prefix, q, href) => {
-        if (/^(#|mailto:|tel:|javascript:|data:)/i.test(href)) return m;
-        const abs = toAbs(href);
-        if (!/^https?:\/\//i.test(abs)) return m;
-        return `${prefix}${q}${toProxy(abs)}${q}`;
-      },
-    );
+    out = out.replace(/(<a\b[^>]*?\shref\s*=\s*)(["'])([^"']+)\2/gi, (m, before, q, href) => {
+      if (/^(#|mailto:|tel:|javascript:|data:)/i.test(href)) return m;
+      return `${before}${q}${toProxy(href)}${q}`;
+    });
   }
 
-  // Vite-built apps import their chunks by absolute path at runtime; the map sends those
-  // through the proxy instead of at Bemby's root.
-  const encodedBase = encodeURIComponent(`${new URL(finalUrl).origin}/`);
-  const scopedBase = `${proxyPrefix}${encodedBase}`;
-  const importMap = JSON.stringify({
-    scopes: {
-      [PROXY_PATH]: { "/": scopedBase, [`${new URL(finalUrl).origin}/`]: scopedBase },
-    },
-  });
-  const head = `<script type="importmap">${importMap}</script>\n${runtimeShim(
-    finalUrl,
-    domain,
-    ticket.id,
-    ticket.mode,
-  )}`;
+  // A bundle splits itself with `import("/assets/chunk.js")`, and the browser resolves that
+  // specifier itself -- no patched fetch sees it -- so an absolute path would be asked of
+  // Bemby's root. The map sends those to the site instead. Both sides must end in a slash or
+  // the whole map is discarded ("since specifierKey ended in a slash, so must the address"),
+  // which a query-shaped address could never satisfy.
+  //
+  // The identity entry earns its place: a bundle's preload helper derives a chunk's specifier
+  // from its own address, which is already a proxy path, and "/" alone would prefix it a
+  // second time. Import maps resolve by longest matching prefix, so naming the proxy path and
+  // mapping it to itself leaves those alone while "/" still catches the site's own roots.
+  const siteRoot = `${prefix}https/${new URL(finalUrl).host}/`;
+  const entries = { "/": siteRoot, [prefix]: prefix };
+  const importMap = JSON.stringify({ imports: entries, scopes: { [siteRoot]: entries } });
+  const head =
+    `<script type="importmap">${importMap}</script>\n` +
+    runtimeShim(finalUrl, domain, prefix, ticket.mode);
 
-  // Both must precede every script on the page, module or not
-  if (/<head[^>]*>/i.test(out)) {
-    out = out.replace(/<head[^>]*>/i, (m) => `${m}\n${head}`);
-  } else {
-    out = `${head}\n${out}`;
-  }
-  return out;
+  // Must precede every script on the page, module or not
+  return /<head[^>]*>/i.test(out)
+    ? out.replace(/<head[^>]*>/i, (m) => `${m}\n${head}`)
+    : `${head}\n${out}`;
 }
 
-router.options("/proxy", (req, res) => {
-  allowCors(res, req.headers["access-control-request-headers"] as string | undefined);
+router.options(/^\/r\//, (req, res) => {
+  allowCors(
+    res,
+    req.headers["access-control-request-headers"] as string | undefined,
+    req.headers.origin as string | undefined,
+  );
   res.status(204).end();
 });
 
-router.all("/proxy", async (req, res) => {
-  const ticket = resolveWebviewTicket(req.query.t as string | undefined);
-  allowCors(res, req.headers["access-control-request-headers"] as string | undefined);
+router.all(/^\/r\//, async (req, res) => {
+  allowCors(
+    res,
+    req.headers["access-control-request-headers"] as string | undefined,
+    req.headers.origin as string | undefined,
+  );
+
+  // Parsed off the raw URL rather than route params, so percent-encoding in the path and the
+  // query reaches the site exactly as the page wrote it
+  const parts = /^\/r\/([^/?#]+)\/(https?)\/([^/?#]+)([^?#]*)(\?[^#]*)?$/.exec(req.url);
+  if (!parts) {
+    res.status(400).json({ error: "malformed viewer address" });
+    return;
+  }
+  const [, ticketId, scheme, host, rawPath, search] = parts;
+
+  const ticket = resolveWebviewTicket(decodeURIComponent(ticketId));
   if (!ticket) {
     res.status(401).json({ error: "This viewer session has expired. Open the app again." });
     return;
   }
 
-  const url = req.query.url as string;
-  if (!url || !/^https?:\/\//i.test(url)) {
-    res.status(400).json({ error: "valid url required" });
-    return;
-  }
+  const url = `${scheme}://${host}${rawPath || "/"}${search ?? ""}`;
   // The ticket is what bounds the proxy: without this it would fetch anything for anyone
   // holding one, which is a relay rather than a viewer.
   if (!ticketAllowsUrl(ticket, url)) {
+    console.warn(`[webview] 403 ${url.slice(0, 140)} is outside ${ticket.origin}`);
     res.status(403).json({ error: "outside this viewer session" });
     return;
   }
@@ -357,7 +392,7 @@ router.all("/proxy", async (req, res) => {
   headers["origin"] = ticket.origin;
   headers["accept-language"] ??= "en-US,en;q=0.9";
 
-  // Raw bytes, so a body of any content type reaches the site exactly as the page sent it
+  // Raw bytes, so a body of any content type reaches the site as the page sent it
   const body =
     req.method === "GET" || req.method === "HEAD" || !Buffer.isBuffer(req.body) || !req.body.length
       ? undefined
@@ -378,11 +413,10 @@ router.all("/proxy", async (req, res) => {
       res.send(Buffer.from(await upstream.arrayBuffer()));
       return;
     }
-
     const finalUrl = (upstream.url || url).split("#")[0];
-    const domain = new URL(finalUrl).hostname.toLowerCase().split(".").slice(-2).join(".");
-    res.send(rewriteHtml(await upstream.text(), finalUrl, ticket, domain));
+    res.send(rewriteHtml(await upstream.text(), finalUrl, ticket));
   } catch (err: any) {
+    console.warn(`[webview] ${req.method} failed for ${url.slice(0, 140)}: ${err?.message ?? err}`);
     res.status(502).json({ error: err?.message ?? "proxy failed" });
   }
 });

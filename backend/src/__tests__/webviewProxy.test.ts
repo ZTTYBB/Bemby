@@ -18,7 +18,7 @@ import express from "express";
 import http from "http";
 import { AddressInfo } from "net";
 import webviewProxyRouter from "../routes/webviewProxy";
-import { issueWebviewTicket } from "../tg/webviewTickets";
+import { issueWebviewTicket, webviewProxyUrl } from "../tg/webviewTickets";
 
 let upstream: http.Server;
 let upstreamUrl = "";
@@ -77,15 +77,18 @@ afterAll(async () => {
 });
 
 function proxied(ticketId: string, target: string): string {
-  return `${proxyUrl}/api/webview/proxy?t=${encodeURIComponent(ticketId)}&url=${encodeURIComponent(target)}`;
+  return `${proxyUrl}${webviewProxyUrl(ticketId, target)}`;
+}
+
+/** The path the page's own resources are rewritten to. */
+function viaTicket(ticketId: string, target: string): string {
+  return webviewProxyUrl(ticketId, target);
 }
 
 describe("the ticket is the whole credential", () => {
   it("refuses a request with no ticket, and one with a made-up ticket", async () => {
-    const bare = await fetch(
-      `${proxyUrl}/api/webview/proxy?url=${encodeURIComponent(upstreamUrl)}`,
-    );
-    expect(bare.status).toBe(401);
+    const bare = await fetch(`${proxyUrl}/api/webview/r/`);
+    expect(bare.status).toBe(400);
     const forged = await fetch(proxied("not-a-real-ticket", upstreamUrl));
     expect(forged.status).toBe(401);
   });
@@ -120,14 +123,11 @@ describe("what reaches the page", () => {
     const html = await fetch(proxied(ticket.id, `${upstreamUrl}/app`)).then((r) => r.text());
     expect(html).not.toMatch(/<base\b/i);
     expect(html).not.toMatch(/http-equiv/i);
-    expect(html).toContain(
-      `/api/webview/proxy?t=${encodeURIComponent(ticket.id)}&url=${encodeURIComponent(`${upstreamUrl}/assets/app.js`)}`,
-    );
-    expect(html).toContain(encodeURIComponent(`${upstreamUrl}/assets/app.css`));
+    expect(html).toContain(viaTicket(ticket.id, `${upstreamUrl}/assets/app.js`));
+    expect(html).toContain(viaTicket(ticket.id, `${upstreamUrl}/assets/app.css`));
     // A module fetched same-origin must not still claim to be cross-origin
     expect(html).not.toMatch(/crossorigin/i);
-    // Images load straight from the site, so they only need the missing base filled in
-    expect(html).toContain(`src="${upstreamUrl}/logo.png"`);
+    expect(html).toContain(viaTicket(ticket.id, `${upstreamUrl}/logo.png`));
   });
 
   it("injects the runtime shim ahead of the page's own scripts", async () => {
@@ -136,7 +136,7 @@ describe("what reaches the page", () => {
     expect(html).toContain("TelegramWebviewProxy");
     expect(html).toContain("sessionStorage");
     expect(html.indexOf("window.fetch =")).toBeLessThan(
-      html.indexOf(encodeURIComponent(`${upstreamUrl}/assets/app.js`)),
+      html.indexOf(viaTicket(ticket.id, `${upstreamUrl}/assets/app.js`)),
     );
     // The shim is assembled as a template, where a slip is a syntax error the browser would
     // report and nothing else would. new Function parses without running it.
@@ -149,7 +149,109 @@ describe("what reaches the page", () => {
     const ticket = issueWebviewTicket(`${upstreamUrl}/page`, "page");
     const html = await fetch(proxied(ticket.id, `${upstreamUrl}/page`)).then((r) => r.text());
     expect(html).not.toContain("TelegramWebviewProxy");
-    expect(html).toContain(encodeURIComponent(`${upstreamUrl}/next`));
+    expect(html).toContain(viaTicket(ticket.id, `${upstreamUrl}/next`));
+  });
+});
+
+// The shim decides where every runtime request goes, and it only runs in a browser. Rather
+// than trust it by reading, the served script is executed here against a stub of the handful
+// of things it touches, and asked where it would send each kind of URL.
+describe("the runtime shim", () => {
+  async function runShim(ticketId: string, pageUrl: string) {
+    const html = await fetch(proxied(ticketId, pageUrl)).then((r) => r.text());
+    const body = /<script>\(function \(\) \{([\s\S]*?)\}\)\(\);<\/script>/.exec(html)?.[1];
+    expect(body).toBeTruthy();
+
+    const here = "http://bemby.local";
+    const baseURI = `${here}${webviewProxyUrl(ticketId, pageUrl)}`;
+    const routed: string[] = [];
+
+    class FakeLink {
+      _href = "";
+      set href(v: string) {
+        this._href = v;
+      }
+      get href(): string {
+        return this._href;
+      }
+    }
+    class FakeElement {
+      attrs: Record<string, string> = {};
+      setAttribute(name: string, value: string) {
+        this.attrs[name] = value;
+      }
+    }
+
+    const win: any = {
+      location: { origin: here },
+      HTMLLinkElement: FakeLink,
+      fetch: (u: string) => {
+        routed.push(String(u));
+        return Promise.resolve();
+      },
+    };
+    const doc = { baseURI };
+    const xhr: any = { prototype: { open: (_m: string, u: string) => routed.push(String(u)) } };
+
+    new Function(
+      "window",
+      "document",
+      "location",
+      "navigator",
+      "XMLHttpRequest",
+      "Element",
+      "HTMLLinkElement",
+      "HTMLScriptElement",
+      "HTMLImageElement",
+      body!,
+    )(win, doc, win.location, {}, xhr, FakeElement, FakeLink, undefined, undefined);
+
+    return { win, xhr, routed, FakeLink, FakeElement };
+  }
+
+  it("sends a chunk preloaded at runtime to the site, not to Bemby's root", async () => {
+    const ticket = issueWebviewTicket(`${upstreamUrl}/app`, "app");
+    const { FakeLink } = await runShim(ticket.id, `${upstreamUrl}/app`);
+    // What a bundle's preload helper does: build a <link> and give it an absolute path
+    const link: any = new FakeLink();
+    link.href = "/assets/chunk-abc.js";
+    expect(link._href).toBe(webviewProxyUrl(ticket.id, `${upstreamUrl}/assets/chunk-abc.js`));
+  });
+
+  it("routes an attribute the same way, and leaves an already-proxied one alone", async () => {
+    const ticket = issueWebviewTicket(`${upstreamUrl}/app`, "app");
+    const { FakeElement } = await runShim(ticket.id, `${upstreamUrl}/app`);
+    const el: any = new FakeElement();
+    el.setAttribute("src", "/assets/img.png");
+    expect(el.attrs.src).toBe(webviewProxyUrl(ticket.id, `${upstreamUrl}/assets/img.png`));
+
+    const already = webviewProxyUrl(ticket.id, `${upstreamUrl}/assets/img.png`);
+    el.setAttribute("src", already);
+    expect(el.attrs.src).toBe(already);
+  });
+
+  it("routes the app's own API calls and lets a third party's go direct", async () => {
+    const ticket = issueWebviewTicket(`${upstreamUrl}/app`, "app");
+    const { win, xhr, routed } = await runShim(ticket.id, `${upstreamUrl}/app`);
+
+    await win.fetch("/api/v1/users/me");
+    expect(routed.pop()).toBe(webviewProxyUrl(ticket.id, `${upstreamUrl}/api/v1/users/me`));
+
+    xhr.prototype.open("GET", `${upstreamUrl}/api/v1/orders`);
+    expect(routed.pop()).toBe(webviewProxyUrl(ticket.id, `${upstreamUrl}/api/v1/orders`));
+
+    // A ticket does not cover another party, so proxying it would only earn a 403
+    await win.fetch("https://telegram.org/js/telegram-web-app.js");
+    expect(routed.pop()).toBe("https://telegram.org/js/telegram-web-app.js");
+  });
+
+  it("stands in for storage, which throws outright in an opaque origin", async () => {
+    const ticket = issueWebviewTicket(`${upstreamUrl}/app`, "app");
+    const { win } = await runShim(ticket.id, `${upstreamUrl}/app`);
+    win.localStorage.setItem("token", "abc");
+    expect(win.localStorage.getItem("token")).toBe("abc");
+    expect(win.localStorage.length).toBe(1);
+    expect(win.sessionStorage.getItem("missing")).toBeNull();
   });
 });
 
@@ -177,7 +279,7 @@ describe("what reaches the site", () => {
   });
 
   it("answers a preflight itself, so an opaque origin is not turned away", async () => {
-    const resp = await fetch(`${proxyUrl}/api/webview/proxy`, {
+    const resp = await fetch(`${proxyUrl}/api/webview/r/x/https/example.com/`, {
       method: "OPTIONS",
       headers: { "access-control-request-headers": "content-type" },
     });

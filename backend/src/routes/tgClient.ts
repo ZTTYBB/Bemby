@@ -1,6 +1,12 @@
 import { Router, raw } from "express";
 import { assertPublicUrl, isFrameable } from "../tg/safeFetch";
-import { issueWebviewTicket, type WebviewMode } from "../tg/webviewTickets";
+import {
+  issueWebviewTicket,
+  webviewClaimUrl,
+  webviewProxyUrl,
+  webviewPublicOrigin,
+  type WebviewMode,
+} from "../tg/webviewTickets";
 import {
   getLiveClient,
   loadDialogs,
@@ -96,24 +102,21 @@ router.post("/webview/ticket", (req, res) => {
   }
   try {
     const ticket = issueWebviewTicket(url, mode === "app" ? "app" : "page");
-    // The fragment stays on the address the browser holds -- a Mini App reads the account it
-    // is signed for from `#tgWebAppData`, and a fragment is never sent to a server anyway
-    const [target, fragment] = splitFragment(url);
+    // A viewer origin serves the page at its own root, which a Mini App needs to route itself,
+    // and being a separate origin the frame may hold it with `allow-same-origin`. Without one
+    // configured the page still loads under a path prefix here, which suits a plain web page.
+    const viewerOrigin = webviewPublicOrigin();
     res.json({
-      proxyUrl:
-        `/api/webview/proxy?t=${encodeURIComponent(ticket.id)}` +
-        `&url=${encodeURIComponent(target)}${fragment ? `#${fragment}` : ""}`,
+      proxyUrl: viewerOrigin
+        ? webviewClaimUrl(ticket.id, url, viewerOrigin)
+        : webviewProxyUrl(ticket.id, url),
+      isolated: Boolean(viewerOrigin),
       expiresAt: ticket.expiresAt,
     });
   } catch (err: any) {
     res.status(400).json({ error: err?.message ?? "url not allowed" });
   }
 });
-
-function splitFragment(url: string): [string, string] {
-  const at = url.indexOf("#");
-  return at === -1 ? [url, ""] : [url.slice(0, at), url.slice(at + 1)];
-}
 
 // GET /:accountId/folders
 router.get("/:accountId/folders", async (req, res) => {

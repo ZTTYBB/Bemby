@@ -217,14 +217,16 @@
                 <i class="fa-solid fa-shield-halved"></i>
                 {{ t("tgc.openLink.proxiedNote") }}
               </div>
-              <!-- Proxied pages are served from Bemby's own origin, so they
-                   must NOT get allow-same-origin -- it would let arbitrary
-                   site scripts reach Bemby's storage and auth token -->
+              <!-- A proxied page served from Bemby's own origin must NOT get
+                   allow-same-origin: it would let site scripts reach Bemby's
+                   storage and auth token. One on the viewer origin is a different
+                   origin already, so it can have a real origin of its own --
+                   which is what gives it working storage, cookies and crypto -->
               <iframe
                 :src="webViewPanel.url"
                 class="tgc-webview-frame"
                 :sandbox="
-                  webViewPanel.proxied
+                  webViewPanel.proxied && !webViewPanel.isolated
                     ? 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox'
                     : 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox'
                 "
@@ -1877,6 +1879,8 @@ const webViewPanel = ref<{
   url: string;
   title: string;
   proxied?: boolean;
+  /** Served from the viewer origin, so a real origin of its own is safe to grant. */
+  isolated?: boolean;
 } | null>(null);
 // Chooser for non-Telegram links: Bemby viewer or external browser
 const linkChooserUrl = ref<string | null>(null);
@@ -2936,8 +2940,8 @@ async function openMiniApp(
     // Most apps now refuse to be framed by anything but Telegram, so the panel shows a
     // proxied copy: same page, served from here with those headers dropped, sandboxed into
     // an opaque origin and reached with a ticket that is good for that site alone.
-    const { proxyUrl } = await tgClientApi.webviewTicket(webAppUrl, "app");
-    webViewPanel.value = { url: proxyUrl, title, proxied: true };
+    const { proxyUrl, isolated } = await tgClientApi.webviewTicket(webAppUrl, "app");
+    webViewPanel.value = { url: proxyUrl, title, proxied: true, isolated };
   } catch {
     if (!window.open(url, "_blank", "noopener")) askOpenLink(url);
   }
@@ -2972,8 +2976,8 @@ async function openLinkInBemby() {
   // given. That address carries a ticket good only for this one site -- never the session
   // token, which would hand the page the whole API.
   try {
-    const { proxyUrl } = await tgClientApi.webviewTicket(url, "page");
-    webViewPanel.value = { url: proxyUrl, title, proxied: true };
+    const { proxyUrl, isolated } = await tgClientApi.webviewTicket(url, "page");
+    webViewPanel.value = { url: proxyUrl, title, proxied: true, isolated };
   } catch {
     if (!window.open(url, "_blank", "noopener")) askOpenLink(url);
   }

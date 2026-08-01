@@ -64,6 +64,82 @@ export function resolveWebviewTicket(id: string | undefined): WebviewTicket | un
   return ticket;
 }
 
+/**
+ * A second address for this same server, e.g. `http://ports2.example.com:53333` -- another
+ * hostname pointing at the same host and port is enough, no extra port or certificate.
+ *
+ * Why it is needed: a Mini App reads `location.pathname` to route itself, so it has to own `/`
+ * on whatever origin serves it, and Bemby's own panel already owns `/` on its origin. Served
+ * under a path prefix instead, the app's router matches nothing and it renders an empty page.
+ * `window.location` cannot be shimmed, so a separate origin is the only way.
+ *
+ * Keeping it on the same registrable domain matters twice over: the ticket cookie is then
+ * same-site, so it needs no `Secure` and works over plain http; and the origin is still
+ * distinct, so the page cannot reach the panel's storage where the session token lives.
+ */
+export function webviewPublicOrigin(): string | undefined {
+  const raw = process.env.WEBVIEW_PUBLIC_ORIGIN?.trim();
+  if (!raw) return undefined;
+  try {
+    const parsed = new URL(raw);
+    if (!/^https?:$/i.test(parsed.protocol)) throw new Error("scheme");
+    return parsed.origin;
+  } catch {
+    console.warn(`[webview] ignoring WEBVIEW_PUBLIC_ORIGIN: "${raw}" is not a valid origin`);
+    return undefined;
+  }
+}
+
+/** Whether a request's Host names the viewer origin, so it is the app that should answer. */
+export function isWebviewHost(host: string | undefined, publicOrigin: string): boolean {
+  if (!host) return false;
+  const want = new URL(publicOrigin);
+  const [name] = host.toLowerCase().split(":");
+  return name === want.hostname.toLowerCase();
+}
+
+/** The cookie the claim step leaves behind; HttpOnly, so the page cannot read its own ticket. */
+export const WEBVIEW_COOKIE = "bemby_webview";
+
+/** Path that trades the ticket in the address for the cookie, then steps out of the way. */
+export const WEBVIEW_CLAIM_PATH = "/__bemby_webview_claim";
+
+/**
+ * The address the viewer loads: the claim path on the viewer origin, carrying the ticket once
+ * and the app's own path to land on. The fragment rides along untouched -- a browser keeps it
+ * across a redirect, and never sends it to a server, which is where a Mini App's signed
+ * account data lives.
+ */
+export function webviewClaimUrl(ticketId: string, url: string, publicOrigin: string): string {
+  const target = new URL(url);
+  const fragment = target.hash;
+  const landing = `${target.pathname}${target.search}`;
+  return (
+    `${publicOrigin}${WEBVIEW_CLAIM_PATH}?t=${encodeURIComponent(ticketId)}` +
+    `&to=${encodeURIComponent(landing)}${fragment}`
+  );
+}
+
+/**
+ * Where the proxy serves a ticket's pages when no viewer origin is configured. Shaped as a
+ * path so the page's own relative URLs and module imports resolve through it, which a query
+ * string cannot stand in for. A Mini App needs the origin above; this still suits a plain page.
+ */
+export function webviewProxyPath(ticketId: string): string {
+  return `/api/webview/r/${encodeURIComponent(ticketId)}`;
+}
+
+/** Turns an address into the one the viewer loads, keeping the fragment on the browser side. */
+export function webviewProxyUrl(ticketId: string, url: string): string {
+  const target = new URL(url);
+  const fragment = target.hash; // never sent to a server; a Mini App reads its account from it
+  target.hash = "";
+  return (
+    `${webviewProxyPath(ticketId)}/${target.protocol.replace(":", "")}/${target.host}` +
+    `${target.pathname}${target.search}${fragment}`
+  );
+}
+
 /** The site's own domain, as far as a host comparison needs it. */
 function baseDomain(host: string): string {
   const labels = host.split(".");
