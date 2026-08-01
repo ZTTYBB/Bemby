@@ -124,18 +124,57 @@
           </p>
           <div v-if="cfInstallMsg" class="success-msg">{{ cfInstallMsg }}</div>
           <div v-if="cfInstallError" class="error-msg">{{ cfInstallError }}</div>
-          <p style="font-size: 12px; margin: 0 0 12px">
+          <p style="font-size: 12px; margin: 0 0 8px">
             {{ t("settings.cfSolver.status") }}:
             <strong :style="{ color: cfChromiumInstalled ? '#2e9e5b' : '#c47f17' }">
               {{ cfChromiumInstalled ? t("settings.cfSolver.stateInstalled") : t("settings.cfSolver.stateNotInstalled") }}
             </strong>
-            <span v-if="cfChromiumVersion" style="color: #888"> — {{ cfChromiumVersion }}</span>
-            <span v-if="cfChromiumTier" style="color: #888">
-              ({{ cfChromiumTier === "keyed" ? t("settings.cfSolver.tierKeyed") : t("settings.cfSolver.tierFree") }})
-            </span>
+            <!-- Only when the build list is unavailable (an older backend): otherwise every
+                 build is listed below, and repeating the preferred one here reads as a
+                 contradiction of the second entry -->
+            <template v-if="!cfBuilds.length">
+              <span v-if="cfChromiumVersion" style="color: #888"> — {{ cfChromiumVersion }}</span>
+              <span v-if="cfChromiumTier" style="color: #888">
+                ({{ cfChromiumTier === "keyed" ? t("settings.cfSolver.tierKeyed") : t("settings.cfSolver.tierFree") }})
+              </span>
+            </template>
           </p>
-          <p v-if="cfChromiumPath" style="font-size: 11px; color: #888; margin: -6px 0 12px; word-break: break-all">
+          <p
+            v-if="!cfBuilds.length && cfChromiumPath"
+            style="font-size: 11px; color: #888; margin: -6px 0 12px; word-break: break-all"
+          >
             {{ cfChromiumPath }}
+          </p>
+          <!-- Both tiers can be installed at once and a job may run on either, so each is
+               listed with which one it is and when it gets used -->
+          <div v-if="cfBuilds.length" style="margin: 0 0 12px">
+            <div v-for="b in cfBuilds" :key="b.path" style="margin-bottom: 6px">
+              <span style="font-size: 12px">
+                <strong>{{
+                  b.tier === "keyed"
+                    ? t("settings.cfSolver.tierKeyed")
+                    : t("settings.cfSolver.tierFree")
+                }}</strong>
+                <span style="color: #888"> — CloakBrowser {{ b.version }}</span>
+                <span
+                  :style="`margin-left:6px;font-size:11px;color:${b.preferred ? '#2e9e5b' : '#888'}`"
+                >
+                  {{
+                    b.preferred
+                      ? t("settings.cfSolver.buildDefault")
+                      : t("settings.cfSolver.buildFallback")
+                  }}
+                </span>
+              </span>
+              <div style="font-size: 11px; color: #aaa; word-break: break-all">{{ b.path }}</div>
+            </div>
+          </div>
+          <p
+            v-if="cfChromiumTier === 'keyed' && !cfFreeInstalled"
+            style="font-size: 12px; margin: -6px 0 12px; color: #c47f17"
+          >
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            {{ t("settings.cfSolver.noFreeFallback") }}
           </p>
           <p v-if="cfKeyedPending" style="font-size: 12px; margin: -6px 0 12px; color: #c47f17">
             <i class="fa-solid fa-triangle-exclamation"></i>
@@ -164,6 +203,15 @@
               {{ cfInstalling ? t("settings.cfSolver.installing") : t("settings.cfSolver.reinstallBtn") }}
             </button>
             <button
+              v-if="!cfFreeInstalled"
+              class="btn btn-ghost"
+              :disabled="cfInstalling || cfTesting"
+              @click="installCfSolver(false, 'free')"
+            >
+              <i class="fa-solid fa-download"></i>
+              {{ cfInstalling ? t("settings.cfSolver.installing") : t("settings.cfSolver.installFreeBtn") }}
+            </button>
+            <button
               v-if="cfChromiumInstalled"
               class="btn btn-ghost"
               :disabled="cfInstalling || cfTesting"
@@ -175,6 +223,38 @@
           </div>
           <div v-if="cfChromiumInstalled" style="font-size: 11px; color: #888; margin-top: 6px">
             {{ t("settings.cfSolver.reinstallHint") }}
+          </div>
+          <div v-if="!cfFreeInstalled" style="font-size: 11px; color: #888; margin-top: 6px">
+            {{ t("settings.cfSolver.installFreeHint") }}
+          </div>
+          <!-- Kept off the row above and styled quietly: it throws away a 200MB download
+               that everything else here depends on, so it should not read as a next step -->
+          <div
+            v-if="cfChromiumInstalled"
+            style="margin-top: 12px; padding-top: 10px; border-top: 1px solid #eee"
+          >
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+              <button
+                class="btn btn-ghost btn-sm cf-uninstall-btn"
+                :disabled="cfInstalling || cfTesting || cfUninstalling || cfStopping"
+                @click="stopCfBrowsers"
+              >
+                <i class="fa-solid fa-hand"></i>
+                {{ cfStopping ? t("settings.cfSolver.stopping") : t("settings.cfSolver.stopBtn") }}
+                <template v-if="cfBrowsersRunning > 0"> ({{ cfBrowsersRunning }})</template>
+              </button>
+              <button
+                class="btn btn-ghost btn-sm cf-uninstall-btn"
+                :disabled="cfInstalling || cfTesting || cfUninstalling || cfStopping"
+                @click="confirmUninstallCf = true"
+              >
+                <i class="fa-solid fa-trash"></i>
+                {{ cfUninstalling ? t("settings.cfSolver.uninstalling") : t("settings.cfSolver.uninstallBtn") }}
+              </button>
+            </div>
+            <div style="font-size: 11px; color: #888; margin-top: 6px">
+              {{ t("settings.cfSolver.stopHint") }} {{ t("settings.cfSolver.uninstallHint") }}
+            </div>
           </div>
           <div v-if="cfTestWarnings.length" class="error-msg" style="margin-top: 8px">
             <div v-for="w in cfTestWarnings" :key="w">• {{ w }}</div>
@@ -1654,6 +1734,24 @@
         </div>
       </div>
     </div>
+
+    <!-- Removing every downloaded build: ~200MB each comes back only by downloading again -->
+    <div v-if="confirmUninstallCf" class="modal-backdrop">
+      <div class="modal" style="width: 420px">
+        <h3 class="modal-title">{{ t("settings.cfSolver.uninstallBtn") }}</h3>
+        <div class="modal-body">
+          <p>{{ t("settings.cfSolver.uninstallConfirm") }}</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" @click="confirmUninstallCf = false">
+            <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+          </button>
+          <button class="btn btn-danger" @click="uninstallCfSolver">
+            <i class="fa-solid fa-trash"></i> {{ t("settings.cfSolver.uninstallBtn") }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1752,6 +1850,9 @@ const cfChromiumVersion = ref("");
 const cfChromiumTier = ref("");
 const cfChromiumPath = ref("");
 const cfKeyedPending = ref(false);
+// Whether the unlicensed build is on disk as well: it is what a launch with no licence
+// seat falls back to, and the keyed build cannot start without one.
+const cfFreeInstalled = ref(false);
 const cfFontsInstalled = ref(false);
 const cfFontsMissing = ref("");
 // The fonts live in the data dir, not the image, so a browser installed by an older
@@ -1826,6 +1927,9 @@ async function refreshCfBuildState() {
     cfChromiumTier.value = fresh.cf_chromium_tier ?? "";
     cfChromiumPath.value = fresh.cf_chromium_path ?? "";
     cfKeyedPending.value = fresh.cf_chromium_keyed_pending === "true";
+    cfFreeInstalled.value = fresh.cf_chromium_free_installed === "true";
+    cfBrowsersRunning.value = Number(fresh.cf_browsers_running ?? 0);
+    cfBuilds.value = parseCfBuilds(fresh.cf_chromium_builds);
     cfChromiumVersion.value = fresh.cf_chromium_version ?? "";
   } catch {
     /* the panel keeps what it has */
@@ -1892,13 +1996,84 @@ function resetCfTuning() {
   cfTuningMsg.value = t("settings.cfTuning.resetHint");
 }
 
-/** `force` downloads the browser again over an existing one, updating it. */
-async function installCfSolver(force = false) {
+const cfUninstalling = ref(false);
+const cfStopping = ref(false);
+const cfBrowsersRunning = ref(0);
+type CfBuild = { tier: "keyed" | "free"; version: string; path: string; preferred: boolean };
+const cfBuilds = ref<CfBuild[]>([]);
+
+/** The installed-build list arrives as JSON; a malformed or absent one just means none. */
+function parseCfBuilds(raw?: string): CfBuild[] {
+  try {
+    const parsed = JSON.parse(raw ?? "[]");
+    return Array.isArray(parsed) ? (parsed as CfBuild[]) : [];
+  } catch {
+    return [];
+  }
+}
+const confirmUninstallCf = ref(false);
+
+/** Closes every open browser. Whatever job was using one fails, which is the point. */
+async function stopCfBrowsers() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfStopping.value = true;
+  try {
+    const res = await settingsApi.stopCfBrowsers();
+    cfInstallMsg.value = t("settings.cfSolver.stopped").replace("{n}", String(res.stopped));
+    await refreshCfBuildState();
+  } catch (e: any) {
+    cfInstallError.value =
+      e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.stopFailed");
+  } finally {
+    cfStopping.value = false;
+  }
+}
+
+/** Deletes every downloaded build. The solver has nothing to launch until one is back. */
+async function uninstallCfSolver() {
+  confirmUninstallCf.value = false;
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfUninstalling.value = true;
+  try {
+    const res = await settingsApi.uninstallCfSolver();
+    if (res.ok) {
+      cfChromiumInstalled.value = false;
+      cfChromiumVersion.value = "";
+      cfChromiumTier.value = "";
+      cfChromiumPath.value = "";
+      cfFreeInstalled.value = false;
+      cfBuilds.value = [];
+      cfTestReport.value = "";
+      cfTestWarnings.value = [];
+      cfTestNotes.value = [];
+      await refreshCfBuildState();
+      cfInstallMsg.value = res.removed?.length
+        ? `${t("settings.cfSolver.uninstalled")} — ${res.removed.join(", ")}`
+        : t("settings.cfSolver.uninstalled");
+    } else {
+      cfInstallError.value = res.message ?? t("settings.cfSolver.uninstallFailed");
+    }
+  } catch (e: any) {
+    cfInstallError.value =
+      e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.uninstallFailed");
+  } finally {
+    cfUninstalling.value = false;
+  }
+}
+
+/**
+ * `force` downloads the browser again over an existing one, updating it. `tier: "free"`
+ * fetches the unlicensed build specifically -- a separate download that sits beside the
+ * keyed one, so a launch that cannot take a licence seat still has something to run.
+ */
+async function installCfSolver(force = false, tier?: "free") {
   cfInstallMsg.value = "";
   cfInstallError.value = "";
   cfInstalling.value = true;
   try {
-    const res = await settingsApi.installCfSolver(force);
+    const res = await settingsApi.installCfSolver(force, tier);
     if (res.ok) {
       cfChromiumInstalled.value = true;
       cfChromiumVersion.value = res.version ?? "";
@@ -1932,23 +2107,59 @@ async function testCfSolver() {
   cfTesting.value = true;
   try {
     const res = await settingsApi.testCfSolver();
-    cfTestWarnings.value = res.warnings ?? [];
-    cfTestNotes.value = res.notes ?? [];
-    cfTestReport.value = JSON.stringify(
-      {
-        ok: res.ok,
-        version: res.version,
-        executable: res.executable,
-        exitCountry: res.exitCountry,
-        ...res.env,
-      },
-      null,
-      2,
+    // Every installed build is tested, so the report and any warnings say which is which.
+    // An older instance answers with a single result; treat that as one build.
+    const builds = res.builds?.length ? res.builds : [res];
+    const name = (b: (typeof builds)[number]) =>
+      b.tier === "free"
+        ? t("settings.cfSolver.tierFree")
+        : b.tier === "keyed"
+          ? t("settings.cfSolver.tierKeyed")
+          : t("settings.cfSolver.testBtn");
+
+    cfTestWarnings.value = builds.flatMap((b) =>
+      (b.warnings ?? []).map((w) => (builds.length > 1 ? `[${name(b)}] ${w}` : w)),
     );
-    if (!res.ok) {
-      cfInstallError.value = res.error || t("settings.cfSolver.testFailed");
+    cfTestNotes.value = builds.flatMap((b) =>
+      (b.notes ?? []).map((n) => (builds.length > 1 ? `[${name(b)}] ${n}` : n)),
+    );
+    cfTestReport.value = builds
+      .map((b) =>
+        JSON.stringify(
+          {
+            build: name(b),
+            ok: b.ok,
+            version: b.version,
+            executable: b.executable,
+            exitCountry: b.exitCountry,
+            ...(b.error ? { error: b.error } : {}),
+            ...b.env,
+          },
+          null,
+          2,
+        ),
+      )
+      .join("\n\n");
+
+    const failed = builds.filter((b) => !b.ok);
+    if (failed.length) {
+      cfInstallError.value = failed
+        .map((b) =>
+          builds.length > 1
+            ? `${name(b)}: ${b.error || t("settings.cfSolver.testFailed")}`
+            : b.error || t("settings.cfSolver.testFailed"),
+        )
+        .join(" | ");
+      // A build that passed is still worth saying so, when another did not
+      const passed = builds.filter((b) => b.ok);
+      if (passed.length) {
+        cfInstallMsg.value = `${t("settings.cfSolver.testPassed")} — ${passed.map(name).join(", ")}`;
+      }
     } else {
-      cfInstallMsg.value = t("settings.cfSolver.testPassed");
+      cfInstallMsg.value =
+        builds.length > 1
+          ? `${t("settings.cfSolver.testPassed")} — ${builds.map(name).join(", ")}`
+          : t("settings.cfSolver.testPassed");
     }
   } catch (e: any) {
     cfInstallError.value = e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.testFailed");
@@ -2296,6 +2507,9 @@ onMounted(async () => {
     cfChromiumInstalled.value = s.cf_chromium_installed === "true";
     cfChromiumVersion.value = s.cf_chromium_version ?? "";
     cfChromiumTier.value = s.cf_chromium_tier ?? "";
+    cfFreeInstalled.value = s.cf_chromium_free_installed === "true";
+    cfBrowsersRunning.value = Number(s.cf_browsers_running ?? 0);
+    cfBuilds.value = parseCfBuilds(s.cf_chromium_builds);
     cfChromiumPath.value = s.cf_chromium_path ?? "";
     cfKeyedPending.value = s.cf_chromium_keyed_pending === "true";
     cfFontsInstalled.value = s.cf_fonts_installed === "true";
@@ -3166,10 +3380,16 @@ async function saveCredentials() {
   font-size: 12px;
   height: auto;
 }
-.btn-danger {
+/*
+ * Red lettering for a destructive action sitting on a light button. Kept to the ghost
+ * pairing deliberately: as a bare `.btn-danger` this also hit the solid red variant, whose
+ * own colour is white -- red text on a red fill, which is why the provider delete icon and
+ * the uninstall button came out as blank red blocks.
+ */
+.btn-ghost.btn-danger {
   color: #ef4444;
 }
-.btn-danger:hover {
+.btn-ghost.btn-danger:hover {
   color: #dc2626;
 }
 
@@ -3215,5 +3435,19 @@ async function saveCredentials() {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+/* Destructive, but not a call to action: red lettering rather than a red slab, so it
+   reads as available without competing with the download and test buttons above it. */
+.cf-uninstall-btn {
+  color: #c0392b;
+  background: transparent;
+  border: 1px solid #f0d0cd;
+}
+
+.cf-uninstall-btn:not(:disabled):hover {
+  background: #fdf1f0;
+  border-color: #e0a9a4;
+  opacity: 1;
 }
 </style>

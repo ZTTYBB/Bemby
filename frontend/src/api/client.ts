@@ -508,6 +508,8 @@ export type CustomStepLog = {
   cfMiniAppSigned?: boolean;
   cfMiniAppAction?: string;
   cfProxy?: string;
+  /** Which browser build ran the step: the licensed one, or the free fallback. */
+  cfBuild?: "keyed" | "free";
   cfAttempts?: number;
   cfPageTitle?: string;
   cfNavError?: string;
@@ -1083,6 +1085,12 @@ export type Settings = {
   cf_chromium_path?: string;
   /** Server-computed: "true" when a key is stored but its build is not downloaded yet. */
   cf_chromium_keyed_pending?: string;
+  /** Server-computed: "true" when the unlicensed build is on disk to fall back on. */
+  cf_chromium_free_installed?: string;
+  /** Server-computed: how many solver browsers are open right now. */
+  cf_browsers_running?: string;
+  /** Server-computed JSON: every installed build, with its tier, version and path. */
+  cf_chromium_builds?: string;
   /** Server-computed: "true" when the CJK/emoji faces are in the data dir. */
   cf_fonts_installed?: string;
   /** Server-computed: comma-separated faces still to download. */
@@ -1100,6 +1108,20 @@ export type Settings = {
   proxy_providers_count?: string;
 };
 
+export type CfBrowserTest = {
+  ok: boolean;
+  /** Which build this result is for. */
+  tier?: "keyed" | "free";
+  executable?: string;
+  version?: string;
+  renderedText?: string;
+  error?: string;
+  env?: Record<string, unknown>;
+  warnings?: string[];
+  notes?: string[];
+  exitCountry?: string;
+};
+
 export const settingsApi = {
   get: () => api.get<Settings>("/settings").then((r) => r.data),
   update: (data: Partial<Settings>) =>
@@ -1109,7 +1131,7 @@ export const settingsApi = {
       .post<{ ok: boolean; error?: string }>("/settings/test-proxy", { url })
       .then((r) => r.data),
   /** `force` downloads the browser again over an existing one, i.e. updates it. */
-  installCfSolver: (force = false) =>
+  installCfSolver: (force = false, tier?: "free") =>
     api
       .post<{
         ok: boolean;
@@ -1118,13 +1140,28 @@ export const settingsApi = {
         output?: string;
         message?: string;
         fontsInstalled?: boolean;
-      }>("/settings/cf-solver/install", { force })
+      }>("/settings/cf-solver/install", { force, ...(tier ? { tier } : {}) })
       .then((r) => r.data),
-  /** Launches the installed browser and reports what the page sees of itself. */
+  /** Closes every solver browser that is open, failing the jobs holding them. */
+  stopCfBrowsers: () =>
+    api
+      .post<{ ok: boolean; stopped: number }>("/settings/cf-solver/stop")
+      .then((r) => r.data),
+  /** Deletes every downloaded browser build, reclaiming the space in the data dir. */
+  uninstallCfSolver: () =>
+    api
+      .post<{ ok: boolean; removed?: string[]; message?: string }>(
+        "/settings/cf-solver/uninstall",
+      )
+      .then((r) => r.data),
+  /** Launches every installed build and reports what each page sees of itself. */
   testCfSolver: () =>
     api
       .post<{
         ok: boolean;
+        /** One entry per installed build, each tested in turn. */
+        builds?: CfBrowserTest[];
+        tier?: "keyed" | "free";
         executable?: string;
         version?: string;
         renderedText?: string;

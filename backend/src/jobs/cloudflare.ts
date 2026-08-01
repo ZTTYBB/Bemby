@@ -133,6 +133,8 @@ export type CheckinPageResult = {
    * turning every exit away.
    */
   browserFailed?: boolean;
+  /** Which browser build ran: the licensed one, or the unlicensed fallback. */
+  browserTier?: "keyed" | "free";
   /** Why the attempt is not ok, in plain words, for the job log. */
   reason?: string;
   /** Navigation/renderer trouble seen while loading (page crash, failed request). */
@@ -1988,8 +1990,13 @@ export function envReview(env: BrowserEnvReport): { warnings: string[]; notes: s
  * server where the browser is an on-demand install and nothing else can be seen.
  * `env` reports what the page sees of itself, for comparing one install against another.
  */
-export async function testBrowser(proxyUrl?: string): Promise<{
+export async function testBrowser(
+  proxyUrl?: string,
+  tier?: "keyed" | "free",
+): Promise<{
   ok: boolean;
+  /** Which build was exercised, when the caller asked for one in particular. */
+  tier?: "keyed" | "free";
   executable?: string;
   version?: string;
   renderedText?: string;
@@ -2003,12 +2010,20 @@ export async function testBrowser(proxyUrl?: string): Promise<{
   /** Country the exit came out in, which also proves TLS and the proxy work. */
   exitCountry?: string;
 }> {
-  const executable = chromiumExecutable();
-  if (!executable) return { ok: false, error: "Chromium is not installed" };
+  const executable = chromiumExecutable(tier);
+  if (!executable) {
+    return {
+      ok: false,
+      tier,
+      error: tier
+        ? `The ${tier === "keyed" ? "keyed" : "free"} build is not installed`
+        : "Chromium is not installed",
+    };
+  }
 
   let launched: LaunchedBrowser | undefined;
   try {
-    launched = await launchCfBrowser(proxyUrl);
+    launched = await launchCfBrowser(proxyUrl, tier ? { tier } : {});
     const page = launched.page;
     const version = launched.context.browser()?.version() ?? chromiumVersion();
     await page.setContent("<h1 id=probe>bemby browser ok</h1>").catch(() => {});
@@ -2034,6 +2049,7 @@ export async function testBrowser(proxyUrl?: string): Promise<{
     const review = envReview(env);
     return {
       ok: typeof renderedText === "string" && renderedText.includes("bemby browser ok"),
+      tier: tier ?? launched.tier,
       executable,
       version,
       env,
@@ -2048,6 +2064,7 @@ export async function testBrowser(proxyUrl?: string): Promise<{
     const diagnosis = launchFailureReason(message);
     return {
       ok: false,
+      tier,
       executable,
       // Chromium's whole stderr rides along on a launch failure; keep enough to work with
       error: message.length > 1200 ? `${message.slice(0, 1200)}…` : message,
@@ -2115,6 +2132,7 @@ async function attemptLoad(
   // Tells a browser that never started from one that started and then hit trouble: only
   // the latter says anything about the exit.
   let launchOk = false;
+  let browserTier: "keyed" | "free" | undefined;
   // Renderer trouble the page reports on its own: a crashed tab or a main request
   // that never arrived both leave a blank page that otherwise looks challenge-free.
   const troubles: string[] = [];
@@ -2129,6 +2147,7 @@ async function attemptLoad(
     // anything on the target is loaded
     launched = await launchAlignedBrowser(proxyUrl, budgetDeadline);
     launchOk = true;
+    browserTier = launched.tier;
     const page = launched.page;
 
     page.on("crash", () => note("page crashed"));
@@ -2353,6 +2372,7 @@ async function attemptLoad(
       // elsewhere; a control that is not on the page is not. A sub-step that failed once
       // the challenge was already cleared is the page's doing, so every other exit would
       // meet it alike -- rotating the pool there only spends the budget.
+      browserTier,
       exitRelated: solved && webFailure ? false : !!navError || (challenged && !verdict.ok) || !text.trim(),
       screenshot: opts.screenshot ? await screenshotOf(page) : undefined,
     };
@@ -2383,6 +2403,7 @@ async function attemptLoad(
       finalHost,
       reason: msg,
       navError: msg,
+      browserTier,
       exitRelated: true,
     };
   } finally {

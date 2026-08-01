@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  constants as fsConstants,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import os from "node:os";
@@ -21,9 +31,13 @@ import { cfExitGeo, type CfExitGeo } from "../tg/proxyProviders";
 // downloaded on demand into the data dir, which is a volume, so it survives a restart and
 // an upgrade.
 
-/** Data-dir subfolder CloakBrowser caches its Chromium builds in. */
+/**
+ * Where CloakBrowser caches its Chromium builds: a data-dir subfolder, unless the operator
+ * has pointed the library somewhere else. Honouring the override here too keeps what the
+ * settings page reports as installed in step with what the library actually downloads.
+ */
 export function cloakCacheDir(): string {
-  return path.join(dataDir(), "cloakbrowser");
+  return process.env.CLOAKBROWSER_CACHE_DIR || path.join(dataDir(), "cloakbrowser");
 }
 
 /** Data-dir subfolder holding one browser profile per exit. */
@@ -226,23 +240,71 @@ export function chromiumPath(): string | undefined {
 }
 
 /**
+ * Every downloaded build, for the settings page. Both tiers can be on disk at once -- the
+ * keyed one for normal runs, the unlicensed one for when no seat is free -- and a job may
+ * use either, so reporting only the preferred one hides half of what is installed.
+ */
+export function installedCfBuilds(): Array<{
+  tier: BuildTier;
+  version: string;
+  path: string;
+  /** The build a run takes when a licence seat is available, i.e. the usual one. */
+  preferred: boolean;
+}> {
+  const builds = cachedBuilds();
+  const preferred = resolvedBuild()?.exe;
+  return builds.map((b) => ({
+    tier: b.tier,
+    version: b.version,
+    path: b.exe,
+    preferred: b.exe === preferred,
+  }));
+}
+
+/**
  * Downloads the stealth Chromium into the data dir. Long-running (~200MB) but needs no
  * root: it writes to the data volume as the app's own user.
  *
  * `force` clears the cache first, which is how the browser is moved to a newer build.
  */
-export async function installCfChromium(force = false): Promise<{ ok: boolean; output: string }> {
+/**
+ * Downloads a build into the data dir.
+ *
+ * `tier` names which one: "keyed" (or unset) follows the configured licence keys, "free"
+ * fetches the unlicensed build regardless of them. Having the free build alongside the
+ * keyed one is what lets a launch that cannot take a licence seat still run -- the keyed
+ * binary refuses to start without one, so with only that on disk there is no fallback.
+ */
+export async function installCfChromium(
+  force = false,
+  tier?: BuildTier,
+): Promise<{ ok: boolean; output: string }> {
   applyCloakEnv();
   const lines: string[] = [];
+  const cacheDir = process.env.CLOAKBROWSER_CACHE_DIR || cloakCacheDir();
   try {
-    mkdirSync(cloakCacheDir(), { recursive: true });
+    mkdirSync(cacheDir, { recursive: true });
   } catch (err: any) {
-    return { ok: false, output: `Cannot write to ${cloakCacheDir()}: ${err?.message ?? err}` };
+    return { ok: false, output: `Cannot write to ${cacheDir}: ${err?.message ?? err}` };
+  }
+  // Checked before the download rather than during it: the library streams straight to a
+  // file, and a write that fails part-way surfaces as an unhandled stream error, which
+  // takes the whole backend down rather than failing this request.
+  try {
+    accessSync(cacheDir, fsConstants.W_OK);
+  } catch {
+    return {
+      ok: false,
+      output:
+        `Cannot write to ${cacheDir}. The browser is downloaded into the data dir, so that ` +
+        "directory has to be writable by the user this app runs as -- check its ownership.",
+    };
   }
 
   // Any configured key will do here: which build is downloaded is the same question for
-  // all of them, and this is not a browser session, so it takes no seat.
-  const licenseKey = anyCfLicenseKey();
+  // all of them, and this is not a browser session, so it takes no seat. Asking for the
+  // free build deliberately ignores them -- that is the point of the request.
+  const licenseKey = tier === "free" ? undefined : anyCfLicenseKey();
   try {
     const { ensureBinary, binaryInfo } = await cloak();
     // Only the build being replaced is cleared, not the whole cache: the other tier is
@@ -254,10 +316,16 @@ export async function installCfChromium(force = false): Promise<{ ok: boolean; o
     const exe = await ensureBinary(licenseKey);
     const info = binaryInfo();
     lines.push(`CloakBrowser ${info.version} (${info.tier} build) at ${exe}`);
-    if (!licenseKey) {
+    if (!licenseKey && tier !== "free") {
       lines.push(
         "No licence key configured, so this is the older free build. Add a free key in " +
           "Settings for the current one, which passes more challenges.",
+      );
+    }
+    if (tier === "free") {
+      lines.push(
+        "This is the unlicensed build, kept alongside the keyed one. A run that cannot " +
+          "take a licence seat falls back to it instead of failing.",
       );
     }
   } catch (err: any) {
@@ -296,6 +364,33 @@ function removeBuild(tier: BuildTier): string | undefined {
  * adds up fast. Both tiers are kept because which one launches depends on whether a
  * licence key is free at the time.
  */
+/**
+ * Deletes every downloaded build, freeing the ~200MB each takes in the data dir. The
+ * solver has nothing to launch afterwards, so this is the counterpart of the download
+ * button rather than something a job ever does.
+ */
+export function removeAllCfBuilds(): { removed: string[]; error?: string } {
+  if (liveBrowsers.size > 0) {
+    return {
+      removed: [],
+      error:
+        `${liveBrowsers.size} browser(s) are still running. Wait for those jobs to finish, ` +
+        "or stop the browsers first, then try again.",
+    };
+  }
+  const removed: string[] = [];
+  for (const build of cachedBuilds()) {
+    const dir = path.dirname(build.exe);
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      removed.push(path.basename(dir));
+    } catch (err: any) {
+      return { removed, error: `Could not remove ${dir}: ${err?.message ?? err}` };
+    }
+  }
+  return { removed };
+}
+
 function pruneOldBuilds(): string | undefined {
   const keep = new Set(
     (["keyed", "free"] as BuildTier[])
@@ -678,6 +773,8 @@ export type LaunchedBrowser = {
   page: Page;
   /** Stable id of the exit this browser goes out through. */
   key: string;
+  /** Which build is running: the licensed one, or the unlicensed fallback. */
+  tier: BuildTier;
   /** What is known about where it comes out, if anything yet. */
   geo?: CfExitGeo;
   /** Closes the browser and releases the profile, bridge and everything else. */
@@ -694,7 +791,43 @@ export type LaunchedBrowser = {
 /** Ceiling on a browser shutdown, so a wedged one cannot hold its licence seat. */
 const CLOSE_TIMEOUT_MS = 10_000;
 
-export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowser> {
+/** Stands in for a lease where none is taken, so the launch path stays one shape. */
+const NO_LEASE: { key?: string; release: () => void } = { release: () => {} };
+
+// Browsers currently up. A free-build launch takes no licence seat, so seat usage does not
+// answer "is anything running" -- and removing a binary, or stopping the lot by hand, both
+// need to know. Held as the browsers themselves so they can be closed on request.
+const liveBrowsers = new Set<{ close: () => Promise<void> }>();
+
+/** How many solver browsers are open right now. */
+export function cfBrowsersRunning(): number {
+  return liveBrowsers.size;
+}
+
+/**
+ * Closes every open solver browser. The jobs holding them fail as their pages go, which is
+ * the point: this is the way out when a run has wedged and is sitting on a licence seat,
+ * a profile, or a proxy that nothing else can have until it lets go.
+ */
+export async function stopAllCfBrowsers(): Promise<{ stopped: number }> {
+  const open = [...liveBrowsers];
+  // close() releases the seat, profile and proxy, and is bounded, so one wedged browser
+  // cannot hold up the rest
+  await Promise.all(open.map((b) => b.close().catch(() => {})));
+  return { stopped: open.length };
+}
+
+export async function launchCfBrowser(
+  proxyUrl?: string,
+  opts: {
+    /**
+     * Force a build rather than letting seat availability decide. Only the settings test
+     * uses this, so each installed build can be exercised in turn -- a job always wants
+     * the best one it can get.
+     */
+    tier?: BuildTier;
+  } = {},
+): Promise<LaunchedBrowser> {
   const tune = cfTuning();
   if (!isChromiumInstalled()) {
     throw new Error(
@@ -714,25 +847,45 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
   const geo = cfExitGeo(key);
   const profile = claimProfile(key);
   const proxy = await resolveProxy(proxyUrl);
-  // One seat per key, held for as long as this browser lives. When they are all out,
-  // wait for one: a free key is a single concurrent session, so the alternative is
-  // launching the keyed build unlicensed, which it refuses. The wait is bounded by the
-  // same ceiling one action gets, so it cannot outlast the job that is waiting.
-  let lease = await leaseCfLicenseKey();
-  if (!lease.key && cfLicenseUsage().total) {
-    console.log("[cfBrowser] every licence seat is taken; waiting for one to free up");
-    lease = await leaseCfLicenseKey(tune.budgetMs);
-    if (!lease.key) {
-      console.warn(
-        "[cfBrowser] no licence seat came free, so this browser launches without a key. " +
-          "Add another key in Settings to run more solvers at once.",
-      );
+  // The keyed build first, on a seat of its own: one licence key is one concurrent
+  // session, so a seat is held for as long as this browser lives.
+  //
+  // When every seat is out, what to do next depends on what is on disk. With the
+  // unlicensed build installed, run on that straight away -- it needs no session, and
+  // holding the job for a seat that may not come free inside its budget buys nothing over
+  // an older build that starts now. With only the keyed build there, waiting is the only
+  // option, since it refuses to start without a key at all.
+  // A forced free build takes no seat: it needs no licence, and holding one would keep it
+  // from a run that does.
+  let lease = opts.tier === "free" ? NO_LEASE : await leaseCfLicenseKey();
+  if (opts.tier === "keyed" && !lease.key) {
+    proxy.close();
+    profile.release();
+    throw new Error(
+      cfLicenseUsage().total
+        ? "Every licence seat is in use right now, so the keyed build cannot be started for this test."
+        : "No licence key is configured, so there is no keyed build to test.",
+    );
+  }
+  const freeBuild = chromiumExecutable("free");
+  if (!lease.key && opts.tier !== "free" && cfLicenseUsage().total) {
+    if (freeBuild) {
+      console.log("[cfBrowser] every licence seat is taken; running this one on the free build");
+    } else {
+      console.log("[cfBrowser] every licence seat is taken; waiting for one to free up");
+      lease = await leaseCfLicenseKey(tune.budgetMs);
+      if (!lease.key) {
+        console.warn(
+          "[cfBrowser] no licence seat came free, and there is no free build to fall back " +
+            "on. Add another key in Settings, or install the free build alongside it.",
+        );
+      }
     }
   }
 
   // The build that matches whether a key is in hand: a keyed binary declines to run
   // without one, and a free one has no use for it
-  const executablePath = chromiumExecutable(lease.key ? "keyed" : "free");
+  const executablePath = chromiumExecutable(opts.tier ?? (lease.key ? "keyed" : "free"));
   if (!executablePath) {
     proxy.close();
     profile.release();
@@ -792,6 +945,7 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
     );
 
   let context: BrowserContext;
+  let usedTier: BuildTier = lease.key ? "keyed" : "free";
   try {
     context = await open(executablePath, lease.key);
   } catch (err: any) {
@@ -799,7 +953,7 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
     // hold a session -- another instance on the same key, or one the licence service has
     // not finished tearing down. The free build needs no session, so falling back to it
     // gets the job run instead of failing it outright over a seat.
-    const freeExe = lease.key ? chromiumExecutable("free") : undefined;
+    const freeExe = lease.key ? freeBuild : undefined;
     if (!freeExe) {
       proxy.close();
       profile.release();
@@ -814,6 +968,7 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
     lease.release();
     try {
       context = await open(freeExe);
+      usedTier = "free";
     } catch (freeErr) {
       proxy.close();
       profile.release();
@@ -837,10 +992,11 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
     }
     await page.bringToFront().catch(() => {});
 
-    return {
+    const launched: LaunchedBrowser = {
       context,
       page,
       key,
+      tier: usedTier,
       geo,
       close: async () => {
         // Bounded: a wedged renderer can leave close() pending, and everything below it --
@@ -852,8 +1008,11 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
         proxy.close();
         profile.release();
         lease.release();
+        liveBrowsers.delete(launched);
       },
     };
+    liveBrowsers.add(launched);
+    return launched;
   } catch (err) {
     proxy.close();
     profile.release();

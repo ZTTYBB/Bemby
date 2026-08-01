@@ -29,7 +29,17 @@ import {
   maskKey,
   saveCfLicenseKeys,
 } from "../jobs/cfLicense";
-import { checkCfLicenseKey, chromiumPath, installedBuildTier, keyedBuildPending } from "../jobs/cfBrowser";
+import {
+  cfBrowsersRunning,
+  checkCfLicenseKey,
+  chromiumExecutable,
+  chromiumPath,
+  installedBuildTier,
+  installedCfBuilds,
+  keyedBuildPending,
+  removeAllCfBuilds,
+  stopAllCfBrowsers,
+} from "../jobs/cfBrowser";
 import {
   providersForClient,
   saveProviders,
@@ -126,6 +136,13 @@ function getClientSettings(): Record<string, string> {
   result.cf_chromium_tier = installedBuildTier() ?? "";
   result.cf_chromium_path = chromiumPath() ?? "";
   result.cf_chromium_keyed_pending = keyedBuildPending() ? "true" : "false";
+  // Whether the unlicensed build is also on disk. It is what a launch falls back to when
+  // no licence seat is free -- without it, such a launch has nothing that can run.
+  result.cf_chromium_free_installed = chromiumExecutable("free") ? "true" : "false";
+  // Every build on disk, so the panel can list the keyed and free ones side by side
+  result.cf_chromium_builds = JSON.stringify(installedCfBuilds());
+  // How many solver browsers are open right now, so the panel can offer to stop them
+  result.cf_browsers_running = String(cfBrowsersRunning());
   // The CJK/emoji faces are not in the image either; they sit beside the browser in the
   // data dir. Reported separately so a browser that can only draw Latin is visible.
   result.cf_fonts_installed = areCfFontsInstalled() ? "true" : "false";
@@ -205,6 +222,30 @@ router.put("/", (req, res) => {
 let cfInstalling = false;
 router.post("/cf-solver/install", async (req, res) => {
   const force = req.body?.force === true || req.query.force === "1";
+  // "free" asks for the unlicensed build specifically, which is what a launch falls back
+  // to when no licence seat is free. It is a separate download, so an install that already
+  // has the keyed build still has work to do.
+  const tier = req.body?.tier === "free" ? ("free" as const) : undefined;
+  if (tier === "free") {
+    if (cfInstalling) {
+      res.status(409).json({ ok: false, message: "Install already in progress" });
+      return;
+    }
+    cfInstalling = true;
+    try {
+      const browser = await installCfChromium(force, "free");
+      res.json({
+        ok: browser.ok,
+        installed: browser.ok,
+        fontsInstalled: areCfFontsInstalled(),
+        version: browser.ok ? chromiumVersion() : undefined,
+        output: browser.output.slice(-1500),
+      });
+    } finally {
+      cfInstalling = false;
+    }
+    return;
+  }
   // A licence key with no build behind it counts as outstanding: the key is only worth
   // anything once the build it unlocks is on disk.
   if (isChromiumInstalled() && areCfFontsInstalled() && !keyedBuildPending() && !force) {
@@ -279,9 +320,55 @@ router.post("/cf-solver/keys/check", async (_req, res) => {
 // POST /cf-solver/test -- launch the installed browser and check that it renders, so a
 // Mini App step that comes up blank on a server can be told apart from a site problem.
 // `?screenshot=1` includes what the browser drew.
+// POST /cf-solver/stop -- close every solver browser that is open. The jobs holding them
+// fail as their pages go; that is the point, since this is the way out when a run has
+// wedged and is sitting on a licence seat, a profile or a proxy nothing else can have.
+router.post("/cf-solver/stop", async (_req, res) => {
+  const result = await stopAllCfBrowsers();
+  res.json({ ok: true, stopped: result.stopped });
+});
+
+// POST /cf-solver/uninstall -- delete every downloaded browser build, reclaiming the
+// ~200MB each takes in the data dir. Refused while a job still has one open, since the
+// binary would be pulled out from under it.
+router.post("/cf-solver/uninstall", (_req, res) => {
+  if (cfInstalling) {
+    res.status(409).json({ ok: false, message: "Install already in progress" });
+    return;
+  }
+  const result = removeAllCfBuilds();
+  if (result.error) {
+    res.status(409).json({ ok: false, removed: result.removed, message: result.error });
+    return;
+  }
+  // The solver has nothing to launch now, so it stops claiming to be on
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('cf_solver_enabled', 'false')").run();
+  res.json({ ok: true, removed: result.removed });
+});
+
 router.post("/cf-solver/test", async (req, res) => {
-  const result = await testBrowser();
-  res.json(req.query.screenshot ? result : { ...result, screenshot: undefined });
+  // Every build that is installed, in turn. With both on disk a job may run on either --
+  // the keyed one normally, the free one when no licence seat is going -- so testing only
+  // the preferred build leaves the fallback unproven, which is exactly the one that gets
+  // used on a bad day.
+  const tiers = (["keyed", "free"] as const).filter((t) => !!chromiumExecutable(t));
+  const wantShot = !!req.query.screenshot;
+
+  if (!tiers.length) {
+    res.json({ ok: false, error: "Chromium is not installed", builds: [] });
+    return;
+  }
+
+  const builds = [];
+  for (const tier of tiers) {
+    const result = await testBrowser(undefined, tier);
+    builds.push(wantShot ? result : { ...result, screenshot: undefined });
+  }
+
+  // The preferred build's result stays at the top level, so a caller that only knows about
+  // one browser still reads the one a job would normally use.
+  const primary = builds[0];
+  res.json({ ...primary, ok: builds.every((b) => b.ok), builds });
 });
 
 // ── Proxy providers ───────────────────────────────────────────────────────────

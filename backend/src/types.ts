@@ -398,6 +398,12 @@ export type CustomStepLog = {
   cfMiniAppAction?: string;
   /** Proxy whose exit IP the challenge was cleared through. */
   cfProxy?: string;
+  /**
+   * Which browser build ran this step: "keyed" is the licensed build, "free" the
+   * unlicensed fallback used when no licence seat was available. The free build is older
+   * and passes fewer challenges, so a run that quietly fell back is worth seeing.
+   */
+  cfBuild?: "keyed" | "free";
   /** How many exits were tried before the page loaded. */
   cfAttempts?: number;
   /** Title of the page the browser ended up on. */

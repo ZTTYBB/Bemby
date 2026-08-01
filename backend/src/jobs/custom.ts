@@ -85,6 +85,7 @@ async function passCloudflare(
     proxyCandidates: candidates,
   });
   step.cfProxy = cf.proxyLabel;
+  step.cfBuild = cf.browserTier;
   step.cfAttempts = cf.attempts;
   for (const id of cf.refusedProxyIds ?? []) refused.add(id);
   if (!cf.ok) cfNoteFailure(cfRun, cf.finalHost, cf.reason);
@@ -2464,6 +2465,7 @@ export async function runCustom(
                 step.cfPassed = cf.ok;
                 step.cfMiniAppAction = cf.inAppAction;
                 step.cfProxy = cf.proxyLabel;
+                step.cfBuild = cf.browserTier;
                 step.cfAttempts = cf.attempts;
                 step.cfPageTitle = cf.pageTitle;
                 step.cfNavError = cf.navError;
@@ -2579,6 +2581,7 @@ export async function runCustom(
                 step.cfPassed = cf.ok;
                 step.cfMiniAppAction = cf.inAppAction;
                 step.cfProxy = cf.proxyLabel;
+                step.cfBuild = cf.browserTier;
                 step.cfAttempts = cf.attempts;
                 step.cfPageTitle = cf.pageTitle;
                 step.cfNavError = cf.navError;
@@ -2672,6 +2675,7 @@ export async function runCustom(
                 step.cfChallenged = cf.challenged;
                 step.cfPassed = cf.ok;
                 step.cfProxy = cf.proxyLabel;
+                step.cfBuild = cf.browserTier;
                 step.cfAttempts = cf.attempts;
                 step.cfPageTitle = cf.pageTitle;
                 step.cfNavError = cf.navError;

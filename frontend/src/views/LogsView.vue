@@ -654,6 +654,19 @@
                                 : t("logs.cf.none")
                             }}</span
                           >
+                          <!-- Which build ran. The free one is older and passes fewer
+                               challenges, so a step that fell back to it is called out -->
+                          <span
+                            v-if="s.cfBuild"
+                            :style="s.cfBuild === 'free' ? 'color:#c47f17' : undefined"
+                            :title="s.cfBuild === 'free' ? t('logs.cf.buildFreeHint') : ''"
+                            >{{ t("logs.cf.build") }}:
+                            {{
+                              s.cfBuild === "keyed"
+                                ? t("logs.cf.buildKeyed")
+                                : t("logs.cf.buildFree")
+                            }}</span
+                          >
                           <span v-if="s.cfMiniApp"
                             >{{ t("logs.cf.signed") }}:
                             {{ s.cfMiniAppSigned ? "✓" : "✗" }}</span
