@@ -1471,6 +1471,9 @@ export type TgReportReason =
   | "copyright"
   | "other";
 
+/** A Mini App a bot pins beside the composer. */
+export type TgBotMenuButton = { text: string; url: string };
+
 export type TgBotCommand = {
   command: string;
   description: string;
@@ -1812,10 +1815,11 @@ export const tgClientApi = {
       )
       .then((r) => r.data),
 
-  botCommands: (accountId: number, chatId: string) =>
+  /** The bot's commands and its menu button (the Mini App pinned beside the composer). */
+  botInfo: (accountId: number, chatId: string) =>
     api
-      .get<TgBotCommand[]>(
-        `/tg-client/${accountId}/bot-commands/${encodeURIComponent(chatId)}`,
+      .get<{ commands: TgBotCommand[]; menuButton: TgBotMenuButton | null }>(
+        `/tg-client/${accountId}/bot-info/${encodeURIComponent(chatId)}`,
       )
       .then((r) => r.data),
 

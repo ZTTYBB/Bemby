@@ -25,7 +25,7 @@ import {
   clickButton,
   sendReaction,
   getThreadMessages,
-  getBotCommands,
+  getBotInfo,
   markRead,
   resolvePeer,
   reconnectClient,
@@ -843,12 +843,14 @@ router.post("/:accountId/mark-read/:chatId", async (req, res) => {
 });
 
 // GET /:accountId/bot-commands/:chatId -- commands for a bot chat
-router.get("/:accountId/bot-commands/:chatId", async (req, res) => {
+// GET /:accountId/bot-info/:chatId -- the bot's command list and its menu button (the
+// Mini App pinned beside the composer). One call: both are read off the same GetFullUser.
+router.get("/:accountId/bot-info/:chatId", async (req, res) => {
   const accountId = Number(req.params.accountId);
   const chatId = decodeURIComponent(req.params.chatId);
   try {
     const entry = await getLiveClient(accountId);
-    res.json(await getBotCommands(entry, chatId));
+    res.json(await getBotInfo(entry, chatId));
   } catch (err: any) {
     tgError(err, accountId, res);
   }

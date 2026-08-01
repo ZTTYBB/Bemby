@@ -60,6 +60,9 @@ export type TgDialogItem = {
   pinned?: boolean;
 };
 
+/** A Mini App a bot pins beside the composer. */
+export type TgBotMenuButton = { text: string; url: string };
+
 export type TgContactItem = {
   chatId: string;
   firstName: string;
@@ -1843,25 +1846,49 @@ export async function getThreadMessages(
   });
 }
 
-export async function getBotCommands(
+/**
+ * What a bot offers beside the composer: its command list, and its menu button.
+ *
+ * The menu button is the Mini App a bot pins next to the input ("Misaya Media" and the
+ * like). It is a property of the bot rather than of any message, so it appears nowhere in
+ * the chat history -- without asking for it here there is nothing to render.
+ *
+ * Both come from the one GetFullUser call, since asking twice on every chat open is a
+ * round trip for nothing.
+ */
+export async function getBotInfo(
   entry: LiveEntry,
   chatId: string,
-): Promise<TgBotCommand[]> {
+): Promise<{ commands: TgBotCommand[]; menuButton: TgBotMenuButton | null }> {
+  const empty = { commands: [] as TgBotCommand[], menuButton: null };
   await ensureEntityCached(entry, chatId);
   const entity = entry.entityCache.get(chatId);
-  if (!(entity instanceof Api.User) || !entity.bot) return [];
+  if (!(entity instanceof Api.User) || !entity.bot) return empty;
   try {
-    // GetFullUser returns botInfo.commands for bot entities
     const full = await entry.client.invoke(
       new Api.users.GetFullUser({ id: entity as any }),
     );
-    const commands: any[] = (full as any).fullUser?.botInfo?.commands ?? [];
-    return commands.map((c: any) => ({
-      command: c.command as string,
-      description: c.description as string,
-    }));
+    const info = (full as any).fullUser?.botInfo;
+    const commands: any[] = info?.commands ?? [];
+
+    // Three shapes come back here: the default and "commands" variants only say which
+    // menu the client should show, and carry no app. Only botMenuButton has one, which is
+    // the text and address of a Mini App.
+    const raw = info?.menuButton;
+    const menuButton: TgBotMenuButton | null =
+      raw && typeof raw.url === "string" && raw.url
+        ? { text: String(raw.text ?? "").trim() || "Mini App", url: raw.url }
+        : null;
+
+    return {
+      commands: commands.map((c: any) => ({
+        command: c.command as string,
+        description: c.description as string,
+      })),
+      menuButton,
+    };
   } catch {
-    return [];
+    return empty;
   }
 }
 

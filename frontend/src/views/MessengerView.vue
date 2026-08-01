@@ -831,6 +831,15 @@
                   /
                 </button>
                 <button
+                  v-if="botMenuButton"
+                  class="tgc-menu-app-btn"
+                  :title="botMenuButton.text"
+                  @click="openBotMenuApp"
+                >
+                  <i class="fa-regular fa-window-maximize"></i>
+                  <span class="tgc-menu-app-text">{{ botMenuButton.text }}</span>
+                </button>
+                <button
                   class="tgc-attach-btn"
                   title="Attach photo or file"
                   @click="triggerFilePick"
@@ -1728,6 +1737,7 @@ import {
   type TgDialog,
   type TgMessage,
   type TgBotCommand,
+  type TgBotMenuButton,
   type TgContact,
   type TgFolder,
   type TgProfile,
@@ -1902,6 +1912,8 @@ const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "👎", "🔥", 
 
 // Bot commands
 const botCommands = ref<TgBotCommand[]>([]);
+// The Mini App this bot pins beside the composer, if it has one
+const botMenuButton = ref<TgBotMenuButton | null>(null);
 const selectedCmdIdx = ref(-1);
 
 // Invite link preview / join confirmation
@@ -3482,18 +3494,26 @@ async function refreshMessages() {
   }
 }
 
-// ── Bot commands ──────────────────────────────────────────────────────────────
+// ── Bot commands and menu button ──────────────────────────────────────────────
 
 async function loadBotCommands(chatId: string) {
+  botMenuButton.value = null;
   if (!selectedAccountId.value) return;
   try {
-    botCommands.value = await tgClientApi.botCommands(
-      selectedAccountId.value,
-      chatId,
-    );
+    const info = await tgClientApi.botInfo(selectedAccountId.value, chatId);
+    botCommands.value = info.commands;
+    botMenuButton.value = info.menuButton;
   } catch {
     botCommands.value = [];
+    botMenuButton.value = null;
   }
+}
+
+/** Opens the bot's pinned Mini App, the same way a Mini App button in a message opens. */
+function openBotMenuApp() {
+  const button = botMenuButton.value;
+  if (!button) return;
+  void openMiniApp(button.url, button.text, activeChatId.value);
 }
 
 function openCommandMenu() {
@@ -3812,6 +3832,7 @@ async function onAccountChange() {
   typingTimers.clear();
   typingChats.value = {};
   botCommands.value = [];
+  botMenuButton.value = null;
   saveMessengerState();
   await loadDialogs();
   startLiveSocket();
@@ -3988,6 +4009,7 @@ async function openChat(dialog: TgDialog, addToHistory = false) {
   editingMsg.value = null;
   exitSelectMode();
   botCommands.value = [];
+  botMenuButton.value = null;
   joinRequestSent.value = false;
   pendingJoinChatId.value = null;
   stopMembershipPoll();
@@ -5877,6 +5899,41 @@ async function saveContactEdit() {
 }
 
 /* Attach (paperclip) button */
+/* The bot's pinned Mini App, first in the composer row. Given the app's own name rather
+   than an icon alone: it is the one control here that leaves the chat. */
+.tgc-menu-app-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: none;
+  /* The row is bottom-aligned and every other control in it is 34px square, so anything
+     shorter sits low against them rather than reading as part of the same row. */
+  height: 34px;
+  box-sizing: border-box;
+  max-width: 160px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 17px;
+  background: #4a9eff;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.tgc-menu-app-btn:hover {
+  background: #3d8ae0;
+}
+
+.tgc-menu-app-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tgc-attach-btn {
   width: 34px;
   height: 34px;
