@@ -158,10 +158,42 @@ export type CfRunState = {
   refused: Map<string, Set<string>>;
   /** Deadlines the caller has started, keyed however the caller likes. */
   deadlines: Map<string, number>;
+  /**
+   * Why the last attempt on a host did not get through, kept so that running out of exits
+   * can be reported with the failure that actually emptied the pool rather than as a bare
+   * count -- "every proxy refused" says nothing about what went wrong.
+   */
+  lastFailure: Map<string, string>;
 };
 
 export function newCfRunState(): CfRunState {
-  return { refused: new Map(), deadlines: new Map() };
+  return { refused: new Map(), deadlines: new Map(), lastFailure: new Map() };
+}
+
+/**
+ * The message for an action that has no exit left to try. What emptied the pool decides
+ * how it reads: exits genuinely turned away by the site is the case the pool exists for,
+ * while anything else -- a browser that would not start, an app that never had the control
+ * being looked for -- is reported as itself, since no proxy was ever the problem.
+ */
+export function cfNoCandidatesMessage(state: CfRunState, host: string): string {
+  const where = host || "the target site";
+  const count = cfRefusedFor(state, host).size;
+  const why = state.lastFailure.get(host || "*");
+  if (!count) {
+    return why
+      ? `No proxy was available to try for ${where}. The attempt before it failed with: ${why}`
+      : `No proxy was available to try for ${where}`;
+  }
+  return (
+    `All ${count} available prox${count === 1 ? "y" : "ies"} have already been tried for ${where} in this run` +
+    (why ? `, and the last one failed with: ${why}` : "")
+  );
+}
+
+/** Notes why an attempt on `host` failed, for the message above. */
+export function cfNoteFailure(state: CfRunState, host: string, reason?: string): void {
+  if (reason) state.lastFailure.set(host || "*", reason);
 }
 
 /** The refused-exit set for `host`, created on first use. */
@@ -294,6 +326,18 @@ function isLivePrompt(text: string, priorText?: string): boolean {
   if (priorText == null) return true;
   if (!VERIFY_REQUIRED_RE.test(priorText)) return true;
   return text.trim() === priorText.trim();
+}
+
+/**
+ * The fallback wording for a browser step that failed without saying why. Only a page that
+ * actually met a challenge is described as one: naming Cloudflare on a step where no
+ * challenge ever appeared sends the reader after the wrong thing entirely.
+ */
+export function cfFailureFallback(challenged: boolean, miniApp = false): string {
+  if (challenged) return 'Could not pass the Cloudflare "I am not a bot" challenge';
+  return miniApp
+    ? "The Mini App did not get through, and no challenge was involved -- see the step's page text and screenshot"
+    : "The page did not get through, and no challenge was involved";
 }
 
 /** Why a plain page load did not get through, in plain words, for the job log. */
@@ -2397,8 +2441,13 @@ export async function loadCheckinUrl(
     }
 
     const result = await attemptLoad(target, candidate.url, opts, deadline);
-    // A browser that never started never used the exit, so it is not refused
-    if (!result.ok && !result.browserFailed) refusedProxyIds.push(candidate.id);
+    // Only a failure the exit had a hand in counts against it. A browser that never
+    // started, or an app that simply does not have the control being looked for, is the
+    // same through every exit -- marking them refused empties the pool over something no
+    // proxy was ever going to fix, and the next attempt then reports "every proxy refused"
+    // in place of the real fault.
+    const exitAtFault = !result.ok && !result.browserFailed && result.exitRelated !== false;
+    if (exitAtFault) refusedProxyIds.push(candidate.id);
     trace.push(
       [
         `${candidate.label}: ${result.ok ? "ok" : "failed"}`,

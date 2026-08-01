@@ -5,7 +5,15 @@ import { StringSession } from 'telegram/sessions';
 import type { TgProxy } from '../types';
 import type { TgDeviceParams } from '../auth/tgAuth';
 import { NewMessage, NewMessageEvent, Raw } from 'telegram/events';
-import { cfRefusedFor, loadCheckinUrl, newCfRunState, type CfRunState } from './cloudflare';
+import {
+  cfFailureFallback,
+  cfNoCandidatesMessage,
+  cfNoteFailure,
+  cfRefusedFor,
+  loadCheckinUrl,
+  newCfRunState,
+  type CfRunState,
+} from './cloudflare';
 import { openableButtonUrl, webButtonOf, type WebButton } from '../tg/miniApp';
 import { cfProxyCandidatesFor, rememberCfProxy } from '../tg/proxyProviders';
 
@@ -930,7 +938,7 @@ export async function runCheckin(
     const refused = cfRefusedFor(cfRun, host);
     const candidates = cfProxyCandidatesFor({ primaryUrl: webProxyUrl, host, exclude: refused });
     if (!candidates.length) {
-      throw new Error(`Every available proxy (${refused.size}) was already refused for ${host}`);
+      throw new Error(cfNoCandidatesMessage(cfRun, host));
     }
     const result = await loadCheckinUrl(url, webProxyUrl, {
       miniApp: log.cfMiniApp,
@@ -939,6 +947,7 @@ export async function runCheckin(
       proxyCandidates: candidates,
     });
     for (const id of result.refusedProxyIds ?? []) refused.add(id);
+    if (!result.ok) cfNoteFailure(cfRun, result.finalHost, result.reason);
     log.cfHost = result.finalHost;
     log.cfChallenged = result.challenged;
     log.cfPassed = result.ok;
@@ -947,7 +956,7 @@ export async function runCheckin(
     log.cfAttempts = result.attempts;
     if (result.ok && result.proxyId) rememberCfProxy(result.finalHost, result.proxyId);
     if (!result.ok)
-      throw new Error(result.reason ?? 'Could not pass the Cloudflare "I am not a bot" challenge');
+      throw new Error(result.reason ?? cfFailureFallback(result.challenged, log.cfMiniApp));
     return result.text;
   };
 

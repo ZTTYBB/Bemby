@@ -22,6 +22,9 @@ import {
   callAI,
 } from "./checkin";
 import {
+  cfFailureFallback,
+  cfNoCandidatesMessage,
+  cfNoteFailure,
   cfRefusedFor,
   loadCheckinUrl,
   newCfRunState,
@@ -70,7 +73,7 @@ async function passCloudflare(
   const refused = cfRefusedFor(cfRun, host);
   const candidates = cfProxyCandidatesFor({ primaryUrl: webProxyUrl, host, exclude: refused });
   if (!candidates.length) {
-    throw new Error(`Every available proxy (${refused.size}) was already refused for ${host}`);
+    throw new Error(cfNoCandidatesMessage(cfRun, host));
   }
   const cf = await loadCheckinUrl(url, webProxyUrl, {
     miniApp,
@@ -84,6 +87,7 @@ async function passCloudflare(
   step.cfProxy = cf.proxyLabel;
   step.cfAttempts = cf.attempts;
   for (const id of cf.refusedProxyIds ?? []) refused.add(id);
+  if (!cf.ok) cfNoteFailure(cfRun, cf.finalHost, cf.reason);
   if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
   step.cfHost = cf.finalHost;
   step.cfChallenged = cf.challenged;
@@ -95,7 +99,7 @@ async function passCloudflare(
   step.cfTrace = cf.trace;
   step.cfScreenshot = cf.screenshot;
   if (!cf.ok)
-    throw new Error(cf.reason ?? 'Could not pass the Cloudflare "I am not a bot" challenge');
+    throw new Error(cf.reason ?? cfFailureFallback(cf.challenged, true));
   return cf.text;
 }
 
@@ -2420,7 +2424,7 @@ export async function runCustom(
                 });
                 if (!candidates.length) {
                   throw new Error(
-                    `Every available proxy (${refused.size}) was already refused for ${cfHost}`,
+                    cfNoCandidatesMessage(cfRun, cfHost),
                   );
                 }
 
@@ -2466,11 +2470,12 @@ export async function runCustom(
                 step.cfTrace = cf.trace;
                 step.cfScreenshot = cf.screenshot;
                 for (const id of cf.refusedProxyIds ?? []) refused.add(id);
+                if (!cf.ok) cfNoteFailure(cfRun, cf.finalHost, cf.reason);
                 if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
                 step.responseHtml = escapeHtml(cf.text.slice(0, 2000)).replace(/\n/g, "<br>");
                 if (!cf.ok) {
                   throw new Error(
-                    cf.reason ?? 'Could not pass the Cloudflare "I am not a bot" challenge',
+                    cf.reason ?? cfFailureFallback(cf.challenged, true),
                   );
                 }
                 step.result = cf.inAppAction
@@ -2540,7 +2545,7 @@ export async function runCustom(
                 });
                 if (!candidates.length) {
                   throw new Error(
-                    `Every available proxy (${refused.size}) was already refused for ${cfHost}`,
+                    cfNoCandidatesMessage(cfRun, cfHost),
                   );
                 }
 
@@ -2580,11 +2585,12 @@ export async function runCustom(
                 step.cfTrace = cf.trace;
                 step.cfScreenshot = cf.screenshot;
                 for (const id of cf.refusedProxyIds ?? []) refused.add(id);
+                if (!cf.ok) cfNoteFailure(cfRun, cf.finalHost, cf.reason);
                 if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
                 step.responseHtml = escapeHtml(cf.text.slice(0, 2000)).replace(/\n/g, "<br>");
                 if (!cf.ok) {
                   throw new Error(
-                    cf.reason ?? 'Could not pass the Cloudflare "I am not a bot" challenge',
+                    cf.reason ?? cfFailureFallback(cf.challenged, true),
                   );
                 }
                 step.result = cf.inAppAction
@@ -2646,7 +2652,7 @@ export async function runCustom(
                 });
                 if (!candidates.length) {
                   throw new Error(
-                    `Every available proxy (${refused.size}) was already refused for ${cfHost}`,
+                    cfNoCandidatesMessage(cfRun, cfHost),
                   );
                 }
 
@@ -2673,11 +2679,12 @@ export async function runCustom(
                 step.cfScreenshot = cf.screenshot;
                 step.webSteps = cf.webSteps;
                 for (const id of cf.refusedProxyIds ?? []) refused.add(id);
+                if (!cf.ok) cfNoteFailure(cfRun, cf.finalHost, cf.reason);
                 if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
                 step.responseHtml = escapeHtml(cf.text.slice(0, 2000)).replace(/\n/g, "<br>");
                 if (!cf.ok) {
                   throw new Error(
-                    cf.reason ?? 'Could not pass the Cloudflare "I am not a bot" challenge',
+                    cf.reason ?? cfFailureFallback(cf.challenged, true),
                   );
                 }
                 const ran = (cf.webSteps ?? []).filter((s) => s.outcome).length;
