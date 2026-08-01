@@ -225,6 +225,12 @@ export function miniAppVerdict(state: {
   text: string;
   /** In-app steps that were carried out, if any. */
   inAppAction?: string;
+  /**
+   * Whether those steps actually acted on the app rather than only waiting or scrolling
+   * into position. Omitted, any trace counts, which is how callers without the distinction
+   * have always behaved.
+   */
+  inAppActed?: boolean;
   /** Why the in-app steps stopped short, if they did. */
   inAppFailure?: string;
   /** Navigation or renderer trouble seen on the way. */
@@ -236,8 +242,10 @@ export function miniAppVerdict(state: {
 }): { ok: boolean; reason?: string } {
   const { challenged, solved, text, inAppAction, inAppFailure, navError, priorText } = state;
   const blankLen = state.blankTextLen ?? cfTuning().blankTextLen;
+  // A trace of nothing but waits and scrolls is not evidence the app was reached
+  const acted = state.inAppActed ?? !!inAppAction;
 
-  if (!challenged && text.trim().length < blankLen && !inAppAction) {
+  if (!challenged && text.trim().length < blankLen && !acted) {
     return {
       ok: false,
       reason: navError
@@ -1142,48 +1150,97 @@ export function parseScrollStep(step: string | undefined): { x: number; y: numbe
 
 /**
  * Scrolls the page by `x`/`y` pixels, clamped to the content: a figure past the end simply
- * lands at the end, which is how "scroll all the way down" is written. Mini Apps and plenty
- * of ordinary sites scroll an inner container rather than the document, so when the
- * document itself cannot move, the largest scrollable element on the page is driven instead.
+ * lands at the end, which is how "scroll all the way down" is written.
+ *
+ * Picking *what* to scroll is the whole difficulty. Mini Apps pin the document
+ * (`body { position: fixed; overflow: hidden }`) and scroll a container inside it, and they
+ * commonly keep the other tabs mounted as hidden panes -- each a full-viewport box with a
+ * scroll extent of its own. Choosing by size alone lands on one of those: the numbers in the
+ * log look like a real scroll while nothing on screen has moved. So the target is taken from
+ * what is actually painted at the centre of the viewport, walking up to the nearest
+ * scrollable ancestor -- which is what a wheel there would have moved.
  */
 async function scrollPageBy(
   page: Page,
   x: number,
   y: number,
-): Promise<{ x: number; y: number; maxX: number; maxY: number } | null> {
+): Promise<{ x: number; y: number; maxX: number; maxY: number; what: string } | null> {
   return await page
     .evaluate(
       ({ dx, dy }: { dx: number; dy: number }) => {
-        const scrollable = (el: Element | null) =>
-          !!el && (el.scrollHeight - el.clientHeight > 1 || el.scrollWidth - el.clientWidth > 1);
+        const isDoc = (el: Element) =>
+          el === document.scrollingElement ||
+          el === document.documentElement ||
+          el === document.body;
 
-        let target: Element | null = document.scrollingElement ?? document.documentElement;
-        if (!scrollable(target)) {
-          target = null;
+        // The document scrolls on its own extent; anything else needs an overflow that
+        // actually clips, or its scrollTop goes nowhere.
+        const scrollable = (el: Element) => {
+          if (el.scrollHeight - el.clientHeight <= 1 && el.scrollWidth - el.clientWidth <= 1) {
+            return false;
+          }
+          if (isDoc(el)) return true;
+          const style = getComputedStyle(el);
+          return /auto|scroll|overlay/.test(`${style.overflowY} ${style.overflowX}`);
+        };
+
+        // Whatever is painted at the middle of the screen, then up to the first ancestor
+        // that scrolls. On an ordinary page this walk ends at the document.
+        const underCentre = () => {
+          let el = document.elementFromPoint(
+            Math.floor(window.innerWidth / 2),
+            Math.floor(window.innerHeight / 2),
+          );
+          while (el) {
+            if (scrollable(el)) return el;
+            el = el.parentElement;
+          }
+          return null;
+        };
+
+        // Nothing under the centre (an overlay, a gap): the biggest scroller that is on
+        // screen. Hidden panes are skipped, which is the point.
+        const largestOnScreen = () => {
+          let best: Element | null = null;
           let bestArea = 0;
           for (const el of Array.from(document.querySelectorAll("*"))) {
             if (!scrollable(el)) continue;
-            const style = getComputedStyle(el);
-            if (!/auto|scroll|overlay/.test(`${style.overflowY} ${style.overflowX}`)) continue;
+            if (typeof (el as any).checkVisibility === "function" && !(el as any).checkVisibility())
+              continue;
             const r = el.getBoundingClientRect();
+            if (r.width < 1 || r.height < 1) continue;
+            if (r.bottom <= 0 || r.top >= window.innerHeight) continue;
             const area = r.width * r.height;
             if (area > bestArea) {
               bestArea = area;
-              target = el;
+              best = el;
             }
           }
-        }
+          return best;
+        };
+
+        const doc = document.scrollingElement ?? document.documentElement;
+        const target = underCentre() ?? largestOnScreen() ?? (scrollable(doc) ? doc : null);
         if (!target) return null;
 
         const maxX = Math.max(0, target.scrollWidth - target.clientWidth);
         const maxY = Math.max(0, target.scrollHeight - target.clientHeight);
         target.scrollLeft = Math.min(Math.max(0, target.scrollLeft + dx), maxX);
         target.scrollTop = Math.min(Math.max(0, target.scrollTop + dy), maxY);
+
+        // Named in the log: "scrolled 1071px" reads the same whether the right thing moved
+        // or a hidden pane did, and telling those apart is the whole game here.
+        const cls = String((target as HTMLElement).className ?? "")
+          .split(/\s+/)
+          .filter(Boolean)[0];
         return {
           x: Math.round(target.scrollLeft),
           y: Math.round(target.scrollTop),
           maxX: Math.round(maxX),
           maxY: Math.round(maxY),
+          what: isDoc(target)
+            ? "the page"
+            : `${target.tagName.toLowerCase()}${cls ? `.${cls}` : ""}`,
         };
       },
       { dx: x, dy: y },
@@ -1205,7 +1262,7 @@ async function scrollOutcome(page: Page, x: number, y: number): Promise<string |
   ]
     .filter(Boolean)
     .join("/");
-  return `scrolled to ${moved.x},${moved.y}${ends ? ` (${ends} at the end)` : ""}`;
+  return `scrolled ${moved.what} to ${moved.x},${moved.y}${ends ? ` (${ends} at the end)` : ""}`;
 }
 
 async function runInAppClicks(
@@ -1214,10 +1271,14 @@ async function runInAppClicks(
   deadline: number,
   solveQuestion?: (question: string) => Promise<string>,
   aiLocate?: (image: string, prompt: string) => Promise<string>,
-): Promise<{ trace?: string; ok: boolean; failure?: string }> {
+): Promise<{ trace?: string; ok: boolean; failure?: string; acted: boolean }> {
   const tune = cfTuning();
   const done: string[] = [];
   let failure: string | undefined;
+  // Whether a step actually did something to the app. Waiting and scrolling are how a step
+  // gets ready to act, not acting: counting them would let a page that rendered nothing
+  // report a completed checkin on the strength of a delay.
+  let acted = false;
 
   for (const step of steps.length ? steps : [undefined]) {
     if (msLeft(deadline) <= 0) {
@@ -1280,6 +1341,7 @@ async function runInAppClicks(
         break;
       }
       done.push(`{aiBtn} pressed ${what}`);
+      acted = true;
       await sleep(tune.inAppStepMs, deadline);
       continue;
     }
@@ -1303,6 +1365,7 @@ async function runInAppClicks(
         break;
       }
       done.push(`${step}="${answer}"`);
+      acted = true;
       await sleep(tune.inAppStepMs, deadline);
       continue;
     }
@@ -1319,6 +1382,7 @@ async function runInAppClicks(
       break;
     }
     done.push(click.outcome);
+    acted = true;
     await sleep(tune.inAppStepMs, deadline);
 
     // Pressing plain text is a guess. If the app did not react to it, nothing happened,
@@ -1337,7 +1401,7 @@ async function runInAppClicks(
 
   // Let the last step's request round-trip before the page text is scraped
   if (done.length) await sleep(tune.inAppSettleMs, deadline);
-  return { trace: done.length ? done.join(" → ") : undefined, ok: !failure, failure };
+  return { trace: done.length ? done.join(" → ") : undefined, ok: !failure, failure, acted };
 }
 
 // ── Driving a plain web page (the `open_url` action) ──────────────────────────
@@ -2133,6 +2197,9 @@ async function attemptLoad(
     // A Mini App checkin is a tap inside the app, not the page load itself.
     let inAppAction: string | undefined;
     let inAppFailure: string | undefined;
+    // Whether any of those steps actually acted on the app, as opposed to only waiting or
+    // scrolling into position.
+    let inAppActed = false;
     // Standing text, captured before the steps run, so a verify prompt the page has always
     // shown can be told from one raised by pressing the control.
     let priorText: string | undefined;
@@ -2147,6 +2214,7 @@ async function attemptLoad(
       );
       inAppAction = clicks.trace;
       inAppFailure = clicks.failure;
+      inAppActed = clicks.acted;
 
       // A verification the app raises only once the checkin is pressed needs a moment to
       // render. Asking once, immediately, sees nothing there and calls the step done --
@@ -2185,7 +2253,16 @@ async function attemptLoad(
     const navError = troubles.length ? troubles.join("; ") : undefined;
 
     const verdict = opts.miniApp
-      ? miniAppVerdict({ challenged, solved, text, inAppAction, inAppFailure, navError, priorText })
+      ? miniAppVerdict({
+          challenged,
+          solved,
+          text,
+          inAppAction,
+          inAppActed,
+          inAppFailure,
+          navError,
+          priorText,
+        })
       : webSteps
         ? // A sub-step that could not be carried out is a failure even with no challenge in
           // the way: the page was never driven to where the caller wanted it.

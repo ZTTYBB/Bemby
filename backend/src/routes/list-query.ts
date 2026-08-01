@@ -8,11 +8,25 @@ export type Paging = { page: number; pageSize: number; limit: number; offset: nu
 const MAX_PAGE_SIZE = 200;
 const DEFAULT_PAGE_SIZE = 25;
 
+/** What the list views send for their "All" page size: one page holding every row. */
+export const ALL_PAGE_SIZE = 0;
+
 export function parsePaging(query: Record<string, unknown>): Paging | null {
   if (query.page === undefined && query.pageSize === undefined) return null;
+  // "All" is a single page with no ceiling. SQLite reads a negative LIMIT as no limit, so
+  // the endpoints keep their `LIMIT ? OFFSET ?` shape rather than growing a second query.
+  if (isAllPageSize(query.pageSize)) {
+    return { page: 1, pageSize: ALL_PAGE_SIZE, limit: -1, offset: 0 };
+  }
   const page = clampInt(query.page, 1, 1_000_000, 1);
   const pageSize = clampInt(query.pageSize, 1, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE);
   return { page, pageSize, limit: pageSize, offset: (page - 1) * pageSize };
+}
+
+function isAllPageSize(value: unknown): boolean {
+  if (value === undefined || value === null || value === "") return false;
+  const n = Number(value);
+  return Number.isFinite(n) && n <= 0;
 }
 
 // Maps a client sortKey to a whitelisted ORDER BY expression; unknown keys fall back.

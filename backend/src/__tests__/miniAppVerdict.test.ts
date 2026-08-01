@@ -44,6 +44,30 @@ describe("miniAppVerdict", () => {
   it("passes a page whose control was already used today", () => {
     expect(miniAppVerdict({ ...CLEAN, inAppAction: "already done: 已签到" })).toEqual({ ok: true });
   });
+
+  it("still fails a blank page when the steps only waited and scrolled", () => {
+    const v = miniAppVerdict({
+      challenged: false,
+      solved: true,
+      text: "",
+      inAppAction: "waited 3000ms → scrolled the page to 0,1071",
+      inAppActed: false,
+    });
+    expect(v.ok).toBe(false);
+    expect(v.reason).toMatch(/blank/);
+  });
+
+  it("passes a blank-looking page once a step actually pressed something", () => {
+    expect(
+      miniAppVerdict({
+        challenged: false,
+        solved: true,
+        text: "",
+        inAppAction: "scrolled the page to 0,1071 → pressed 签到",
+        inAppActed: true,
+      }),
+    ).toEqual({ ok: true });
+  });
 });
 
 describe("miniAppVerdict — an app asking to be verified", () => {

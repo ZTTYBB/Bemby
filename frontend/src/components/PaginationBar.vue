@@ -10,7 +10,11 @@
         @change="onSizeChange(($event.target as HTMLSelectElement).value)"
       >
         <option v-for="size in sizes" :key="size" :value="size">
-          {{ t("common.perPage").replace("{n}", String(size)) }}
+          {{
+            size === ALL_PAGE_SIZE
+              ? t("common.perPageAll")
+              : t("common.perPage").replace("{n}", String(size))
+          }}
         </option>
       </select>
       <button
@@ -47,10 +51,13 @@ const emit = defineEmits<{
   (e: "update:pageSize", value: number): void;
 }>();
 
-const sizes = [10, 25, 50, 100];
+/** "All" is sent to the server as a page size of 0, meaning one page with every row. */
+const ALL_PAGE_SIZE = 0;
+
+const sizes = [10, 25, 50, 100, ALL_PAGE_SIZE];
 
 const pageCount = computed(() =>
-  Math.max(1, Math.ceil(props.total / props.pageSize)),
+  props.pageSize > 0 ? Math.max(1, Math.ceil(props.total / props.pageSize)) : 1,
 );
 
 function go(page: number) {

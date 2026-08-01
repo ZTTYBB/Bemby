@@ -49,6 +49,7 @@ const zh = {
     search: "搜索...",
     paginationTotal: "共 {n} 条",
     perPage: "每页 {n}",
+    perPageAll: "全部（不分页）",
     statusFilterAll: "全部状态",
   },
   login: {
@@ -1337,6 +1338,7 @@ const en: typeof zh = {
     search: "Search...",
     paginationTotal: "{n} total",
     perPage: "{n} / page",
+    perPageAll: "All",
     statusFilterAll: "All statuses",
   },
   login: {

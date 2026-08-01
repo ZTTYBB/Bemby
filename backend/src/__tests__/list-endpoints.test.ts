@@ -379,3 +379,44 @@ describe("GET /logs", () => {
     expect(byMessage.body.items.map((l: any) => l.message)).toEqual(["timeout waiting"]);
   });
 });
+
+// `pageSize=0` is the "All" choice in the list views: one page, no ceiling -- including
+// past the 200-row cap the numbered page sizes are clamped to.
+describe("page size All (pageSize=0)", () => {
+  it("returns every template on one page, beyond the usual cap", async () => {
+    for (let i = 1; i <= 205; i++) insertTemplate(`Tpl ${String(i).padStart(3, "0")}`);
+    const { body } = await getJson("/templates?page=1&pageSize=0");
+    expect(body.total).toBe(205);
+    expect(body.items).toHaveLength(205);
+    expect(body.page).toBe(1);
+    expect(body.pageSize).toBe(0);
+  });
+
+  it("returns every job, account, and log on one page", async () => {
+    for (let i = 1; i <= 5; i++) insertAccount(`Acct ${i}`);
+    const job = insertJob("Job A");
+    for (let i = 1; i <= 5; i++) insertJob(`Job ${i}`);
+    for (let i = 1; i <= 5; i++)
+      insertLog(job, "success", `run ${i}`, `2026-07-0${i}T00:00:00Z`);
+
+    const jobs = await getJson("/jobs?page=1&pageSize=0");
+    expect(jobs.body.items).toHaveLength(6);
+    const accounts = await getJson("/accounts?page=1&pageSize=0");
+    expect(accounts.body.items).toHaveLength(5);
+    const logs = await getJson("/logs?page=1&pageSize=0");
+    expect(logs.body.items).toHaveLength(5);
+  });
+
+  it("ignores the page number, since All is a single page", async () => {
+    for (let i = 1; i <= 5; i++) insertTemplate(`Tpl ${i}`);
+    const { body } = await getJson("/templates?page=3&pageSize=0");
+    expect(body.page).toBe(1);
+    expect(body.items).toHaveLength(5);
+  });
+
+  it("still keeps the legacy array shape when no paging param is sent", async () => {
+    insertTemplate("Alpha");
+    const { body } = await getJson("/templates");
+    expect(Array.isArray(body)).toBe(true);
+  });
+});
