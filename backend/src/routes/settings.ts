@@ -363,7 +363,28 @@ router.post("/cf-solver/uninstall", (_req, res) => {
   res.json({ ok: true, removed: result.removed });
 });
 
-router.post("/cf-solver/test", async (req, res) => {
+// Launching a browser, loading a real page over the network and probing it takes tens of
+// seconds, and doing that for every installed build takes a multiple of it -- long enough
+// that a reverse proxy in front of the panel gives up on the request and answers 504. So
+// the run happens in the background and the caller polls for it, the way the bulk account
+// operations already work.
+type CfTestState = {
+  running: boolean;
+  startedAt: number;
+  finishedAt?: number;
+  ok?: boolean;
+  error?: string;
+  /** Filled in as each build finishes, so progress is visible rather than all-or-nothing. */
+  builds: Array<Awaited<ReturnType<typeof testBrowser>>>;
+};
+let cfTestState: CfTestState | undefined;
+
+router.post("/cf-solver/test", (req, res) => {
+  if (cfTestState?.running) {
+    res.status(409).json({ ...cfTestState, message: "A browser test is already running" });
+    return;
+  }
+
   // Every build that is installed, in turn. With both on disk a job may run on either --
   // the keyed one normally, the free one when no licence seat is going -- so testing only
   // the preferred build leaves the fallback unproven, which is exactly the one that gets
@@ -372,20 +393,48 @@ router.post("/cf-solver/test", async (req, res) => {
   const wantShot = !!req.query.screenshot;
 
   if (!tiers.length) {
-    res.json({ ok: false, error: "Chromium is not installed", builds: [] });
+    cfTestState = {
+      running: false,
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+      ok: false,
+      error: "Chromium is not installed",
+      builds: [],
+    };
+    res.json(cfTestState);
     return;
   }
 
-  const builds = [];
-  for (const tier of tiers) {
-    const result = await testBrowser(undefined, tier);
-    builds.push(wantShot ? result : { ...result, screenshot: undefined });
-  }
+  const state: CfTestState = { running: true, startedAt: Date.now(), builds: [] };
+  cfTestState = state;
 
-  // The preferred build's result stays at the top level, so a caller that only knows about
-  // one browser still reads the one a job would normally use.
-  const primary = builds[0];
-  res.json({ ...primary, ok: builds.every((b) => b.ok), builds });
+  void (async () => {
+    try {
+      for (const tier of tiers) {
+        const result = await testBrowser(undefined, tier).catch((err: any) => ({
+          ok: false,
+          tier,
+          error: err?.message ?? String(err),
+        }));
+        state.builds.push(wantShot ? result : { ...result, screenshot: undefined });
+      }
+      state.ok = state.builds.every((b) => b.ok);
+    } catch (err: any) {
+      state.ok = false;
+      state.error = err?.message ?? String(err);
+    } finally {
+      state.running = false;
+      state.finishedAt = Date.now();
+    }
+  })();
+
+  res.status(202).json(state);
+});
+
+// GET /cf-solver/test -- how the run started above is going, and its results once it is
+// done. Returns a finished-with-nothing state when no test has been run since boot.
+router.get("/cf-solver/test", (_req, res) => {
+  res.json(cfTestState ?? { running: false, startedAt: 0, builds: [] });
 });
 
 // ── Proxy providers ───────────────────────────────────────────────────────────

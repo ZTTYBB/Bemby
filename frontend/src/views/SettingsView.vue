@@ -1767,8 +1767,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from "vue";
-import { settingsApi, authApi, dataApi, aiSuppliersApi, statusApi } from "../api/client";
+import { ref, reactive, computed, onMounted, onUnmounted } from "vue";
+import {
+  settingsApi,
+  authApi,
+  dataApi,
+  aiSuppliersApi,
+  statusApi,
+  type CfBrowserTest,
+  type CfBrowserTestRun,
+} from "../api/client";
 import type {
   MemoryReport,
   ExportPayload,
@@ -2011,6 +2019,7 @@ function resetCfTuning() {
 const cfUninstalling = ref(false);
 const cfStopping = ref(false);
 const cfClearingProfiles = ref(false);
+let cfTestPollTimer: ReturnType<typeof setTimeout> | null = null;
 const cfProfileCount = ref(0);
 const cfBrowsersRunning = ref(0);
 type CfBuild = { tier: "keyed" | "free"; version: string; path: string; preferred: boolean };
@@ -2139,6 +2148,98 @@ async function installCfSolver(force = false, tier?: "free") {
 
 // Launches the browser and reports what the page sees of itself, so one install can be
 // compared against another when a challenge passes in one place and not the other.
+/** Renders whatever the run has produced so far, so results appear build by build. */
+function showCfTestRun(run: CfBrowserTestRun) {
+  const builds = run.builds ?? [];
+  const name = (b: CfBrowserTest) =>
+    b.tier === "free"
+      ? t("settings.cfSolver.tierFree")
+      : b.tier === "keyed"
+        ? t("settings.cfSolver.tierKeyed")
+        : t("settings.cfSolver.testBtn");
+  const label = (b: CfBrowserTest, text: string) =>
+    builds.length > 1 ? `[${name(b)}] ${text}` : text;
+
+  cfTestWarnings.value = builds.flatMap((b) => (b.warnings ?? []).map((w) => label(b, w)));
+  cfTestNotes.value = builds.flatMap((b) => (b.notes ?? []).map((n) => label(b, n)));
+  cfTestReport.value = builds
+    .map((b) =>
+      JSON.stringify(
+        {
+          build: name(b),
+          ok: b.ok,
+          version: b.version,
+          executable: b.executable,
+          exitCountry: b.exitCountry,
+          ...(b.error ? { error: b.error } : {}),
+          ...b.env,
+        },
+        null,
+        2,
+      ),
+    )
+    .join("\n\n");
+
+  // Nothing conclusive to say until the last build is in
+  if (run.running) return;
+
+  if (run.error && !builds.length) {
+    cfInstallError.value = run.error;
+    return;
+  }
+  const failed = builds.filter((b) => !b.ok);
+  const passed = builds.filter((b) => b.ok);
+  if (failed.length) {
+    cfInstallError.value = failed
+      .map((b) =>
+        builds.length > 1
+          ? `${name(b)}: ${b.error || t("settings.cfSolver.testFailed")}`
+          : b.error || t("settings.cfSolver.testFailed"),
+      )
+      .join(" | ");
+    // A build that passed is still worth saying so, when another did not
+    if (passed.length) {
+      cfInstallMsg.value = `${t("settings.cfSolver.testPassed")} — ${passed.map(name).join(", ")}`;
+    }
+  } else if (builds.length) {
+    cfInstallMsg.value =
+      builds.length > 1
+        ? `${t("settings.cfSolver.testPassed")} — ${builds.map(name).join(", ")}`
+        : t("settings.cfSolver.testPassed");
+  }
+}
+
+// Leaving the page should not leave a timer behind polling for a test nobody is watching
+onUnmounted(() => stopCfTestPoll());
+
+function stopCfTestPoll() {
+  if (cfTestPollTimer) {
+    clearTimeout(cfTestPollTimer);
+    cfTestPollTimer = null;
+  }
+}
+
+async function pollCfTest() {
+  stopCfTestPoll();
+  try {
+    const run = await settingsApi.cfSolverTestStatus();
+    showCfTestRun(run);
+    if (run.running) {
+      cfTestPollTimer = setTimeout(pollCfTest, 2000);
+    } else {
+      cfTesting.value = false;
+    }
+  } catch {
+    // A blip on the way to the panel is not the test failing; keep watching, slower
+    cfTestPollTimer = setTimeout(pollCfTest, 4000);
+  }
+}
+
+/**
+ * Starts the test and follows it. Each build means launching a browser and loading a real
+ * page, which together outlast what a proxy will hold a request open for, so the run
+ * happens server-side and this polls for it.
+ */
 async function testCfSolver() {
   cfInstallMsg.value = "";
   cfInstallError.value = "";
@@ -2147,64 +2248,21 @@ async function testCfSolver() {
   cfTestNotes.value = [];
   cfTesting.value = true;
   try {
-    const res = await settingsApi.testCfSolver();
-    // Every installed build is tested, so the report and any warnings say which is which.
-    // An older instance answers with a single result; treat that as one build.
-    const builds = res.builds?.length ? res.builds : [res];
-    const name = (b: (typeof builds)[number]) =>
-      b.tier === "free"
-        ? t("settings.cfSolver.tierFree")
-        : b.tier === "keyed"
-          ? t("settings.cfSolver.tierKeyed")
-          : t("settings.cfSolver.testBtn");
-
-    cfTestWarnings.value = builds.flatMap((b) =>
-      (b.warnings ?? []).map((w) => (builds.length > 1 ? `[${name(b)}] ${w}` : w)),
-    );
-    cfTestNotes.value = builds.flatMap((b) =>
-      (b.notes ?? []).map((n) => (builds.length > 1 ? `[${name(b)}] ${n}` : n)),
-    );
-    cfTestReport.value = builds
-      .map((b) =>
-        JSON.stringify(
-          {
-            build: name(b),
-            ok: b.ok,
-            version: b.version,
-            executable: b.executable,
-            exitCountry: b.exitCountry,
-            ...(b.error ? { error: b.error } : {}),
-            ...b.env,
-          },
-          null,
-          2,
-        ),
-      )
-      .join("\n\n");
-
-    const failed = builds.filter((b) => !b.ok);
-    if (failed.length) {
-      cfInstallError.value = failed
-        .map((b) =>
-          builds.length > 1
-            ? `${name(b)}: ${b.error || t("settings.cfSolver.testFailed")}`
-            : b.error || t("settings.cfSolver.testFailed"),
-        )
-        .join(" | ");
-      // A build that passed is still worth saying so, when another did not
-      const passed = builds.filter((b) => b.ok);
-      if (passed.length) {
-        cfInstallMsg.value = `${t("settings.cfSolver.testPassed")} — ${passed.map(name).join(", ")}`;
-      }
+    const run = await settingsApi.testCfSolver();
+    showCfTestRun(run);
+    if (run.running) {
+      cfTestPollTimer = setTimeout(pollCfTest, 2000);
     } else {
-      cfInstallMsg.value =
-        builds.length > 1
-          ? `${t("settings.cfSolver.testPassed")} — ${builds.map(name).join(", ")}`
-          : t("settings.cfSolver.testPassed");
+      cfTesting.value = false;
     }
   } catch (e: any) {
-    cfInstallError.value = e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.testFailed");
-  } finally {
+    // A test already running is not an error: follow that one instead
+    if (e?.response?.status === 409) {
+      cfTestPollTimer = setTimeout(pollCfTest, 500);
+      return;
+    }
+    cfInstallError.value =
+      e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.testFailed");
     cfTesting.value = false;
   }
 }

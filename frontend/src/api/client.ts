@@ -1110,6 +1110,15 @@ export type Settings = {
   proxy_providers_count?: string;
 };
 
+export type CfBrowserTestRun = {
+  running: boolean;
+  ok?: boolean;
+  error?: string;
+  /** One entry per installed build, appended as each finishes. */
+  builds: CfBrowserTest[];
+  message?: string;
+};
+
 export type CfBrowserTest = {
   ok: boolean;
   /** Which build this result is for. */
@@ -1163,24 +1172,16 @@ export const settingsApi = {
         "/settings/cf-solver/uninstall",
       )
       .then((r) => r.data),
-  /** Launches every installed build and reports what each page sees of itself. */
+  /**
+   * Starts a test of every installed build. It runs in the background -- a browser launch
+   * plus a real page load, once per build, outlives what a proxy will hold a request open
+   * for -- so this returns straight away and `cfSolverTestStatus` reports on it.
+   */
   testCfSolver: () =>
-    api
-      .post<{
-        ok: boolean;
-        /** One entry per installed build, each tested in turn. */
-        builds?: CfBrowserTest[];
-        tier?: "keyed" | "free";
-        executable?: string;
-        version?: string;
-        renderedText?: string;
-        error?: string;
-        env?: Record<string, unknown>;
-        warnings?: string[];
-        notes?: string[];
-        exitCountry?: string;
-      }>("/settings/cf-solver/test")
-      .then((r) => r.data),
+    api.post<CfBrowserTestRun>("/settings/cf-solver/test").then((r) => r.data),
+  /** How the run started above is going, with each build's result as it lands. */
+  cfSolverTestStatus: () =>
+    api.get<CfBrowserTestRun>("/settings/cf-solver/test").then((r) => r.data),
   getCfKeys: () =>
     api.get<CfKeysResponse>("/settings/cf-solver/keys").then((r) => r.data),
   /** Send the masked value back unchanged to keep a stored key while editing its label. */
