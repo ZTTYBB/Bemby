@@ -126,6 +126,13 @@ export type CheckinPageResult = {
    * alike: rotating through the pool then only wastes the budget.
    */
   exitRelated?: boolean;
+  /**
+   * The browser never started, so the attempt says nothing about the exit at all: the URL
+   * was never requested through it. Such an attempt must not count as a refusal, or a
+   * browser that cannot start burns the whole proxy pool and reports it as Cloudflare
+   * turning every exit away.
+   */
+  browserFailed?: boolean;
   /** Why the attempt is not ok, in plain words, for the job log. */
   reason?: string;
   /** Navigation/renderer trouble seen while loading (page crash, failed request). */
@@ -364,6 +371,11 @@ async function launchAlignedBrowser(
   if (!geo?.tz || msLeft(deadline) <= 0) return launched;
 
   await launched.close();
+  // A licence key is one session at a time, and the service does not always have the old
+  // one torn down by the time the next launch asks for it -- relaunching straight away can
+  // be refused, which the keyed build answers by quitting during startup. The seat is
+  // already free locally; this is purely to let the far side catch up.
+  await sleep(cfTuning().relaunchSettleMs, deadline);
   return launchCfBrowser(proxyUrl);
 }
 
@@ -2014,6 +2026,16 @@ function launchFailureReason(message: string): string | undefined {
       "--use-angle=swiftshader launch flags are still in place, or reinstall the image."
     );
   }
+  // The keyed build takes its licence at startup and quits on the spot if it cannot hold a
+  // session -- before any page is opened, so the log is all startup noise and a signal.
+  if (/SIGTRAP/.test(message) && /-pro\/chrome|licen[cs]e/i.test(message)) {
+    return (
+      "The licensed browser build quit during startup, before opening a page. It does that " +
+      "when it cannot take a licence session: a free-plan key allows one browser at a time, " +
+      "so check that no other instance is using the same key, that the key is still valid " +
+      "in Settings, and that this host can reach the CloakBrowser licence service"
+    );
+  }
   if (/Failed to launch|ENOENT|no such file or directory/i.test(message)) {
     return "The browser binary could not be started. Re-download it from this panel.";
   }
@@ -2046,6 +2068,9 @@ async function attemptLoad(
     }
   })();
   let launched: LaunchedBrowser | undefined;
+  // Tells a browser that never started from one that started and then hit trouble: only
+  // the latter says anything about the exit.
+  let launchOk = false;
   // Renderer trouble the page reports on its own: a crashed tab or a main request
   // that never arrived both leave a blank page that otherwise looks challenge-free.
   const troubles: string[] = [];
@@ -2059,6 +2084,7 @@ async function attemptLoad(
     // The clock and language of the exit are launch flags, so this settles them before
     // anything on the target is loaded
     launched = await launchAlignedBrowser(proxyUrl, budgetDeadline);
+    launchOk = true;
     const page = launched.page;
 
     page.on("crash", () => note("page crashed"));
@@ -2293,6 +2319,19 @@ async function attemptLoad(
     } else {
       console.error(`[cloudflare] Failed to load ${finalHost}: ${msg}`);
     }
+    // A browser that never started is not the exit's doing, and no other exit can fix it
+    if (!launchOk) {
+      return {
+        ok: false,
+        challenged: false,
+        text: "",
+        finalHost,
+        reason: `${launchFailureReason(msg) ?? "the solver browser could not be started"} (${oneLine(msg).slice(0, 200)})`,
+        navError: msg,
+        exitRelated: false,
+        browserFailed: true,
+      };
+    }
     return {
       ok: false,
       challenged: false,
@@ -2358,7 +2397,8 @@ export async function loadCheckinUrl(
     }
 
     const result = await attemptLoad(target, candidate.url, opts, deadline);
-    if (!result.ok) refusedProxyIds.push(candidate.id);
+    // A browser that never started never used the exit, so it is not refused
+    if (!result.ok && !result.browserFailed) refusedProxyIds.push(candidate.id);
     trace.push(
       [
         `${candidate.label}: ${result.ok ? "ok" : "failed"}`,
@@ -2383,6 +2423,13 @@ export async function loadCheckinUrl(
       refusedProxyIds: [...refusedProxyIds],
     };
     if (result.ok) return last;
+
+    // The browser is what failed; working through the pool would only repeat it
+    if (result.browserFailed) {
+      trace.push("the solver browser could not start, so no exit was tried");
+      console.error("[cloudflare] the solver browser could not start; leaving the pool alone");
+      break;
+    }
 
     // Nothing another exit can do about a failure inside the app itself
     if (result.exitRelated === false) {

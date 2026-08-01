@@ -1153,6 +1153,10 @@ const zh = {
           label: "验证通过后的缓冲（毫秒）",
           hint: "验证清除后先等待这段时间，让页面完成跳转或重绘，再读取页面文字。",
         },
+        relaunchSettleMs: {
+          label: "同一授权密钥的重启间隔（毫秒）",
+          hint: "关闭浏览器后，再用同一个授权密钥启动下一个浏览器之前的等待时间。免费密钥同时只允许一个会话，授权服务器释放旧会话需要一点时间；若日志中出现浏览器启动即退出（SIGTRAP），可适当调大。",
+        },
         inAppStepMs: {
           label: "小程序内步骤间隔（毫秒）",
           hint: "多个小程序内操作之间的间隔，用于等待弹窗出现或列表重绘。",
@@ -2480,6 +2484,10 @@ const en: typeof zh = {
         settleMs: {
           label: "Pause after a challenge clears (ms)",
           hint: "Time to let a redirect or re-render finish before the page text is read.",
+        },
+        relaunchSettleMs: {
+          label: "Pause before relaunching on the same licence key (ms)",
+          hint: "Time between closing a browser and starting the next one on the same key. A free key allows one session at a time and the licence service needs a moment to release the old one; raise this if the log shows a browser quitting during startup (SIGTRAP).",
         },
         inAppStepMs: {
           label: "Pause between in-app steps (ms)",

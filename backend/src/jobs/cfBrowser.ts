@@ -131,7 +131,14 @@ function cachedBuilds(): CachedBuild[] {
 /** The build that would launch for `tier`, falling back to whatever is installed. */
 function resolvedBuild(tier?: BuildTier): CachedBuild | undefined {
   const builds = cachedBuilds();
-  return (tier ? builds.find((b) => b.tier === tier) : undefined) ?? builds[0];
+  if (!tier) return builds[0];
+  const exact = builds.find((b) => b.tier === tier);
+  if (exact) return exact;
+  // Standing in for the tier asked for is only safe one way round. A free build handed a
+  // key ignores it and runs; the keyed build asked to run without one refuses and quits
+  // during startup, which reaches the operator as a browser that closed itself with no
+  // stated reason and a page of Chromium log. So "free" is never served the keyed build.
+  return tier === "keyed" ? builds.find((b) => b.tier === "free") : undefined;
 }
 
 /**
@@ -684,6 +691,9 @@ export type LaunchedBrowser = {
  * Timezone and locale are passed to CloakBrowser rather than emulated over CDP, because
  * the binary applies them as launch flags -- CDP emulation is itself detectable.
  */
+/** Ceiling on a browser shutdown, so a wedged one cannot hold its licence seat. */
+const CLOSE_TIMEOUT_MS = 10_000;
+
 export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowser> {
   const tune = cfTuning();
   if (!isChromiumInstalled()) {
@@ -723,15 +733,26 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
   // The build that matches whether a key is in hand: a keyed binary declines to run
   // without one, and a free one has no use for it
   const executablePath = chromiumExecutable(lease.key ? "keyed" : "free");
+  if (!executablePath) {
+    proxy.close();
+    profile.release();
+    lease.release();
+    throw new Error(
+      "No licence seat was free and there is no unlicensed build installed to fall back " +
+        "on, so nothing here can run: the keyed build refuses to start without a key. " +
+        "Add another licence key in Settings so more solvers can run at once, or install " +
+        "the free build alongside the keyed one.",
+    );
+  }
 
-  try {
-    const { launchPersistentContext } = await cloak();
-    const context = await withBinaryPin(executablePath, () =>
+  const { launchPersistentContext } = await cloak();
+  const open = (exe: string | undefined, licenseKey?: string) =>
+    withBinaryPin(exe, () =>
       launchPersistentContext({
         userDataDir: profile.dir,
         headless: !display,
         proxy: proxy.proxy,
-        ...(lease.key ? { licenseKey: lease.key } : {}),
+        ...(licenseKey ? { licenseKey } : {}),
         // Human-like pointer curves and keystroke timing on the driver's own methods
         humanize: true,
         ...(geo?.tz ? { timezone: geo.tz } : {}),
@@ -766,10 +787,41 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
           "--disable-renderer-backgrounding",
           "--disable-background-timer-throttling",
         ],
-        launchOptions: { timeout: tune.navTimeoutMs, executablePath },
+        launchOptions: { timeout: tune.navTimeoutMs, executablePath: exe },
       }),
     );
 
+  let context: BrowserContext;
+  try {
+    context = await open(executablePath, lease.key);
+  } catch (err: any) {
+    // The keyed build takes its licence at startup and quits on the spot when it cannot
+    // hold a session -- another instance on the same key, or one the licence service has
+    // not finished tearing down. The free build needs no session, so falling back to it
+    // gets the job run instead of failing it outright over a seat.
+    const freeExe = lease.key ? chromiumExecutable("free") : undefined;
+    if (!freeExe) {
+      proxy.close();
+      profile.release();
+      lease.release();
+      throw err;
+    }
+    console.warn(
+      `[cfBrowser] the keyed browser could not start (${String(err?.message ?? err).split("\n")[0]}); ` +
+        "falling back to the free build for this run",
+    );
+    // Hand the seat straight back: this browser is not using it, and something else can
+    lease.release();
+    try {
+      context = await open(freeExe);
+    } catch (freeErr) {
+      proxy.close();
+      profile.release();
+      throw freeErr;
+    }
+  }
+
+  try {
     // Bounds every driver call, so one wedged renderer cannot swallow the step budget
     context.setDefaultTimeout(tune.protocolTimeoutMs);
     context.setDefaultNavigationTimeout(tune.navTimeoutMs);
@@ -791,7 +843,12 @@ export async function launchCfBrowser(proxyUrl?: string): Promise<LaunchedBrowse
       key,
       geo,
       close: async () => {
-        await context.close().catch(() => {});
+        // Bounded: a wedged renderer can leave close() pending, and everything below it --
+        // the licence seat above all -- would then be held for the life of the process.
+        await Promise.race([
+          context.close().catch(() => {}),
+          new Promise((r) => setTimeout(r, CLOSE_TIMEOUT_MS)),
+        ]);
         proxy.close();
         profile.release();
         lease.release();

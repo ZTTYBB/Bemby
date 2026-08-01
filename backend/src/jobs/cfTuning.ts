@@ -26,6 +26,11 @@ export type CfTuning = {
   confirmTimeoutMs: number;
   /** Pause after a challenge clears, before the page is read. */
   settleMs: number;
+  /**
+   * Pause between closing a browser and launching the next one on the same licence key.
+   * A key is one session at a time and the service needs a moment to release the old one.
+   */
+  relaunchSettleMs: number;
   /** Pause between in-app steps. */
   inAppStepMs: number;
   /** Pause after the last in-app step, for its request to round-trip. */
@@ -65,6 +70,7 @@ export const CF_TUNING_DEFAULTS: CfTuning = {
   postClickChallengeMs: 20_000,
   confirmTimeoutMs: 20_000,
   settleMs: 1_500,
+  relaunchSettleMs: 3_000,
   inAppStepMs: 1_200,
   inAppSettleMs: 4_000,
   pollMs: 1_000,
@@ -89,6 +95,7 @@ export const CF_TUNING_LIMITS: Record<keyof CfTuning, { min: number; max: number
   postClickChallengeMs: { min: 0, max: 180_000 },
   confirmTimeoutMs: { min: 0, max: 180_000 },
   settleMs: { min: 0, max: 60_000 },
+  relaunchSettleMs: { min: 0, max: 60_000 },
   inAppStepMs: { min: 0, max: 60_000 },
   inAppSettleMs: { min: 0, max: 60_000 },
   pollMs: { min: 200, max: 10_000 },

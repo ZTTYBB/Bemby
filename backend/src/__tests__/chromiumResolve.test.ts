@@ -118,6 +118,15 @@ describe("chromiumExecutable", () => {
     const free = fakeDownload("146.0.7680.177.5");
     expect(cf.chromiumExecutable("keyed")).toBe(free);
   });
+
+  // The reverse substitution is not safe, and used to happen: a launch with no seat asked
+  // for the free build, was handed the keyed one, and it quit during startup for want of a
+  // licence -- reported as a browser that closed itself, with a page of Chromium log.
+  it("never serves the keyed build to a launch that has no key", () => {
+    fakeDownload("150.0.7900.10.1", true);
+    expect(cf.chromiumExecutable("free")).toBeUndefined();
+    expect(cf.installedBuildTier()).toBe("keyed");
+  });
 });
 
 // A key is only worth something once the build behind it is on disk, and downloading is
