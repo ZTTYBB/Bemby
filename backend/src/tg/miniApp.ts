@@ -10,8 +10,12 @@ import { Api, TelegramClient } from "telegram";
 // app (`?startapp=`) or a command deep link (`?start=`), which need the same treatment
 // a real client gives them rather than being loaded as web pages.
 
-/** A t.me mini app link: `t.me/BotName[/AppShortName]?startapp=PARAM`. */
-export type MiniAppLink = { botUsername: string; appShortName?: string; startParam: string };
+/**
+ * A t.me mini app link: `t.me/BotName/AppShortName` or `t.me/BotName`, either of which may
+ * carry `?startapp=PARAM`. The parameter is how a bot hands the app a context (which
+ * giveaway, which group); plenty of apps have no use for one, so it is optional.
+ */
+export type MiniAppLink = { botUsername: string; appShortName?: string; startParam?: string };
 
 /** A t.me bot command deep link: `t.me/BotName?start=PARAM`. */
 export type BotStartLink = { botUsername: string; startParam: string };
@@ -31,25 +35,35 @@ export type WebButton = {
 };
 
 /**
- * Parses a t.me/BotName[/AppShortName]?startapp=PARAM mini app link.
- * The startapp value is percent-decoded and stripped of base64 padding:
- * Telegram only accepts [A-Za-z0-9_-] in start_param, so raw links carrying
- * %3D-encoded padding fail with START_PARAM_INVALID (issue seen with
- * telegram.me/.../panel?startapp=...%3D%3D).
+ * Parses a t.me mini app link: `t.me/BotName/AppShortName`, or `t.me/BotName`, with an
+ * optional `?startapp=PARAM` on either.
+ *
+ * What makes a link a mini app is the app short name or a start parameter -- a bare
+ * `t.me/BotName` is just a link to the bot, so it is not claimed here.
+ *
+ * The startapp value is percent-decoded and stripped of base64 padding: Telegram only
+ * accepts [A-Za-z0-9_-] in start_param, so raw links carrying %3D-encoded padding fail
+ * with START_PARAM_INVALID (issue seen with telegram.me/.../panel?startapp=...%3D%3D).
  */
 export function parseMiniAppLink(tmeOrUrl: string): MiniAppLink | null {
   const m = tmeOrUrl.match(
-    /t(?:elegram)?\.me\/([A-Za-z]\w+)(?:\/([A-Za-z]\w+))?\?startapp=([^&\s]+)/i,
+    /t(?:elegram)?\.me\/([A-Za-z]\w+)(?:\/([A-Za-z]\w+))?(?:\?startapp=([^&\s]*))?/i,
   );
   if (!m) return null;
-  let startParam = m[3];
-  try {
-    startParam = decodeURIComponent(startParam);
-  } catch {
-    // Malformed escape sequence -- keep the raw value
+  const [, botUsername, appShortName, rawParam] = m;
+  // Neither an app to open nor a parameter to open one with: this is a bot link
+  if (!appShortName && !rawParam) return null;
+
+  let startParam = rawParam;
+  if (startParam) {
+    try {
+      startParam = decodeURIComponent(startParam);
+    } catch {
+      // Malformed escape sequence -- keep the raw value
+    }
+    startParam = startParam.replace(/=+$/, "");
   }
-  startParam = startParam.replace(/=+$/, "");
-  return { botUsername: m[1], appShortName: m[2], startParam };
+  return { botUsername, appShortName, ...(startParam ? { startParam } : {}) };
 }
 
 /**
@@ -102,7 +116,7 @@ async function resolveMiniAppLink(
             botId: new Api.InputUser({ userId: bot.id, accessHash: bot.accessHash! }),
             shortName: link.appShortName,
           }),
-          startParam: link.startParam,
+          ...(link.startParam ? { startParam: link.startParam } : {}),
           platform: "web",
           writeAllowed: true,
         }),
@@ -114,7 +128,7 @@ async function resolveMiniAppLink(
           peer: bot,
           bot,
           platform: "web",
-          startParam: link.startParam,
+          ...(link.startParam ? { startParam: link.startParam } : {}),
         }),
       )) as Api.WebViewResultUrl;
       if (res?.url) return { url: res.url, resolved: true };
