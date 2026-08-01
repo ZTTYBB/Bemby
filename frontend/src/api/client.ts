@@ -1091,6 +1091,8 @@ export type Settings = {
   cf_browsers_running?: string;
   /** Server-computed JSON: every installed build, with its tier, version and path. */
   cf_chromium_builds?: string;
+  /** Server-computed: how many browser profiles are on disk. */
+  cf_profile_count?: string;
   /** Server-computed: "true" when the CJK/emoji faces are in the data dir. */
   cf_fonts_installed?: string;
   /** Server-computed: comma-separated faces still to download. */
@@ -1146,6 +1148,13 @@ export const settingsApi = {
   stopCfBrowsers: () =>
     api
       .post<{ ok: boolean; stopped: number }>("/settings/cf-solver/stop")
+      .then((r) => r.data),
+  /** Deletes the per-exit browser profiles (cookies, cache, site data). */
+  clearCfProfiles: () =>
+    api
+      .post<{ ok: boolean; removed?: number; message?: string }>(
+        "/settings/cf-solver/clear-profiles",
+      )
       .then((r) => r.data),
   /** Deletes every downloaded browser build, reclaiming the space in the data dir. */
   uninstallCfSolver: () =>

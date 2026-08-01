@@ -31,7 +31,9 @@ import {
 } from "../jobs/cfLicense";
 import {
   cfBrowsersRunning,
+  cfProfileCount,
   checkCfLicenseKey,
+  clearCfProfiles,
   chromiumExecutable,
   chromiumPath,
   installedBuildTier,
@@ -141,6 +143,9 @@ function getClientSettings(): Record<string, string> {
   result.cf_chromium_free_installed = chromiumExecutable("free") ? "true" : "false";
   // Every build on disk, so the panel can list the keyed and free ones side by side
   result.cf_chromium_builds = JSON.stringify(installedCfBuilds());
+  // Browser profiles on disk: state carried between runs, and the thing to clear when a
+  // browser starts failing for no reason that changed elsewhere
+  result.cf_profile_count = String(cfProfileCount());
   // How many solver browsers are open right now, so the panel can offer to stop them
   result.cf_browsers_running = String(cfBrowsersRunning());
   // The CJK/emoji faces are not in the image either; they sit beside the browser in the
@@ -326,6 +331,18 @@ router.post("/cf-solver/keys/check", async (_req, res) => {
 router.post("/cf-solver/stop", async (_req, res) => {
   const result = await stopAllCfBrowsers();
   res.json({ ok: true, stopped: result.stopped });
+});
+
+// POST /cf-solver/clear-profiles -- delete the per-exit browser profiles (cookies, cache,
+// site data). Nothing identifying goes with them: the fingerprint is derived from the exit,
+// not stored here. Refused while a browser still has one open.
+router.post("/cf-solver/clear-profiles", (_req, res) => {
+  const result = clearCfProfiles();
+  if (result.error) {
+    res.status(409).json({ ok: false, removed: result.removed, message: result.error });
+    return;
+  }
+  res.json({ ok: true, removed: result.removed });
 });
 
 // POST /cf-solver/uninstall -- delete every downloaded browser build, reclaiming the

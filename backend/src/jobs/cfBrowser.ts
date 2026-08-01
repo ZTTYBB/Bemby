@@ -365,6 +365,67 @@ function removeBuild(tier: BuildTier): string | undefined {
  * licence key is free at the time.
  */
 /**
+ * Deletes every browser profile: the cookies, cache and site data each exit has built up.
+ *
+ * Worth having as a button because a profile is the one piece of state a run carries over
+ * from the last one, so it is what to clear when a browser has started failing for no
+ * reason that changed elsewhere -- a half-written profile from a browser that was killed
+ * can keep Chromium from starting at all. Nothing identifying is lost: the fingerprint
+ * comes from a seed derived from the exit, not from the profile, so each exit comes back
+ * as the same machine.
+ */
+export function clearCfProfiles(): { removed: number; error?: string } {
+  if (liveBrowsers.size > 0) {
+    return {
+      removed: 0,
+      error:
+        `${liveBrowsers.size} browser(s) are still running and are using their profiles. ` +
+        "Stop the browsers first, then try again.",
+    };
+  }
+  let names: string[];
+  try {
+    names = readdirSync(cfProfilesRoot());
+  } catch (err: any) {
+    // A missing directory is nothing to clear rather than a failure
+    if (err?.code === "ENOENT") return { removed: 0 };
+    return { removed: 0, error: `Could not read ${cfProfilesRoot()}: ${err?.message ?? err}` };
+  }
+
+  // Each profile stands alone, so one that cannot be removed must not hold up the rest --
+  // clearing the others is the point of the exercise.
+  let removed = 0;
+  const failed: string[] = [];
+  let firstError = "";
+  for (const name of names) {
+    try {
+      rmSync(path.join(cfProfilesRoot(), name), { recursive: true, force: true });
+      removed++;
+    } catch (err: any) {
+      failed.push(name);
+      firstError ||= err?.message ?? String(err);
+    }
+  }
+  profilesInUse.clear();
+  if (failed.length) {
+    return {
+      removed,
+      error: `${removed} cleared, ${failed.length} could not be removed (${firstError})`,
+    };
+  }
+  return { removed };
+}
+
+/** How many browser profiles are on disk, for the settings page. */
+export function cfProfileCount(): number {
+  try {
+    return readdirSync(cfProfilesRoot()).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Deletes every downloaded build, freeing the ~200MB each takes in the data dir. The
  * solver has nothing to launch afterwards, so this is the counterpart of the download
  * button rather than something a job ever does.

@@ -236,12 +236,21 @@
             <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
               <button
                 class="btn btn-ghost btn-sm cf-uninstall-btn"
-                :disabled="cfInstalling || cfTesting || cfUninstalling || cfStopping"
+                :disabled="cfInstalling || cfTesting || cfUninstalling || cfStopping || cfClearingProfiles"
                 @click="stopCfBrowsers"
               >
                 <i class="fa-solid fa-hand"></i>
                 {{ cfStopping ? t("settings.cfSolver.stopping") : t("settings.cfSolver.stopBtn") }}
                 <template v-if="cfBrowsersRunning > 0"> ({{ cfBrowsersRunning }})</template>
+              </button>
+              <button
+                class="btn btn-ghost btn-sm cf-uninstall-btn"
+                :disabled="cfInstalling || cfTesting || cfUninstalling || cfStopping || cfClearingProfiles"
+                @click="clearCfProfiles"
+              >
+                <i class="fa-solid fa-eraser"></i>
+                {{ cfClearingProfiles ? t("settings.cfSolver.clearingProfiles") : t("settings.cfSolver.clearProfilesBtn") }}
+                <template v-if="cfProfileCount > 0"> ({{ cfProfileCount }})</template>
               </button>
               <button
                 class="btn btn-ghost btn-sm cf-uninstall-btn"
@@ -253,7 +262,9 @@
               </button>
             </div>
             <div style="font-size: 11px; color: #888; margin-top: 6px">
-              {{ t("settings.cfSolver.stopHint") }} {{ t("settings.cfSolver.uninstallHint") }}
+              {{ t("settings.cfSolver.stopHint") }}
+              {{ t("settings.cfSolver.clearProfilesHint") }}
+              {{ t("settings.cfSolver.uninstallHint") }}
             </div>
           </div>
           <div v-if="cfTestWarnings.length" class="error-msg" style="margin-top: 8px">
@@ -1930,6 +1941,7 @@ async function refreshCfBuildState() {
     cfFreeInstalled.value = fresh.cf_chromium_free_installed === "true";
     cfBrowsersRunning.value = Number(fresh.cf_browsers_running ?? 0);
     cfBuilds.value = parseCfBuilds(fresh.cf_chromium_builds);
+    cfProfileCount.value = Number(fresh.cf_profile_count ?? 0);
     cfChromiumVersion.value = fresh.cf_chromium_version ?? "";
   } catch {
     /* the panel keeps what it has */
@@ -1998,6 +2010,8 @@ function resetCfTuning() {
 
 const cfUninstalling = ref(false);
 const cfStopping = ref(false);
+const cfClearingProfiles = ref(false);
+const cfProfileCount = ref(0);
 const cfBrowsersRunning = ref(0);
 type CfBuild = { tier: "keyed" | "free"; version: string; path: string; preferred: boolean };
 const cfBuilds = ref<CfBuild[]>([]);
@@ -2027,6 +2041,33 @@ async function stopCfBrowsers() {
       e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.stopFailed");
   } finally {
     cfStopping.value = false;
+  }
+}
+
+/**
+ * Deletes the per-exit profiles. Cookies and cache go; the browser identity does not, since
+ * the fingerprint comes from the exit rather than the profile.
+ */
+async function clearCfProfiles() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfClearingProfiles.value = true;
+  try {
+    const res = await settingsApi.clearCfProfiles();
+    if (res.ok) {
+      cfInstallMsg.value = t("settings.cfSolver.profilesCleared").replace(
+        "{n}",
+        String(res.removed ?? 0),
+      );
+      await refreshCfBuildState();
+    } else {
+      cfInstallError.value = res.message ?? t("settings.cfSolver.clearProfilesFailed");
+    }
+  } catch (e: any) {
+    cfInstallError.value =
+      e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.clearProfilesFailed");
+  } finally {
+    cfClearingProfiles.value = false;
   }
 }
 
@@ -2510,6 +2551,7 @@ onMounted(async () => {
     cfFreeInstalled.value = s.cf_chromium_free_installed === "true";
     cfBrowsersRunning.value = Number(s.cf_browsers_running ?? 0);
     cfBuilds.value = parseCfBuilds(s.cf_chromium_builds);
+    cfProfileCount.value = Number(s.cf_profile_count ?? 0);
     cfChromiumPath.value = s.cf_chromium_path ?? "";
     cfKeyedPending.value = s.cf_chromium_keyed_pending === "true";
     cfFontsInstalled.value = s.cf_fonts_installed === "true";
