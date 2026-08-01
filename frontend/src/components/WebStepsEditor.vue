@@ -97,19 +97,23 @@
         </div>
       </div>
 
-      <div v-if="s.type === 'ai_web_button' || s.type === 'ai_web_input'">
+      <div v-if="s.type === 'web_turnstile'" style="font-size: 11px; color: #aaa">
+        {{ t("jobs.web.turnstileHint") }}
+      </div>
+
+      <div
+        v-if="
+          s.type === 'ai_web_button' || s.type === 'ai_web_input' || s.type === 'ai_web_click_xy'
+        "
+      >
         <label class="form-label">{{ t("jobs.web.labelHint") }}</label>
         <input
           v-model.trim="s.hint"
           class="form-input"
-          :placeholder="
-            s.type === 'ai_web_button'
-              ? t('jobs.web.hintButtonPlaceholder')
-              : t('jobs.web.hintInputPlaceholder')
-          "
+          :placeholder="hintPlaceholder(s.type)"
         />
         <div style="font-size: 11px; color: #aaa; margin-top: 3px">
-          {{ t("jobs.web.hintHint") }}
+          {{ s.type === "ai_web_click_xy" ? t("jobs.web.hintXyHint") : t("jobs.web.hintHint") }}
         </div>
       </div>
 
@@ -139,11 +143,18 @@ import {
   WEB_STEP_TYPES,
   defaultWebStep,
   type WebStepForm,
+  type WebStepType,
 } from "../composables/webSteps";
 
 // The list is mutated in place: the parent holds it inside its own action form object, so
 // emitting a replacement would mean threading an update back through the action index.
 const props = defineProps<{ steps: WebStepForm[]; aiKeyMissing: boolean }>();
+
+function hintPlaceholder(type: WebStepType): string {
+  if (type === "ai_web_input") return t("jobs.web.hintInputPlaceholder");
+  if (type === "ai_web_click_xy") return t("jobs.web.hintXyPlaceholder");
+  return t("jobs.web.hintButtonPlaceholder");
+}
 
 function add() {
   props.steps.push(defaultWebStep());

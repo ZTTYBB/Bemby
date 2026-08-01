@@ -429,7 +429,9 @@ export type WebStep =
   | { type: "web_delay"; waitMs: number }
   | { type: "web_scroll"; x?: number; y?: number }
   | { type: "web_wait_element"; selector: string; waitMs?: number }
+  | { type: "web_turnstile" }
   | { type: "ai_web_button"; hint?: string }
+  | { type: "ai_web_click_xy"; hint?: string }
   | { type: "ai_web_input"; hint?: string; text?: string };
 
 /** What one `open_url` sub-step did, with the page as it looked afterwards. */
@@ -1910,16 +1912,21 @@ export const tgClientApi = {
     url: string,
     botChatId?: string | null,
     peerChatId?: string | null,
+    /** The address came from the bot's menu button; Telegram signs that case only when told. */
+    fromBotMenu?: boolean,
   ) =>
     api
       .post<{
         webAppUrl: string;
         resolved: boolean;
         frameable: boolean;
+        /** Telegram attached the account data. False means the app will load logged out. */
+        signed: boolean;
       }>(`/tg-client/${accountId}/webview/resolve`, {
         url,
         botChatId,
         peerChatId,
+        fromBotMenu,
       })
       .then((r) => r.data),
 };

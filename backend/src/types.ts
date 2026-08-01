@@ -237,9 +237,12 @@ export type CustomAction =
 /**
  * One sub-step of `open_url`, run against the loaded page.
  *
- * The two `ai_*` variants hand a screenshot to the vision model rather than naming an
- * element: the interactive elements are numbered on the shot first, so what comes back is
- * a marker to press rather than a raw pixel guess, and the click lands on a real element.
+ * The `ai_*` variants hand a screenshot to the vision model rather than naming an element.
+ * `ai_web_button` and `ai_web_input` number the interactive elements on the shot first, so
+ * what comes back is a marker to press rather than a raw pixel guess, and the click lands
+ * on a real element. `ai_web_click_xy` asks for a position instead, for what that cannot
+ * reach: a control inside a cross-origin iframe or a closed shadow root (a Turnstile
+ * checkbox), or one painted on a canvas, none of which any selector can number.
  */
 export type WebStep =
   | {
@@ -284,6 +287,25 @@ export type WebStep =
       /** AI reads a screenshot and decides which control to press. */
       type: "ai_web_button";
       /** Optional steer, e.g. "the login button". Blank lets the AI judge on its own. */
+      hint?: string;
+    }
+  | {
+      /**
+       * Press a Cloudflare Turnstile checkbox on the page ("Verify you are human"), wherever
+       * it sits. No AI: the widget is found through the browser's own protocol, which reaches
+       * inside the cross-origin frame it draws in, and the checkbox is clicked at its known
+       * place in the widget. Prefer this to `ai_web_click_xy` for a Turnstile.
+       */
+      type: "web_turnstile";
+    }
+  | {
+      /**
+       * AI reads a screenshot and gives back a pixel position, which is clicked exactly.
+       * The page is ruled with a labelled grid before the shot so the figure is read off
+       * the picture rather than estimated.
+       */
+      type: "ai_web_click_xy";
+      /** Optional steer, e.g. "the verify-you-are-human checkbox". Blank lets the AI judge. */
       hint?: string;
     }
   | {

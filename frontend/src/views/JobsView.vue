@@ -1359,10 +1359,14 @@ const saving = ref(false);
 const aiKeyMissing = computed(() => settings.value?.ai_key_configured !== 'true');
 // Anything that opens a page needs the solver's browser and its fonts in the data dir;
 // neither ships in the image, so those options stay off until both are downloaded.
+// Only ever true once the settings have actually arrived. Null means they have not (the
+// load is fire-and-forget and swallows its errors), and reading that as "no browser" greys
+// the actions out with a label saying something untrue about the machine.
 const cfBrowserMissing = computed(
   () =>
-    settings.value?.cf_chromium_installed !== 'true' ||
-    settings.value?.cf_fonts_installed !== 'true',
+    !!settings.value &&
+    (settings.value.cf_chromium_installed !== 'true' ||
+      settings.value.cf_fonts_installed !== 'true'),
 );
 
 const CMD_PRESETS = new Set(['', '/start', '/checkin'])
@@ -1689,6 +1693,9 @@ function fmtDayLabel(d: Date) {
 }
 
 function openAdd() {
+  // Re-read on the way in: the browser and its fonts are installed from the settings page,
+  // and the copy taken when this view mounted would still say they are not there
+  void loadSettings();
   editTarget.value = null;
   Object.assign(form, {
     name: '', accountId: accounts.value[0]?.id ?? null,
@@ -1717,6 +1724,7 @@ function openAdd() {
 }
 
 function openEdit(j: Job) {
+  void loadSettings();
   editTarget.value = j;
   Object.assign(form, {
     name: j.name, accountId: j.accountId, jobType: j.jobType,

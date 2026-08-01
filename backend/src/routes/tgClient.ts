@@ -860,10 +860,11 @@ router.get("/:accountId/bot-info/:chatId", async (req, res) => {
 // POST /:accountId/webview/resolve -- resolve a mini app URL to an authenticated web app URL
 router.post("/:accountId/webview/resolve", async (req, res) => {
   const accountId = Number(req.params.accountId);
-  const { url, botChatId, peerChatId } = req.body as {
+  const { url, botChatId, peerChatId, fromBotMenu } = req.body as {
     url: string;
     botChatId?: string;
     peerChatId?: string;
+    fromBotMenu?: boolean;
   };
   if (!url) {
     res.status(400).json({ error: "url required" });
@@ -876,13 +877,24 @@ router.post("/:accountId/webview/resolve", async (req, res) => {
       url,
       botChatId,
       peerChatId,
+      fromBotMenu,
     );
+    // Telegram answering at all is not the same as Telegram signing the address: a request
+    // made the wrong way comes back with a URL and no account data in it, and the only sign
+    // of that used to be the app itself failing on "No initData found" once it had loaded.
+    const signed = /[#&]tgWebAppData=/.test(webAppUrl);
+    if (resolved && !signed) {
+      console.warn(
+        `[tg-client] webview resolve returned no account data for ${new URL(webAppUrl).host}` +
+          `${fromBotMenu ? " (menu button)" : ""} -- the app will load logged out`,
+      );
+    }
     // Probed even when Telegram signed the URL. A signed URL is not a frameable one: apps
     // increasingly send `frame-ancestors 'self' https://web.telegram.org` (or X-Frame-Options
     // SAMEORIGIN), which keeps working in Telegram's own clients while our origin is refused.
     // Assuming otherwise showed the operator a dead panel reading "refused to connect".
     const frameable = await isFrameable(webAppUrl);
-    res.json({ webAppUrl, resolved, frameable });
+    res.json({ webAppUrl, resolved, frameable, signed });
   } catch (err: any) {
     tgError(err, accountId, res);
   }

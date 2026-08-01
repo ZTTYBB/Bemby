@@ -34,13 +34,12 @@ import {
 import {
   openableButtonUrl,
   openableMiniAppUrl,
-  parseMiniAppLink,
   webButtonOf,
   type WebButton,
 } from "../tg/miniApp";
 import { cfMaxCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
 import { cfTuning } from "./cfTuning";
-import type { CustomConfig, CustomStepLog } from "../types";
+import type { CustomAction, CustomConfig, CustomStepLog } from "../types";
 
 export type CustomJobLog = {
   steps: CustomStepLog[];
@@ -663,6 +662,41 @@ async function waitForButtonsMessage(
   });
 }
 
+/**
+ * The first step that cannot run without a target bot, or null when the job is fine as it
+ * stands. A custom job need not target one: its steps can each name their own contact, or
+ * drive a page that never touches Telegram. Checked up front rather than failing later on a
+ * peer that cannot be resolved from "".
+ *
+ * `open_mini_app_url` is deliberately not on the list. It is handed a full address, and one
+ * is openable without a bot to sign it -- a `t.me/<bot>/<app>` link names its own bot, an
+ * https one may already carry its account data, and an app that signs its own users in
+ * needs neither. Naming no bot is the operator saying so; the step opens the address on
+ * this account's browser and exit, and says in the log that it went unsigned.
+ */
+export function stepNeedingBot(
+  actions: CustomAction[],
+  botUsername: string,
+): { at: number; type: CustomAction["type"] } | null {
+  if (botUsername.trim()) return null;
+  const at = actions.findIndex((a) => {
+    switch (a.type) {
+      case "open_mini_app":
+        return !a.contact?.trim();
+      case "open_mini_app_url":
+      case "send_contact_message":
+      case "join_group":
+      case "subscribe_channel":
+      case "open_url":
+      case "delay":
+        return false;
+      default:
+        return true;
+    }
+  });
+  return at >= 0 ? { at, type: actions[at].type } : null;
+}
+
 export async function runCustom(
   apiId: number,
   apiHash: string,
@@ -680,34 +714,12 @@ export async function runCustom(
   const log: CustomJobLog = { steps: [] };
   const jobMaxRetries = config.maxRetries ?? 1;
 
-  // A custom job need not target a bot: its steps can each name their own contact, or
-  // drive a page that never touches Telegram. The ones that do fall back to it are named
-  // here, rather than failing later on a peer that cannot be resolved from "".
-  if (!botUsername.trim()) {
-    const actions = config.actions ?? [];
-    const at = actions.findIndex((a) => {
-      switch (a.type) {
-        case "open_mini_app":
-          return !a.contact?.trim();
-        case "open_mini_app_url":
-          // A t.me/<bot>/<app> link names its own bot, so it needs no fallback
-          return !a.contact?.trim() && !parseMiniAppLink(a.url ?? "");
-        case "send_contact_message":
-        case "join_group":
-        case "subscribe_channel":
-        case "open_url":
-        case "delay":
-          return false;
-        default:
-          return true;
-      }
-    });
-    if (at >= 0) {
-      throw new Error(
-        `Step ${at + 1} (${actions[at].type}) needs a target bot, but this job has none. ` +
-          "Set one on the job, or give the step its own contact.",
-      );
-    }
+  const missing = stepNeedingBot(config.actions ?? [], botUsername);
+  if (missing) {
+    throw new Error(
+      `Step ${missing.at + 1} (${missing.type}) needs a target bot, but this job has none. ` +
+        "Set one on the job, or give the step its own contact.",
+    );
   }
 
   const client = new TelegramClient(
@@ -2502,18 +2514,31 @@ export async function runCustom(
                 if (!rawUrl) throw new Error("This action needs a Mini App URL");
                 // Blank names the job's own bot, which is the common case: a template set
                 // up for one bot works for every account linked to it
-                const owner = action.contact?.trim() || botUsername;
+                const owner = action.contact?.trim() || botUsername.trim();
                 step.label = `Open Mini App ${rawUrl}`;
 
-                const { url, signed } = await openableMiniAppUrl(client, rawUrl, owner);
+                // An address that already carries its account data needs no signing: it is
+                // what Telegram would have handed back anyway
+                const carriesAccount = /[#&]tgWebAppData=/.test(rawUrl);
+                const { url, signed } = await openableMiniAppUrl(
+                  client,
+                  rawUrl,
+                  owner || undefined,
+                );
                 step.cfMiniApp = true;
-                step.cfMiniAppSigned = signed;
-                if (!signed) {
+                step.cfMiniAppSigned = signed || carriesAccount;
+
+                // Naming a bot and being refused by it is a misconfiguration worth stopping
+                // for. Naming none is a deliberate choice -- the page is opened on this
+                // account's browser and exit as it stands, which is all some apps need.
+                if (!signed && owner) {
                   throw new Error(
                     `Telegram would not sign this Mini App URL through ${owner}, so it cannot be ` +
-                      "opened logged in. Check the bot owns the app, or use its t.me/<bot>/<app> link.",
+                      "opened logged in. Check the bot owns the app, use its t.me/<bot>/<app> link, " +
+                      "or clear the contact to open the address as it stands.",
                   );
                 }
+                const unsigned = !signed && !carriesAccount;
 
                 const cfHost = (() => {
                   try {
@@ -2596,9 +2621,12 @@ export async function runCustom(
                     cf.reason ?? cfFailureFallback(cf.challenged, true),
                   );
                 }
+                // Said plainly: an app that turns out to need an account will fail inside
+                // the page, and "opened, nothing pressed" alone would not explain why
+                const how = unsigned ? " (no bot named, so opened without account data)" : "";
                 step.result = cf.inAppAction
-                  ? `Opened the Mini App, pressed "${cf.inAppAction}"`
-                  : "Opened the Mini App (nothing pressed inside it)";
+                  ? `Opened the Mini App, pressed "${cf.inAppAction}"${how}`
+                  : `Opened the Mini App (nothing pressed inside it)${how}`;
 
                 if (action.failContains && cf.text.includes(action.failContains)) {
                   throw new Error(`Page indicates failure: "${action.failContains}" detected`);

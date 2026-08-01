@@ -721,7 +721,7 @@ const zh = {
       checkSubscriptionHint: "勾选后，在发送订阅请求前先检查是否已订阅（已订阅则直接成功）；发送请求后再次验证，根据是否成功订阅标记任务成功或失败",
       labelMiniAppUrl: "小程序链接",
       miniAppUrlPlaceholder: "例：https://t.me/YourBot/app?startapp=xxx",
-      miniAppUrlHint: "直接指定要打开的小程序地址，不再去聊天记录里找按钮。链接会由 Telegram 按本任务的账户签名，小程序看到的就是该账户。填 t.me/<机器人>/<应用> 链接时机器人从链接中读取；填普通 https 地址时用下方“所属机器人”签名。注意：带一次性参数（如 Verify UUID）的链接很快会失效，请填固定的应用入口链接",
+      miniAppUrlHint: "直接指定要打开的小程序地址，不再去聊天记录里找按钮。填 t.me/<机器人>/<应用> 链接时机器人从链接中读取；填普通 https 地址时用下方“所属机器人”签名，由 Telegram 按本任务的账户签名，小程序看到的就是该账户。不填任何机器人（任务和步骤都不填）时，直接用本账户的浏览器和代理打开该地址，不带账户签名——适用于地址本身已带 tgWebAppData 或应用自行鉴权的情况。注意：带一次性参数（如 Verify UUID）的链接很快会失效，请填固定的应用入口链接",
       labelMiniAppOwner: "所属机器人（可选）",
       miniAppOwnerHint: "拥有该小程序的机器人，用于签名。留空则使用本任务的机器人；填 t.me 链接时可忽略",
       labelMiniAppButton: "小程序按钮文字（可选）",
@@ -753,8 +753,10 @@ const zh = {
         web_delay: "等待固定时间",
         web_scroll: "滚动页面（按像素）",
         web_wait_element: "等待元素出现（CSS 选择器）",
+        web_turnstile: "点击 Turnstile 人机验证复选框",
         ai_web_input: "AI 输入文本（看截图判断）",
         ai_web_button: "AI 点击按钮（看截图判断）",
+        ai_web_click_xy: "AI 点击坐标（看截图定位像素）",
       },
       labelSelector: "CSS 选择器",
       selectorPlaceholder: "#username 或 button.submit",
@@ -770,11 +772,16 @@ const zh = {
       labelScrollY: "纵向滚动（像素）",
       scrollHint:
         "把屏幕外的元素滚动到可见区域，便于后续步骤操作。正数向下 / 向右，负数向上 / 向左，0 表示该方向不动；数值超过页面长度时直接滚到尽头，例如纵向填 99999 即滚到底部。页面自身不可滚动时会自动滚动页面中最大的可滚动区域",
+      turnstileHint:
+        "无需任何配置：通过浏览器协议定位 Turnstile 组件（可穿透其跨域 iframe），并点击复选框所在位置。页面上是 Turnstile 时请优先用本步骤，比让 AI 判断坐标更可靠",
       labelHint: "AI 提示（可选）",
       hintButtonPlaceholder: "例如：登录按钮",
       hintInputPlaceholder: "例如：密码输入框",
       hintHint:
         "留空则由 AI 自行判断该点哪里。截图中所有候选元素会被编号标注，AI 只需回复编号，因此点击一定落在真实元素上",
+      hintXyPlaceholder: "例如：Verify you are human 的复选框",
+      hintXyHint:
+        "截图上会画出 100 像素的红色网格，AI 读出目标中心的像素坐标，浏览器直接点击该坐标。适用于编号方式够不到的元素，例如 Cloudflare Turnstile 复选框（位于跨域 iframe 或 shadow root 内）、canvas 绘制的控件。留空则由 AI 自行判断该点哪里",
       labelAiText: "输入内容（可选）",
       aiTextPlaceholder: "留空则由 AI 从页面判断",
       aiTextHint: "留空时 AI 会根据页面内容决定输入什么，例如读取图形验证码或回答页面提出的问题",
@@ -2068,7 +2075,7 @@ const en: typeof zh = {
       checkSubscriptionHint: "When enabled, checks subscription before sending a join request (success if already subscribed); after the request is sent, re-verifies subscription and marks the action as success or failed accordingly",
       labelMiniAppUrl: "Mini App URL",
       miniAppUrlPlaceholder: "e.g. https://t.me/YourBot/app?startapp=xxx",
-      miniAppUrlHint: "The address to open, instead of hunting for a button in the chat. Telegram signs it for this job's own account, so the app sees that user -- which is what lets one template serve many accounts. A t.me/<bot>/<app> link names its own bot; a plain https address is signed through the bot below. Note that a link carrying a one-off parameter (a Verify UUID, say) expires quickly -- use a stable app entry point",
+      miniAppUrlHint: "The address to open, instead of hunting for a button in the chat. A t.me/<bot>/<app> link names its own bot; a plain https address is signed through the bot below, by Telegram and for this job's own account, which is what lets one template serve many accounts. With no bot named anywhere (neither on the job nor here) the address is opened as it stands on this account's browser and exit, with no account data attached -- for an address that already carries its own tgWebAppData, or an app that signs its users in itself. Note that a link carrying a one-off parameter (a Verify UUID, say) expires quickly -- use a stable app entry point",
       labelMiniAppOwner: "Owning bot (optional)",
       miniAppOwnerHint: "The bot that owns the Mini App, used to sign the URL. Blank uses the job's own bot; ignored for a t.me link",
       labelMiniAppButton: "Mini App button text (optional)",
@@ -2101,8 +2108,10 @@ const en: typeof zh = {
         web_delay: "Wait a fixed time",
         web_scroll: "Scroll the page (pixels)",
         web_wait_element: "Wait for an element (CSS selector)",
+        web_turnstile: "Press the Turnstile checkbox",
         ai_web_input: "AI fills a field (from a screenshot)",
         ai_web_button: "AI presses a control (from a screenshot)",
+        ai_web_click_xy: "AI clicks a position (pixels from a screenshot)",
       },
       labelSelector: "CSS selector",
       selectorPlaceholder: "#username or button.submit",
@@ -2120,11 +2129,16 @@ const en: typeof zh = {
       labelScrollY: "Scroll down (px)",
       scrollHint:
         "Brings something off screen into reach of the steps that follow. Positive scrolls down / right, negative scrolls back, 0 leaves that axis alone. A figure past the end of the page simply lands at the end, so 99999 down goes to the bottom. If the page itself does not scroll, its largest scrollable area is moved instead",
+      turnstileHint:
+        "Nothing to configure: the widget is found through the browser's own protocol, which reaches inside the cross-origin frame Turnstile draws in, and the checkbox is pressed where it sits. Prefer this over the AI position step whenever the page uses Turnstile",
       labelHint: "AI hint (optional)",
       hintButtonPlaceholder: "e.g. the login button",
       hintInputPlaceholder: "e.g. the password box",
       hintHint:
         "Leave blank to let the AI judge on its own. Every candidate element is outlined and numbered on the screenshot and the AI replies with a number, so the press always lands on a real element",
+      hintXyPlaceholder: "e.g. the \"Verify you are human\" checkbox",
+      hintXyHint:
+        "The screenshot is ruled with a red 100px grid, the AI reads off the pixel position at the centre of the target, and the browser clicks exactly there. For anything the numbered approach cannot reach: a Cloudflare Turnstile checkbox (it sits in a cross-origin iframe or a shadow root), or a control painted on a canvas. Leave blank to let the AI judge on its own",
       labelAiText: "Text to type (optional)",
       aiTextPlaceholder: "Blank lets the AI decide from the page",
       aiTextHint:

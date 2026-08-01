@@ -23,12 +23,18 @@ export const WEB_STEP_TYPES: WebStepType[] = [
   "web_wait_element",
   "web_delay",
   "web_scroll",
+  "web_turnstile",
   "ai_web_input",
   "ai_web_button",
+  "ai_web_click_xy",
 ];
 
 /** Types that need the vision model, so the editor can gate them on a configured key. */
-export const AI_WEB_STEP_TYPES: WebStepType[] = ["ai_web_input", "ai_web_button"];
+export const AI_WEB_STEP_TYPES: WebStepType[] = [
+  "ai_web_input",
+  "ai_web_button",
+  "ai_web_click_xy",
+];
 
 export function defaultWebStep(): WebStepForm {
   return {
@@ -51,6 +57,8 @@ export function webStepToConfig(s: WebStepForm): WebStep {
       return { type: "web_button", selector: s.selector.trim() };
     case "web_delay":
       return { type: "web_delay", waitMs: s.waitMs };
+    case "web_turnstile":
+      return { type: "web_turnstile" };
     case "web_scroll":
       return {
         type: "web_scroll",
@@ -65,6 +73,8 @@ export function webStepToConfig(s: WebStepForm): WebStep {
       };
     case "ai_web_button":
       return { type: "ai_web_button", ...(s.hint.trim() ? { hint: s.hint.trim() } : {}) };
+    case "ai_web_click_xy":
+      return { type: "ai_web_click_xy", ...(s.hint.trim() ? { hint: s.hint.trim() } : {}) };
     case "ai_web_input":
       return {
         type: "ai_web_input",
@@ -88,11 +98,14 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
       return { ...base, type: s.type, selector: s.selector };
     case "web_delay":
       return { ...base, type: s.type, waitMs: s.waitMs };
+    case "web_turnstile":
+      return { ...base, type: s.type };
     case "web_scroll":
       return { ...base, type: s.type, scrollX: s.x ?? 0, scrollY: s.y ?? 0 };
     case "web_wait_element":
       return { ...base, type: s.type, selector: s.selector, waitMs: s.waitMs ?? 30000 };
     case "ai_web_button":
+    case "ai_web_click_xy":
       return { ...base, type: s.type, hint: s.hint ?? "" };
     case "ai_web_input":
       return { ...base, type: s.type, hint: s.hint ?? "", text: s.text ?? "" };

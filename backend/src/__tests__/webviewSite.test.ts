@@ -14,10 +14,12 @@ vi.mock("../tg/safeFetch", async () => {
 });
 
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { chromium } from "playwright-core";
 import express from "express";
 import http from "http";
 import { AddressInfo } from "net";
 import webviewSiteRouter from "../routes/webviewSite";
+import { chromiumExecutable } from "../jobs/cfBrowser";
 import {
   issueWebviewTicket,
   WEBVIEW_CLAIM_PATH,
@@ -178,4 +180,31 @@ describe("cookies", () => {
     expect(lastRequest.headers.cookie).toBe("sid=abc");
     expect(lastRequest.headers.cookie).not.toContain(WEBVIEW_COOKIE);
   });
+});
+
+// A Mini App's signed account data rides in the fragment, and the whole handshake rests on
+// the browser carrying it across the claim redirect -- something no amount of checking the
+// URL we build can show. A real one has to walk it.
+describe.skipIf(!chromiumExecutable("free"))("the fragment a Mini App reads its account from", () => {
+  it("survives the claim redirect, so the app can still find its initData", async () => {
+    const browser = await chromium.launch({
+      executablePath: chromiumExecutable("free"),
+      headless: true,
+    });
+    try {
+      const signed = `${upstreamUrl}/#tgWebAppData=query_id%3DTEST%26user%3D%257B%2522id%2522%253A1%257D&tgWebAppVersion=7.0`;
+      const ticket = issueWebviewTicket(`${upstreamUrl}/`, "app");
+      const page = await browser.newPage();
+      await page.goto(webviewClaimUrl(ticket.id, signed, viewerUrl), {
+        waitUntil: "domcontentloaded",
+      });
+
+      expect(page.url()).toContain("#tgWebAppData=");
+      expect(await page.evaluate(() => location.hash)).toContain("query_id%3DTEST");
+      // On the app's own path, which is what its router needs
+      expect(await page.evaluate(() => location.pathname)).toBe("/");
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
 });

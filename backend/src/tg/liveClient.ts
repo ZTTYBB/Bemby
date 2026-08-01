@@ -1999,6 +1999,7 @@ export async function resolveWebApp(
   tmeOrUrl: string,
   botChatId?: string, // for direct URLs we need to know which bot owns the app
   peerChatId?: string, // chat where the webview button lives (for RequestWebView)
+  fromBotMenu?: boolean, // the address came from the bot's menu button, not a message
 ): Promise<{ url: string; resolved: boolean }> {
   const miniApp = parseMiniAppLink(tmeOrUrl);
   if (miniApp) {
@@ -2058,6 +2059,11 @@ export async function resolveWebApp(
               bot,
               url: tmeOrUrl,
               platform: "web",
+              // Telegram signs a menu button's app only when told that is where the
+              // address came from. Asked without it, the request is taken for an
+              // inline-keyboard webview and what comes back carries no account data at
+              // all, so the app loads and immediately fails on "No initData found".
+              ...(fromBotMenu ? { fromBotMenu: true } : {}),
             } as any),
           )) as any;
           return { url: result.url as string, resolved: true };

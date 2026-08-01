@@ -915,34 +915,54 @@ async function findInAppCheckin(
         const done = new RegExp(doneSrc, "i");
         const CONTROL_SEL = "button,[role=button],a[href],input[type=submit],input[type=button]";
 
-        const visible = (el: Element) =>
+        // The helpers hang off an object rather than standing as named consts, and every
+        // browser-side function in this file has to. The dev server loads it through tsx,
+        // whose keep-names transform rewrites a function bound to a name into a
+        // `__name(fn, "name")` call -- and that helper exists only in the module scope on
+        // this side, never in the page. The body then throws on its first line, which the
+        // catch below turns into "no checkin control here". A member assignment carries no
+        // inferred name, so it comes through untouched under tsx and tsc alike.
+        const fn = {} as {
+          visible: (el: Element) => boolean;
+          spent: (el: Element) => boolean;
+          describe: (el: Element, fallback: string) => string;
+          take: (
+            el: Element,
+            kind: string,
+            fallbackLabel: string,
+          ) => { label: string; kind: string; done: boolean };
+          ownText: (el: Element) => string;
+          candidatesFor: (el: Element) => Array<{ el: Element; kind: string }>;
+        };
+
+        fn.visible = (el) =>
           (el as HTMLElement).offsetParent !== null || el.getClientRects().length > 0;
 
-        const spent = (el: Element) =>
+        fn.spent = (el) =>
           (el as HTMLButtonElement).disabled ||
           el.getAttribute("aria-disabled") === "true" ||
           el.closest("[disabled],[aria-disabled='true']") !== null;
 
-        const describe = (el: Element, fallback: string) =>
+        fn.describe = (el, fallback) =>
           ((el.textContent ?? "").trim() || (el as HTMLInputElement).value || fallback).slice(0, 40);
 
-        const take = (el: Element, kind: string, fallbackLabel: string) => {
-          if (spent(el) || done.test(describe(el, ""))) {
-            return { label: describe(el, fallbackLabel), kind: kind, done: true };
+        fn.take = (el, kind, fallbackLabel) => {
+          if (fn.spent(el) || done.test(fn.describe(el, ""))) {
+            return { label: fn.describe(el, fallbackLabel), kind: kind, done: true };
           }
           el.setAttribute("data-cf-checkin", "1");
-          return { label: describe(el, fallbackLabel), kind: kind, done: false };
+          return { label: fn.describe(el, fallbackLabel), kind: kind, done: false };
         };
 
         // An explicit selector is taken at its word: first visible match.
         if (sel) {
-          const hit = Array.from(document.querySelectorAll(sel)).find(visible);
-          return hit ? take(hit, "selector", sel) : null;
+          const hit = Array.from(document.querySelectorAll(sel)).find((el) => fn.visible(el));
+          return hit ? fn.take(hit, "selector", sel) : null;
         }
 
         // Direct text nodes only, so the element holding the label is found rather than
         // every wrapper around it.
-        const ownText = (el: Element) =>
+        fn.ownText = (el) =>
           Array.from(el.childNodes)
             .filter((n) => n.nodeType === 3)
             .map((n) => n.textContent ?? "")
@@ -951,10 +971,10 @@ async function findInAppCheckin(
 
         // Ranked candidates for one labelled element: the real control it sits in, an
         // ancestor that behaves like one, a control inside the same card, or the text.
-        const candidatesFor = (el: Element): Array<{ el: Element; kind: string }> => {
+        fn.candidatesFor = (el) => {
           const out: Array<{ el: Element; kind: string }> = [];
           const semantic = el.closest(CONTROL_SEL);
-          if (semantic && visible(semantic)) out.push({ el: semantic, kind: "control" });
+          if (semantic && fn.visible(semantic)) out.push({ el: semantic, kind: "control" });
 
           let node: Element | null = el;
           for (let i = 0; node && i < 3; i++, node = node.parentElement) {
@@ -968,7 +988,9 @@ async function findInAppCheckin(
           let box: Element | null = el;
           for (let i = 0; box && i < 4; i++, box = box.parentElement) {
             const inside = Array.from(box.querySelectorAll(CONTROL_SEL)).filter(
-              (c) => visible(c) && label.test((c.textContent ?? "") || (c as HTMLInputElement).value || ""),
+              (c) =>
+                fn.visible(c) &&
+                label.test((c.textContent ?? "") || (c as HTMLInputElement).value || ""),
             );
             if (inside.length) {
               out.push({ el: inside[0], kind: "in-card" });
@@ -984,11 +1006,11 @@ async function findInAppCheckin(
         let best: { el: Element; kind: string; fallback: string } | null = null;
 
         for (const el of Array.from(document.querySelectorAll("*"))) {
-          const text = (ownText(el) || (el as HTMLInputElement).value || "").trim();
+          const text = (fn.ownText(el) || (el as HTMLInputElement).value || "").trim();
           if (!text || text.length > 30 || !label.test(text)) continue;
-          if (!visible(el)) continue;
+          if (!fn.visible(el)) continue;
 
-          for (const cand of candidatesFor(el)) {
+          for (const cand of fn.candidatesFor(el)) {
             if (!best || RANK.indexOf(cand.kind) < RANK.indexOf(best.kind)) {
               best = { el: cand.el, kind: cand.kind, fallback: text };
             }
@@ -998,7 +1020,7 @@ async function findInAppCheckin(
           if (best && best.kind === "control") break;
         }
 
-        return best ? take(best.el, best.kind, best.fallback) : null;
+        return best ? fn.take(best.el, best.kind, best.fallback) : null;
       },
       { labelSrc: labelRe.source, doneSrc: IN_APP_DONE_RE.source, sel: selector ?? "" },
     )
@@ -1245,31 +1267,41 @@ async function scrollPageBy(
   return await page
     .evaluate(
       ({ dx, dy }: { dx: number; dy: number }) => {
-        const isDoc = (el: Element) =>
+        // Hung off an object, not bound to names: see the note in `findInAppCheckin`. Named
+        // here, the dev server's loader rewrites them into calls to a helper the page does
+        // not have, and every scroll step reports that nothing on the page scrolls.
+        const fn = {} as {
+          isDoc: (el: Element) => boolean;
+          scrollable: (el: Element) => boolean;
+          underCentre: () => Element | null;
+          largestOnScreen: () => Element | null;
+        };
+
+        fn.isDoc = (el) =>
           el === document.scrollingElement ||
           el === document.documentElement ||
           el === document.body;
 
         // The document scrolls on its own extent; anything else needs an overflow that
         // actually clips, or its scrollTop goes nowhere.
-        const scrollable = (el: Element) => {
+        fn.scrollable = (el) => {
           if (el.scrollHeight - el.clientHeight <= 1 && el.scrollWidth - el.clientWidth <= 1) {
             return false;
           }
-          if (isDoc(el)) return true;
+          if (fn.isDoc(el)) return true;
           const style = getComputedStyle(el);
           return /auto|scroll|overlay/.test(`${style.overflowY} ${style.overflowX}`);
         };
 
         // Whatever is painted at the middle of the screen, then up to the first ancestor
         // that scrolls. On an ordinary page this walk ends at the document.
-        const underCentre = () => {
+        fn.underCentre = () => {
           let el = document.elementFromPoint(
             Math.floor(window.innerWidth / 2),
             Math.floor(window.innerHeight / 2),
           );
           while (el) {
-            if (scrollable(el)) return el;
+            if (fn.scrollable(el)) return el;
             el = el.parentElement;
           }
           return null;
@@ -1277,11 +1309,11 @@ async function scrollPageBy(
 
         // Nothing under the centre (an overlay, a gap): the biggest scroller that is on
         // screen. Hidden panes are skipped, which is the point.
-        const largestOnScreen = () => {
+        fn.largestOnScreen = () => {
           let best: Element | null = null;
           let bestArea = 0;
           for (const el of Array.from(document.querySelectorAll("*"))) {
-            if (!scrollable(el)) continue;
+            if (!fn.scrollable(el)) continue;
             if (typeof (el as any).checkVisibility === "function" && !(el as any).checkVisibility())
               continue;
             const r = el.getBoundingClientRect();
@@ -1297,7 +1329,8 @@ async function scrollPageBy(
         };
 
         const doc = document.scrollingElement ?? document.documentElement;
-        const target = underCentre() ?? largestOnScreen() ?? (scrollable(doc) ? doc : null);
+        const target =
+          fn.underCentre() ?? fn.largestOnScreen() ?? (fn.scrollable(doc) ? doc : null);
         if (!target) return null;
 
         const maxX = Math.max(0, target.scrollWidth - target.clientWidth);
@@ -1315,7 +1348,7 @@ async function scrollPageBy(
           y: Math.round(target.scrollTop),
           maxX: Math.round(maxX),
           maxY: Math.round(maxY),
-          what: isDoc(target)
+          what: fn.isDoc(target)
             ? "the page"
             : `${target.tagName.toLowerCase()}${cls ? `.${cls}` : ""}`,
         };
@@ -1500,6 +1533,19 @@ const MAX_WEB_SHOTS = 24;
 /** Ceiling on markers offered to the model: past this the picture is unreadable anyway. */
 const MAX_WEB_MARKS = 60;
 
+/** Spacing of the ruler drawn over the whole page for `ai_web_click_xy`, in CSS pixels. */
+const WEB_GRID_PX = 100;
+
+/**
+ * Side of the close-up the second pass looks at, and the ruler drawn on it.
+ *
+ * One look at a full page puts a small target tens of pixels out -- enough to miss a 22px
+ * Turnstile checkbox -- because the model is judging a fraction of a wide picture. The
+ * same judgement over a window this size is off by a few pixels instead.
+ */
+const WEB_REFINE_PX = 320;
+const WEB_REFINE_GRID_PX = 20;
+
 /** Elements a press can land on. */
 const CLICKABLE_SELECTOR =
   "a[href],button,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab]," +
@@ -1579,6 +1625,61 @@ async function markWebElements(page: Page, selector: string, limit: number): Pro
     .catch(() => [] as WebMark[]);
 }
 
+/**
+ * Rules the page with a labelled grid, for the step that asks for a position rather than a
+ * marker. A model reads a coordinate off visible gridlines far better than it estimates one
+ * from a bare picture, and the lines come off again before anything is clicked.
+ *
+ * The overlay carries the same `__bemby_mark` class as the marker badges, so
+ * `clearWebMarkBadges` takes both away.
+ */
+async function drawWebGrid(page: Page, gap: number, frame?: WebRect): Promise<void> {
+  // Deliberately written without an inner helper function. The dev server runs this file
+  // through tsx, whose keep-names transform wraps any named function in a `__name` helper
+  // that does not exist inside the page -- which throws, and the catch below would hide it.
+  const failure = await page
+    .evaluate(
+      ({ step, box }: { step: number; box: WebRect | null }) => {
+        for (const el of Array.from(document.querySelectorAll(".__bemby_mark"))) el.remove();
+
+        // Labels hug the edges of what will actually be captured, not the edges of the
+        // page: on the close-up pass the page's own left edge is outside the shot, and a
+        // gridline whose figure is off-picture is a gridline the model cannot read
+        const view = box ?? { x: 0, y: 0, width: innerWidth, height: innerHeight };
+        const right = view.x + view.width;
+        const bottom = view.y + view.height;
+        const base = "position:fixed;pointer-events:none;z-index:2147483646;";
+        const line = `${base}background:rgba(225,29,72,.30);`;
+        const label =
+          `${base}color:#e11d48;font:bold 10px/1 monospace;` +
+          "background:rgba(255,255,255,.75);padding:1px 2px;";
+
+        let html = "";
+        for (let x = Math.ceil(view.x / step) * step; x < right; x += step) {
+          if (x <= view.x) continue;
+          html += `<div style="${line}left:${x}px;top:${view.y}px;width:1px;height:${view.height}px"></div>`;
+          html += `<div style="${label}left:${x + 2}px;top:${view.y}px">${x}</div>`;
+        }
+        for (let y = Math.ceil(view.y / step) * step; y < bottom; y += step) {
+          if (y <= view.y) continue;
+          html += `<div style="${line}left:${view.x}px;top:${y}px;width:${view.width}px;height:1px"></div>`;
+          html += `<div style="${label}left:${view.x}px;top:${y + 2}px">${y}</div>`;
+        }
+
+        const holder = document.createElement("div");
+        holder.className = "__bemby_mark";
+        holder.innerHTML = html;
+        document.body.appendChild(holder);
+        return holder.childElementCount ? undefined : "the grid drew no lines";
+      },
+      { step: gap, box: frame ?? null },
+    )
+    .catch((err: any) => `the grid could not be drawn (${err?.message ?? err})`);
+  // A missing ruler is the difference between a click on the target and one tens of pixels
+  // off it, so the step fails here rather than asking the model to guess
+  if (failure) throw new Error(failure);
+}
+
 /** Takes the outlines and numbers off again, leaving the `data-bemby-mark` attributes. */
 async function clearWebMarkBadges(page: Page): Promise<void> {
   await page
@@ -1631,6 +1732,130 @@ export function parseWebAiReply(reply: string): { mark?: number; text?: string }
 }
 
 /**
+ * Pulls a position out of the model's reply. As with the marker reply a JSON object is what
+ * is asked for, but a bare "412, 300" is just as usable an answer.
+ */
+export function parseWebAiPoint(
+  reply: string,
+): { x: number; y: number; what?: string } | undefined {
+  // `Number(null)` and `Number("")` are both 0, so a model answering "not in view" the way
+  // it was asked to would otherwise read as a click on the top-left corner of the page
+  const ok = (x: unknown, y: unknown) => {
+    for (const v of [x, y]) {
+      if (v === null || v === undefined || v === "" || typeof v === "boolean") return undefined;
+    }
+    const px = Number(x);
+    const py = Number(y);
+    return Number.isFinite(px) && Number.isFinite(py) ? { x: px, y: py } : undefined;
+  };
+
+  const obj = /\{[\s\S]*\}/.exec(reply);
+  if (obj) {
+    try {
+      const parsed = JSON.parse(obj[0]) as { x?: unknown; y?: unknown; what?: unknown };
+      const point = ok(parsed.x, parsed.y);
+      if (point)
+        return {
+          ...point,
+          ...(typeof parsed.what === "string" && parsed.what.trim()
+            ? { what: parsed.what.trim().slice(0, 60) }
+            : {}),
+        };
+    } catch {
+      // fall through to the looser reads below
+    }
+  }
+  const keyed = /\bx"?\s*[:=]\s*(-?\d+(?:\.\d+)?)[^\d-]+y"?\s*[:=]\s*(-?\d+(?:\.\d+)?)/i.exec(reply);
+  if (keyed) return ok(keyed[1], keyed[2]);
+  const pair = /(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)/.exec(reply);
+  if (pair) return ok(pair[1], pair[2]);
+  return undefined;
+}
+
+type WebRect = { x: number; y: number; width: number; height: number };
+
+/**
+ * One look at the page: rule it, capture it (all of it, or the close-up window), take the
+ * ruler off, and ask the model where the target is.
+ *
+ * Everything here is in CSS pixels, which is what the gridlines are labelled with and what
+ * the mouse is aimed in. The screenshot may be larger than that on a scaled display, but
+ * the model answers in the figures printed on the picture, so its own pixel count never
+ * enters into it.
+ */
+async function locateWebPoint(
+  page: Page,
+  aiLocate: (image: string, prompt: string) => Promise<string>,
+  prompt: string,
+  gap: number,
+  clip?: WebRect,
+): Promise<{ reply: string; point?: { x: number; y: number; what?: string } }> {
+  await drawWebGrid(page, gap, clip);
+  const shot = await screenshotOf(page, 60, clip);
+  await clearWebMarkBadges(page);
+  if (!shot) throw new Error("the page could not be captured for the AI");
+  const reply = (await aiLocate(shot, prompt)) ?? "";
+  return { reply, point: parseWebAiPoint(reply) };
+}
+
+/** The close-up window around a first guess, kept inside the page. */
+function refineWindow(at: { x: number; y: number }, view: { w: number; h: number }): WebRect {
+  const width = Math.min(WEB_REFINE_PX, view.w);
+  const height = Math.min(WEB_REFINE_PX, view.h);
+  return {
+    x: Math.round(Math.min(Math.max(at.x - width / 2, 0), view.w - width)),
+    y: Math.round(Math.min(Math.max(at.y - height / 2, 0), view.h - height)),
+    width: Math.round(width),
+    height: Math.round(height),
+  };
+}
+
+/**
+ * Rings the position that was just clicked, so the screenshot kept for the step shows where
+ * the pointer went rather than only what the page did about it. Green, to read apart from
+ * the red measuring grid. Taken off again once that screenshot is captured.
+ */
+async function markClickPoint(page: Page, x: number, y: number): Promise<void> {
+  await page
+    .evaluate(
+      ({ px, py }: { px: number; py: number }) => {
+        const base = "position:fixed;pointer-events:none;z-index:2147483647;";
+        const hair = `${base}background:#22c55e;box-shadow:0 0 0 1px rgba(255,255,255,.9);`;
+        const holder = document.createElement("div");
+        holder.className = "__bemby_mark";
+        holder.innerHTML =
+          `<div style="${base}left:${px - 13}px;top:${py - 13}px;width:26px;height:26px;` +
+          `border:2px solid #22c55e;border-radius:50%;box-shadow:0 0 0 1px rgba(255,255,255,.9),inset 0 0 0 1px rgba(255,255,255,.9)"></div>` +
+          `<div style="${hair}left:${px - 24}px;top:${py}px;width:48px;height:1px"></div>` +
+          `<div style="${hair}left:${px}px;top:${py - 24}px;width:1px;height:48px"></div>` +
+          `<div style="${base}left:${px + 16}px;top:${py + 16}px;color:#fff;background:#22c55e;` +
+          `font:bold 11px/1.2 monospace;padding:2px 4px;border-radius:3px">clicked ${px},${py}</div>`;
+        document.body.appendChild(holder);
+      },
+      { px: x, py: y },
+    )
+    .catch(() => {});
+}
+
+/** What is painted at a position, so the log can say what the click landed on. */
+async function describePoint(page: Page, x: number, y: number): Promise<string> {
+  return page
+    .evaluate(
+      ({ px, py }: { px: number; py: number }) => {
+        const el = document.elementFromPoint(px, py) as HTMLElement | null;
+        if (!el) return "nothing";
+        const text = (el.innerText || el.getAttribute("aria-label") || el.title || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 40);
+        return text ? `<${el.tagName.toLowerCase()}> "${text}"` : `<${el.tagName.toLowerCase()}>`;
+      },
+      { px: x, py: y },
+    )
+    .catch(() => "something the page would not name");
+}
+
+/**
  * Types into whatever the last click focused, keystroke by keystroke.
  *
  * Deliberately not `page.type(selector, ...)`: that first waits for the element to pass
@@ -1677,7 +1902,7 @@ export type WebStepHooks = {
  * sequence (type a name, type a password, press login), so carrying on past a failure
  * acts on a page that is not in the state the rest of them assume.
  */
-async function runWebSteps(
+export async function runWebSteps(
   page: Page,
   steps: WebStep[],
   deadline: number,
@@ -1695,6 +1920,8 @@ async function runWebSteps(
 
     const log: WebStepLog = { type: step.type, label: describeWebStep(step) };
     logs.push(log);
+    // Set when a step leaves something drawn on the page for its own screenshot to show
+    let marked = false;
 
     // A challenge raised by the previous step (a login press is exactly what raises one)
     // leaves nothing of the site on screen for this one to act on
@@ -1776,6 +2003,13 @@ async function runWebSteps(
           break;
         }
 
+        case "web_turnstile": {
+          if (!(await clickTurnstileWidget(page)))
+            throw new Error("no Turnstile widget is on the page");
+          log.outcome = "pressed the Turnstile checkbox";
+          break;
+        }
+
         case "ai_web_button":
         case "ai_web_input": {
           if (!hooks.aiLocate) throw new Error("no AI model is configured for this step");
@@ -1826,6 +2060,93 @@ async function runWebSteps(
           log.outcome = `AI typed ${maskForLog(typed, `${chosen.text} ${chosen.kind}`)} into marker ${mark}, ${what}`;
           break;
         }
+
+        case "ai_web_click_xy": {
+          if (!hooks.aiLocate) throw new Error("no AI model is configured for this step");
+          const view = await page
+            .evaluate(() => ({ w: innerWidth, h: innerHeight }))
+            .catch(() => undefined);
+          if (!view?.w || !view.h) throw new Error("the page size could not be read");
+
+          // First look: the whole page, ruled coarsely. Enough to say which part of the
+          // page the target is in, and reliably a few tens of pixels out on a small one.
+          const wide = await locateWebPoint(
+            page,
+            hooks.aiLocate,
+            buildWebPointPrompt(step.hint, view, WEB_GRID_PX),
+            WEB_GRID_PX,
+          );
+          if (!wide.point)
+            throw new Error(`the AI named no usable position (replied "${oneLine(wide.reply)}")`);
+          if (
+            wide.point.x < 0 ||
+            wide.point.y < 0 ||
+            wide.point.x > view.w ||
+            wide.point.y > view.h
+          )
+            throw new Error(
+              `the AI chose ${Math.round(wide.point.x)},${Math.round(wide.point.y)}, which is off a ${view.w}×${view.h} page`,
+            );
+
+          // Second look: a close-up around that answer, ruled finely, to correct it. The
+          // window is clamped to the page, so a first guess near an edge still gets one.
+          const window = refineWindow(wide.point, view);
+          const refinePrompt = buildWebRefinePrompt(step.hint, window, WEB_REFINE_GRID_PX);
+          const close = await locateWebPoint(
+            page,
+            hooks.aiLocate,
+            refinePrompt,
+            WEB_REFINE_GRID_PX,
+            window,
+          );
+          log.aiPrompt = `${buildWebPointPrompt(step.hint, view, WEB_GRID_PX)}\n\n--- close-up pass ---\n\n${refinePrompt}`;
+          log.aiResponse = `${wide.reply}\n\n--- close-up pass ---\n\n${close.reply}`;
+
+          // A correction outside the window it was shown is not a correction, so the wide
+          // answer stands rather than the click going somewhere nobody looked at
+          const refined =
+            close.point &&
+            close.point.x >= window.x &&
+            close.point.x <= window.x + window.width &&
+            close.point.y >= window.y &&
+            close.point.y <= window.y + window.height
+              ? close.point
+              : undefined;
+          const aimed = refined ?? wide.point;
+          const x = Math.round(aimed.x);
+          const y = Math.round(aimed.y);
+
+          // Read what is there before pressing it: a checkbox that swaps itself for a tick
+          // the moment it is clicked would otherwise be logged as whatever replaced it
+          const under = await describePoint(page, x, y);
+
+          // Approach then press, as a pointer would -- the same shape as clickElement,
+          // except nothing here resolves to an element to aim at
+          let pointerFailure: string | undefined;
+          await page.mouse.move(x - 8, y + 6).catch((err: any) => {
+            pointerFailure = `move: ${err?.message ?? err}`;
+          });
+          await page.mouse.click(x, y).catch((err: any) => {
+            pointerFailure = `click: ${err?.message ?? err}`;
+          });
+          if (pointerFailure) throw new Error(`the pointer could not be used (${pointerFailure})`);
+
+          // Left on the page just long enough for this step's screenshot to catch it
+          await markClickPoint(page, x, y);
+          marked = true;
+
+          // Spelled out, because "which pass decided this" is the first thing worth knowing
+          // when a click lands somewhere unexpected
+          const from = `${Math.round(wide.point.x)},${Math.round(wide.point.y)}`;
+          const shift = !refined
+            ? `the close-up could not see it, so the wide guess at ${from} stands`
+            : x === Math.round(wide.point.x) && y === Math.round(wide.point.y)
+              ? "the close-up agreed with the wide guess"
+              : `the close-up moved it from ${from}`;
+          const called = refined?.what ? `, which the AI called "${refined.what}"` : "";
+          log.outcome = `AI clicked ${x},${y}, on ${under}${called} (${shift})`;
+          break;
+        }
       }
     } catch (err: any) {
       log.error = err?.message ?? String(err);
@@ -1836,6 +2157,7 @@ async function runWebSteps(
     // exactly the one whose screenshot is worth having
     await sleep(tune.inAppStepMs, deadline);
     if (logs.length <= MAX_WEB_SHOTS) log.screenshot = await screenshotOf(page);
+    if (marked) await clearWebMarkBadges(page);
     if (failure) break;
   }
 
@@ -1857,10 +2179,14 @@ function describeWebStep(step: WebStep): string {
       return `Scroll ${Math.round(step.x || 0)},${Math.round(step.y || 0)}px`;
     case "web_wait_element":
       return `Wait for \`${step.selector}\``;
+    case "web_turnstile":
+      return "Press the Turnstile checkbox";
     case "ai_web_button":
       return `AI presses a control${step.hint?.trim() ? ` (${step.hint.trim()})` : ""}`;
     case "ai_web_input":
       return `AI fills a field${step.hint?.trim() ? ` (${step.hint.trim()})` : ""}`;
+    case "ai_web_click_xy":
+      return `AI clicks a position${step.hint?.trim() ? ` (${step.hint.trim()})` : ""}`;
   }
 }
 
@@ -1887,6 +2213,70 @@ function buildWebAiPrompt(
         "Work out the text from the page itself, for example the answer to a question it asks " +
         "or the characters shown in a captcha image."
       : 'Reply with ONLY a JSON object: {"mark": <number>}.',
+    "No explanation, no code fences.",
+  ].join("\n");
+}
+
+/** How the step names its target, for a prompt and for the log. */
+function webPointTarget(hint: string | undefined): string {
+  return hint?.trim() || "the control a person would press next to get through this page";
+}
+
+/**
+ * The first, wide look. The grid is named so the model reads the figures off the lines
+ * rather than estimating a fraction of the picture, and the labels are the coordinate
+ * system asked for -- so a display that paints more device pixels than CSS ones cannot put
+ * the answer in a different scale from the one the mouse works in.
+ */
+function buildWebPointPrompt(
+  hint: string | undefined,
+  view: { w: number; h: number },
+  gap: number,
+): string {
+  return [
+    `The screenshot is a web page, ${view.w} by ${view.h}. A red grid has been drawn over it`,
+    `every ${gap} pixels, and the gridlines are labelled along the top and left edges with the`,
+    `coordinates to answer in. The grid is an overlay for measuring only -- it is not part of`,
+    `the page.`,
+    "",
+    `Find this and give the position at its centre: ${webPointTarget(hint)}`,
+    "",
+    `Read the position off the labelled gridlines: work out which lines it sits between, then`,
+    `estimate within them. Aim for the middle of the target, not its edge or its label.`,
+    "",
+    'Reply with ONLY a JSON object: {"x": <number>, "y": <number>}, in the coordinates printed',
+    "on the grid. No explanation, no code fences.",
+  ].join("\n");
+}
+
+/**
+ * The second, close look. The window is small enough that the same eyeballing lands within
+ * a few pixels, and the labels still carry page coordinates, so the answer needs no
+ * arithmetic against where the window was cut from.
+ *
+ * It is deliberately not told what the first pass answered. Told, models simply hand the
+ * same figure back -- a run of this went out with an identical reply to both passes, and a
+ * click 30px under the checkbox -- and a prompt that offers "repeat the earlier position"
+ * as a way out gets taken up on it. Asking cold is what makes the second look a second
+ * opinion. It has to name what it sees at the position for the same reason: a model that
+ * must describe the thing it is pointing at cannot point at nothing.
+ */
+function buildWebRefinePrompt(hint: string | undefined, window: WebRect, gap: number): string {
+  return [
+    `The screenshot is a close-up of one part of a web page: the region from x=${window.x} to`,
+    `x=${window.x + window.width}, y=${window.y} to y=${window.y + window.height}. A red grid`,
+    `every ${gap} pixels is drawn over it, labelled with those same page coordinates. The grid`,
+    `is an overlay for measuring only -- it is not part of the page.`,
+    "",
+    `Find this and give the position at its exact centre: ${webPointTarget(hint)}`,
+    "",
+    `Work it out from the labelled gridlines: which two lines it sits between on each axis,`,
+    `then where between them. A checkbox is small -- aim at the middle of the box itself, not`,
+    `at the words beside it and not at the edge of the panel holding it.`,
+    "",
+    'Reply with ONLY a JSON object: {"x": <number>, "y": <number>, "what": "<what is at that',
+    'position>"}, in the page coordinates printed on the grid. If the target is not in this',
+    'close-up at all, reply {"x": null, "y": null, "what": "not in view"}.',
     "No explanation, no code fences.",
   ].join("\n");
 }
@@ -2126,9 +2516,18 @@ function launchFailureReason(message: string): string | undefined {
   return undefined;
 }
 
-/** JPEG of what the browser is looking at, small enough to keep in a job log. */
-async function screenshotOf(page: Page, quality = 45): Promise<string | undefined> {
-  const buffer = await page.screenshot({ type: "jpeg", quality }).catch(() => undefined);
+/**
+ * JPEG of what the browser is looking at, small enough to keep in a job log. `clip` narrows
+ * it to one region, for the close-up the `ai_web_click_xy` step takes.
+ */
+async function screenshotOf(
+  page: Page,
+  quality = 45,
+  clip?: { x: number; y: number; width: number; height: number },
+): Promise<string | undefined> {
+  const buffer = await page
+    .screenshot({ type: "jpeg", quality, ...(clip ? { clip } : {}) })
+    .catch(() => undefined);
   const shot = buffer?.toString("base64");
   if (!shot) return undefined;
   // Job logs are stored as JSON in SQLite; an oversized image is not worth keeping

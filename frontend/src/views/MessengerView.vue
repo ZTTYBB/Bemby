@@ -2927,18 +2927,23 @@ async function openMiniApp(
   url: string,
   title: string,
   botChatId?: string | null,
+  fromBotMenu = false,
 ): Promise<void> {
   if (!selectedAccountId.value) {
     window.open(url, "_blank", "noopener");
     return;
   }
   try {
-    const { webAppUrl, frameable } = await tgClientApi.webviewResolve(
+    const { webAppUrl, frameable, signed } = await tgClientApi.webviewResolve(
       selectedAccountId.value,
       url,
       botChatId,
       activeChatId.value,
+      fromBotMenu,
     );
+    // Said here rather than left to the app: unsigned, it loads and then fails on its own
+    // terms ("No initData found"), which reads as the viewer being broken
+    if (!signed) showToast("Telegram did not sign this app, so it opens logged out");
     if (!openMiniAppInApp.value) {
       // The resolve happens after the click and can outlive the gesture that lets a popup
       // through, so a blocked window falls back to the chooser and a real click
@@ -3509,11 +3514,15 @@ async function loadBotCommands(chatId: string) {
   }
 }
 
-/** Opens the bot's pinned Mini App, the same way a Mini App button in a message opens. */
+/**
+ * Opens the bot's pinned Mini App. Flagged as coming from the menu button, which is what
+ * makes Telegram sign it: the address is the bot's registered one rather than a button in
+ * a message, and asked for any other way it comes back without the account data.
+ */
 function openBotMenuApp() {
   const button = botMenuButton.value;
   if (!button) return;
-  void openMiniApp(button.url, button.text, activeChatId.value);
+  void openMiniApp(button.url, button.text, activeChatId.value, true);
 }
 
 function openCommandMenu() {

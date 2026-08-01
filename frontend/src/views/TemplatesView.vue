@@ -1109,10 +1109,12 @@ const proxiesList = computed<Proxy[]>(() => {
 const aiKeyMissing = computed(() => settings.value?.ai_key_configured !== 'true');
 // Anything that opens a page needs the solver's browser and its fonts in the data dir;
 // neither ships in the image, so those options stay off until both are downloaded.
+// See JobsView: not-yet-loaded settings must not read as a missing browser.
 const cfBrowserMissing = computed(
   () =>
-    settings.value?.cf_chromium_installed !== 'true' ||
-    settings.value?.cf_fonts_installed !== 'true',
+    !!settings.value &&
+    (settings.value.cf_chromium_installed !== 'true' ||
+      settings.value.cf_fonts_installed !== 'true'),
 );
 
 const showForm = ref(false);
@@ -1603,6 +1605,8 @@ async function loadSettings() {
 }
 
 function openAdd() {
+  // See JobsView: the browser may have been installed since this view mounted
+  void loadSettings();
   editTarget.value = null;
   Object.assign(form, {
     name: '',
@@ -1631,6 +1635,7 @@ function openAdd() {
 }
 
 function openEdit(tpl: JobTemplate) {
+  void loadSettings();
   editTarget.value = tpl;
   Object.assign(form, {
     name: tpl.name,
