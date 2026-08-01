@@ -942,6 +942,8 @@ export const templatesApi = {
     api.post<JobTemplate>("/templates", data).then((r) => r.data),
   update: (id: number, data: Partial<JobTemplate>) =>
     api.put<JobTemplate>(`/templates/${id}`, data).then((r) => r.data),
+  duplicate: (id: number) =>
+    api.post<JobTemplate>(`/templates/${id}/duplicate`).then((r) => r.data),
   delete: (id: number) => api.delete(`/templates/${id}`),
   setLinkedJobsEnabled: (id: number, enabled: boolean) =>
     api

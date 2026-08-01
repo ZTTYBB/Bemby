@@ -100,6 +100,12 @@
                   <button class="btn btn-sm btn-ghost btn-icon" :title="copiedTplId === tpl.id ? t('templates.shareCopied') : t('templates.shareBtn')" @click="shareTemplate(tpl)">
                     <i :class="copiedTplId === tpl.id ? 'fa-solid fa-check' : 'fa-solid fa-share-nodes'"></i>
                   </button>
+                  <button
+                    class="btn btn-sm btn-ghost btn-icon"
+                    :title="t('templates.duplicateBtn')"
+                    :disabled="duplicatingId !== null"
+                    @click="duplicateTemplate(tpl)"
+                  ><i class="fa-solid fa-clone"></i></button>
                   <button class="btn btn-sm btn-ghost btn-icon" :title="t('common.edit')" @click="openEdit(tpl)"><i class="fa-solid fa-pen"></i></button>
                   <button class="btn btn-sm btn-danger btn-icon" :title="t('common.delete')" @click="openDeleteTpl(tpl.id)"><i class="fa-solid fa-trash"></i></button>
                 </div>
@@ -1024,6 +1030,9 @@
         <button class="action-sheet-btn" @click="shareTemplate(actionMenuTpl!); actionMenuTpl = null">
           <i class="fa-solid fa-share-nodes"></i> {{ t('templates.shareBtn') }}
         </button>
+        <button class="action-sheet-btn" @click="duplicateTemplate(actionMenuTpl!); actionMenuTpl = null">
+          <i class="fa-solid fa-clone"></i> {{ t('templates.duplicateBtn') }}
+        </button>
         <button class="action-sheet-btn" @click="openEdit(actionMenuTpl!); actionMenuTpl = null">
           <i class="fa-solid fa-pen"></i> {{ t('common.edit') }}
         </button>
@@ -1947,6 +1956,20 @@ async function executeDeleteTpl() {
   await loadTemplates();
 }
 
+async function duplicateTemplate(tpl: JobTemplate) {
+  if (duplicatingId.value) return;
+  duplicatingId.value = tpl.id;
+  try {
+    const copy = await templatesApi.duplicate(tpl.id);
+    await loadTemplates();
+    showToast(t('templates.duplicated').replace('{name}', copy.name));
+  } catch (err: any) {
+    showToast(err.response?.data?.error ?? t('common.saveFailed'));
+  } finally {
+    duplicatingId.value = null;
+  }
+}
+
 async function toggleTemplateEnabled(tpl: JobTemplate) {
   await templatesApi.update(tpl.id, { enabled: !tpl.enabled });
   await loadTemplates();
@@ -1974,7 +1997,15 @@ async function executeBulkDeleteTpls() {
 
 const muteToast = ref('');
 const isMutingBot = ref(false);
+const duplicatingId = ref<number | null>(null);
 let muteToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Brief message in the corner, shared by anything that finishes without a dialog. */
+function showToast(message: string) {
+  muteToast.value = message;
+  if (muteToastTimer) clearTimeout(muteToastTimer);
+  muteToastTimer = setTimeout(() => { muteToast.value = ''; }, 3000);
+}
 
 // ~15 calls/min -- safe for Telegram's account.UpdateNotifySettings
 const MUTE_RATE_MS = 4000;
@@ -2010,8 +2041,7 @@ async function bulkMuteBotForever() {
   }
 
   isMutingBot.value = false;
-  muteToast.value = t('templates.bulkMuteBotForeverDone');
-  muteToastTimer = setTimeout(() => { muteToast.value = ''; }, 3000);
+  showToast(t('templates.bulkMuteBotForeverDone'));
 }
 
 const SHARE_KEYS: (keyof JobTemplate)[] = ['name', 'jobType', 'botUsername', 'timezone', 'replyTimeoutMs', 'retryMax', 'config', 'startCommand', 'checkinButton'];
