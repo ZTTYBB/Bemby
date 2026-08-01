@@ -184,6 +184,18 @@
             <i class="fa-solid fa-triangle-exclamation"></i>
             {{ t("settings.cfSolver.fontsMissing") }}<span v-if="cfFontsMissing"> ({{ cfFontsMissing }})</span>
           </p>
+          <div class="form-group" style="margin: 0 0 12px; max-width: 320px">
+            <label class="form-label">{{ t("settings.cfSolver.langLabel") }}</label>
+            <select v-model="cfBrowserLang" class="form-select" @change="saveCfBrowserLang">
+              <option value="">{{ t("settings.cfSolver.langFollowExit") }}</option>
+              <option v-for="l in CF_LOCALES" :key="l.id" :value="l.id">
+                {{ l.name }} ({{ l.id }})
+              </option>
+            </select>
+            <div style="font-size: 11px; color: #888; margin-top: 3px">
+              {{ t("settings.cfSolver.langHint") }}
+            </div>
+          </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
             <button
               class="btn btn-primary"
@@ -2016,6 +2028,43 @@ function resetCfTuning() {
   cfTuningMsg.value = t("settings.cfTuning.resetHint");
 }
 
+/**
+ * Locales offered for the browser. Not a full list: these are the languages Mini Apps in
+ * this space actually render in, and a name a step can be written against.
+ */
+const CF_LOCALES = [
+  { id: "zh-CN", name: "简体中文" },
+  { id: "zh-TW", name: "繁體中文" },
+  { id: "en-US", name: "English (US)" },
+  { id: "en-GB", name: "English (UK)" },
+  { id: "en-AU", name: "English (AU)" },
+  { id: "ru-RU", name: "Русский" },
+  { id: "ja-JP", name: "日本語" },
+  { id: "ko-KR", name: "한국어" },
+  { id: "vi-VN", name: "Tiếng Việt" },
+  { id: "th-TH", name: "ไทย" },
+  { id: "id-ID", name: "Bahasa Indonesia" },
+  { id: "pt-BR", name: "Português (BR)" },
+  { id: "es-ES", name: "Español" },
+  { id: "de-DE", name: "Deutsch" },
+  { id: "fr-FR", name: "Français" },
+  { id: "tr-TR", name: "Türkçe" },
+];
+
+const cfBrowserLang = ref("");
+
+/** Saved as it is chosen: one select is not worth its own save button. */
+async function saveCfBrowserLang() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  try {
+    await settingsApi.update({ cf_browser_lang: cfBrowserLang.value });
+    cfInstallMsg.value = t("settings.saved");
+  } catch (e: any) {
+    cfInstallError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
+  }
+}
+
 const cfUninstalling = ref(false);
 const cfStopping = ref(false);
 const cfClearingProfiles = ref(false);
@@ -2610,6 +2659,7 @@ onMounted(async () => {
     cfBrowsersRunning.value = Number(s.cf_browsers_running ?? 0);
     cfBuilds.value = parseCfBuilds(s.cf_chromium_builds);
     cfProfileCount.value = Number(s.cf_profile_count ?? 0);
+    cfBrowserLang.value = s.cf_browser_lang ?? "";
     cfChromiumPath.value = s.cf_chromium_path ?? "";
     cfKeyedPending.value = s.cf_chromium_keyed_pending === "true";
     cfFontsInstalled.value = s.cf_fonts_installed === "true";

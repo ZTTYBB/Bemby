@@ -1010,6 +1010,20 @@ async function findInAppCheckin(
     }) as Promise<InAppTarget | null>;
 }
 
+/**
+ * The wordings a step will accept, split on `|`: `Join giveaway|参与抽奖|加入抽奖` presses
+ * whichever of them the app actually has. The same control is worded differently depending
+ * on the language the app decides to render in, and one step should cover the lot rather
+ * than the operator keeping a template per language. `|` already means "any of these" for
+ * the success/fail matchers, so it reads the same way here.
+ */
+export function parseLabelAlternatives(wanted: string): string[] {
+  return wanted
+    .split("|")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 /** `css:<selector>` in a step names the element to press outright. */
 function parseSelectorStep(step: string): string | undefined {
   const m = /^css:(.+)$/i.exec(step.trim());
@@ -1035,7 +1049,12 @@ async function clickInAppControl(
   wanted?: string,
 ): Promise<ClickOutcome | undefined> {
   const selector = wanted ? parseSelectorStep(wanted) : undefined;
-  const labelRe = wanted && !selector ? new RegExp(escapeRe(wanted), "i") : IN_APP_LABEL_RE;
+  // A CSS selector is taken whole -- `|` is a legitimate character in one (namespaces,
+  // `[attr|=value]`), so only a plain label is read as a list of alternatives.
+  const alternatives = wanted && !selector ? parseLabelAlternatives(wanted) : [];
+  const labelRe = alternatives.length
+    ? new RegExp(alternatives.map(escapeRe).join("|"), "i")
+    : IN_APP_LABEL_RE;
 
   const target = await findInAppCheckin(page, labelRe, selector);
   if (target?.done) {
@@ -1434,9 +1453,13 @@ async function runInAppClicks(
     if (!click) {
       // A label that never appears is worth reporting: the app may have changed
       if (step) done.push(`"${step}" not found`);
-      failure = step
-        ? `"${step}" is not on the app page`
-        : "no checkin control was found in the app";
+      const alts = step ? parseLabelAlternatives(step) : [];
+      failure =
+        alts.length > 1
+          ? `none of ${alts.map((a) => `"${a}"`).join(", ")} are on the app page`
+          : step
+            ? `"${step}" is not on the app page`
+            : "no checkin control was found in the app";
       break;
     }
     done.push(click.outcome);

@@ -1093,6 +1093,8 @@ export type Settings = {
   cf_chromium_builds?: string;
   /** Server-computed: how many browser profiles are on disk. */
   cf_profile_count?: string;
+  /** Locale the browser reports; blank follows the country its exit comes out in. */
+  cf_browser_lang?: string;
   /** Server-computed: "true" when the CJK/emoji faces are in the data dir. */
   cf_fonts_installed?: string;
   /** Server-computed: comma-separated faces still to download. */

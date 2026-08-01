@@ -19,6 +19,7 @@ import type { BrowserContext, Page } from "playwright-core";
 import { cfTuning } from "./cfTuning";
 import { applyCfFontEnv } from "./cfFonts";
 import { anyCfLicenseKey, cfLicenseUsage, leaseCfLicenseKey } from "./cfLicense";
+import { db } from "../db/database";
 import { dataDir } from "./paths";
 import { cfExitGeo, type CfExitGeo } from "../tg/proxyProviders";
 
@@ -38,6 +39,28 @@ import { cfExitGeo, type CfExitGeo } from "../tg/proxyProviders";
  */
 export function cloakCacheDir(): string {
   return process.env.CLOAKBROWSER_CACHE_DIR || path.join(dataDir(), "cloakbrowser");
+}
+
+/** Settings key holding the locale the browser reports, when it is not left to the exit. */
+export const CF_BROWSER_LANG_KEY = "cf_browser_lang";
+
+/**
+ * The locale the browser should report, when the operator has pinned one.
+ *
+ * Normally this follows the country the exit comes out in, which is what keeps the browser
+ * consistent with its IP. Pinning it is for the case that outweighs that: an app which
+ * renders in whatever language the browser asks for, where a step naming a control by its
+ * Chinese wording only ever finds it if the app is speaking Chinese.
+ */
+export function cfBrowserLang(): string | undefined {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(CF_BROWSER_LANG_KEY) as
+      | { value: string }
+      | undefined;
+    return row?.value?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Data-dir subfolder holding one browser profile per exit. */
@@ -906,6 +929,7 @@ export async function launchCfBrowser(
   warnIfWindowExceedsScreen(win);
   const key = exitKey(proxyUrl);
   const geo = cfExitGeo(key);
+  const locale = cfBrowserLang() ?? geo?.lang;
   const profile = claimProfile(key);
   const proxy = await resolveProxy(proxyUrl);
   // The keyed build first, on a seat of its own: one licence key is one concurrent
@@ -970,7 +994,9 @@ export async function launchCfBrowser(
         // Human-like pointer curves and keystroke timing on the driver's own methods
         humanize: true,
         ...(geo?.tz ? { timezone: geo.tz } : {}),
-        ...(geo?.lang ? { locale: geo.lang } : {}),
+        // A pinned locale wins over the exit's: an app that renders in the browser's
+        // language is unusable to a step naming its controls in another
+        ...(locale ? { locale } : {}),
         args: [
           // One machine per exit, kept across runs alongside its cookies
           `--fingerprint=${fingerprintSeed(key)}`,
