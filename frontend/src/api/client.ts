@@ -427,6 +427,7 @@ export type WebStep =
   | { type: "web_input"; selector: string; text: string }
   | { type: "web_button"; selector: string }
   | { type: "web_delay"; waitMs: number }
+  | { type: "web_scroll"; x?: number; y?: number }
   | { type: "web_wait_element"; selector: string; waitMs?: number }
   | { type: "ai_web_button"; hint?: string }
   | { type: "ai_web_input"; hint?: string; text?: string };

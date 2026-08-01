@@ -168,8 +168,9 @@ export type CustomAction =
       /** Inline button that opens the Mini App; blank takes the most recent one. */
       button?: string;
       /**
-       * Controls to press inside the app, in order, each named by its visible text.
-       * Blank auto-detects a checkin-worded control.
+       * Steps to run inside the app, in order: a control's visible text, `css:<selector>`,
+       * `delay(2500)`, `scroll(x, y)` to reach something below the fold, or an `{aiBtn}` /
+       * `{input}` / `{aiInput}` placeholder. Blank auto-detects a checkin-worded control.
        */
       appButtons?: string[];
       successContains?: string;
@@ -194,7 +195,11 @@ export type CustomAction =
       url: string;
       /** Bot that owns the app, used to sign the URL. Blank uses the job's bot. */
       contact?: string;
-      /** Controls to press inside the app, in order. Blank auto-detects a checkin control. */
+      /**
+       * Steps to run inside the app, in order, same vocabulary as `open_mini_app`
+       * (control text, `css:`, `delay()`, `scroll()`, `{aiBtn}`, `{input}`, `{aiInput}`).
+       * Blank auto-detects a checkin control.
+       */
       appButtons?: string[];
       successContains?: string;
       failContains?: string;
@@ -252,6 +257,18 @@ export type WebStep =
       /** Sit still for a while, for a page that needs a moment between steps. */
       type: "web_delay";
       waitMs: number;
+    }
+  | {
+      /**
+       * Scroll the page by pixels, to bring something below the fold within reach of the
+       * steps after it. Either figure may be negative to scroll back, and one past the end
+       * of the page simply lands at the end.
+       */
+      type: "web_scroll";
+      /** Horizontal move in pixels. Blank/0 leaves the column alone. */
+      x?: number;
+      /** Vertical move in pixels. Blank/0 leaves the row alone. */
+      y?: number;
     }
   | {
       /**

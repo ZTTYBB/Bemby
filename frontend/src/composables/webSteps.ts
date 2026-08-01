@@ -12,6 +12,8 @@ export type WebStepForm = {
   text: string;
   hint: string;
   waitMs: number;
+  scrollX: number;
+  scrollY: number;
 };
 
 /** Order the editor offers them in: the selector steps first, then waits, then the AI ones. */
@@ -20,6 +22,7 @@ export const WEB_STEP_TYPES: WebStepType[] = [
   "web_button",
   "web_wait_element",
   "web_delay",
+  "web_scroll",
   "ai_web_input",
   "ai_web_button",
 ];
@@ -28,7 +31,15 @@ export const WEB_STEP_TYPES: WebStepType[] = [
 export const AI_WEB_STEP_TYPES: WebStepType[] = ["ai_web_input", "ai_web_button"];
 
 export function defaultWebStep(): WebStepForm {
-  return { type: "web_button", selector: "", text: "", hint: "", waitMs: 3000 };
+  return {
+    type: "web_button",
+    selector: "",
+    text: "",
+    hint: "",
+    waitMs: 3000,
+    scrollX: 0,
+    scrollY: 500,
+  };
 }
 
 /** Drops the fields the chosen type does not use, so the saved config stays readable. */
@@ -40,6 +51,12 @@ export function webStepToConfig(s: WebStepForm): WebStep {
       return { type: "web_button", selector: s.selector.trim() };
     case "web_delay":
       return { type: "web_delay", waitMs: s.waitMs };
+    case "web_scroll":
+      return {
+        type: "web_scroll",
+        ...(s.scrollX ? { x: s.scrollX } : {}),
+        ...(s.scrollY ? { y: s.scrollY } : {}),
+      };
     case "web_wait_element":
       return {
         type: "web_wait_element",
@@ -71,6 +88,8 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
       return { ...base, type: s.type, selector: s.selector };
     case "web_delay":
       return { ...base, type: s.type, waitMs: s.waitMs };
+    case "web_scroll":
+      return { ...base, type: s.type, scrollX: s.x ?? 0, scrollY: s.y ?? 0 };
     case "web_wait_element":
       return { ...base, type: s.type, selector: s.selector, waitMs: s.waitMs ?? 30000 };
     case "ai_web_button":

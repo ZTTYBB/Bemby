@@ -81,6 +81,22 @@
         </div>
       </div>
 
+      <div v-if="s.type === 'web_scroll'" style="margin-top: 8px">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelScrollX") }}</label>
+            <input v-model.number="s.scrollX" class="form-input" type="number" step="100" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelScrollY") }}</label>
+            <input v-model.number="s.scrollY" class="form-input" type="number" step="100" />
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.scrollHint") }}
+        </div>
+      </div>
+
       <div v-if="s.type === 'ai_web_button' || s.type === 'ai_web_input'">
         <label class="form-label">{{ t("jobs.web.labelHint") }}</label>
         <input

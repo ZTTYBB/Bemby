@@ -176,9 +176,10 @@ export type LoadOptions = {
   miniApp?: boolean;
   /**
    * Steps to run inside the Mini App, in order. Each entry is the visible text of a
-   * control to press, or a placeholder that answers a question the app asks:
-   * `{input}` solves an arithmetic captcha locally, `{aiInput}` hands the question to
-   * `solveQuestion`. Empty or omitted falls back to a checkin-worded control.
+   * control to press, or a placeholder: `{input}` solves an arithmetic captcha locally,
+   * `{aiInput}` hands the question to `solveQuestion`, and `scroll(x, y)` moves the page
+   * so a control below the fold can be reached. Empty or omitted falls back to a
+   * checkin-worded control.
    */
   inAppClicks?: string[];
   /** Answers a question read off the app (used by the `{aiInput}` step). */
@@ -1099,6 +1100,114 @@ export function parseAiBtnStep(step: string | undefined): { hint?: string } | nu
   return hint ? { hint } : {};
 }
 
+/**
+ * `scroll(500)` moves down 500px; `scroll(120, 500)` moves both axes, and the named forms
+ * (`scroll(y=500)`, `scroll(x:-120)`) move one. Negative figures scroll back. Returns null
+ * for anything that is not a scroll step.
+ */
+export function parseScrollStep(step: string | undefined): { x: number; y: number } | null {
+  const m = /^scroll\(([^)]*)\)$/i.exec(step?.trim() ?? "");
+  if (!m) return null;
+  const parts = m[1]
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (!parts.length) return null;
+
+  const bare: number[] = [];
+  let x: number | undefined;
+  let y: number | undefined;
+  for (const part of parts) {
+    const named = /^([xy])\s*[=:]\s*(-?\d+(?:\.\d+)?)$/i.exec(part);
+    if (named) {
+      const n = Math.round(Number(named[2]));
+      if (named[1].toLowerCase() === "x") x = n;
+      else y = n;
+      continue;
+    }
+    if (!/^-?\d+(?:\.\d+)?$/.test(part)) return null;
+    bare.push(Math.round(Number(part)));
+  }
+  // Bare figures are positional, and cannot be mixed with named axes: `scroll(x=10, 20)`
+  // reads either way, so it is rejected rather than guessed at.
+  if (bare.length) {
+    if (x !== undefined || y !== undefined) return null;
+    // A lone figure is the vertical move, which is what a scroll almost always means
+    if (bare.length === 1) y = bare[0];
+    else if (bare.length === 2) [x, y] = bare;
+    else return null;
+  }
+  return { x: x ?? 0, y: y ?? 0 };
+}
+
+/**
+ * Scrolls the page by `x`/`y` pixels, clamped to the content: a figure past the end simply
+ * lands at the end, which is how "scroll all the way down" is written. Mini Apps and plenty
+ * of ordinary sites scroll an inner container rather than the document, so when the
+ * document itself cannot move, the largest scrollable element on the page is driven instead.
+ */
+async function scrollPageBy(
+  page: Page,
+  x: number,
+  y: number,
+): Promise<{ x: number; y: number; maxX: number; maxY: number } | null> {
+  return await page
+    .evaluate(
+      ({ dx, dy }: { dx: number; dy: number }) => {
+        const scrollable = (el: Element | null) =>
+          !!el && (el.scrollHeight - el.clientHeight > 1 || el.scrollWidth - el.clientWidth > 1);
+
+        let target: Element | null = document.scrollingElement ?? document.documentElement;
+        if (!scrollable(target)) {
+          target = null;
+          let bestArea = 0;
+          for (const el of Array.from(document.querySelectorAll("*"))) {
+            if (!scrollable(el)) continue;
+            const style = getComputedStyle(el);
+            if (!/auto|scroll|overlay/.test(`${style.overflowY} ${style.overflowX}`)) continue;
+            const r = el.getBoundingClientRect();
+            const area = r.width * r.height;
+            if (area > bestArea) {
+              bestArea = area;
+              target = el;
+            }
+          }
+        }
+        if (!target) return null;
+
+        const maxX = Math.max(0, target.scrollWidth - target.clientWidth);
+        const maxY = Math.max(0, target.scrollHeight - target.clientHeight);
+        target.scrollLeft = Math.min(Math.max(0, target.scrollLeft + dx), maxX);
+        target.scrollTop = Math.min(Math.max(0, target.scrollTop + dy), maxY);
+        return {
+          x: Math.round(target.scrollLeft),
+          y: Math.round(target.scrollTop),
+          maxX: Math.round(maxX),
+          maxY: Math.round(maxY),
+        };
+      },
+      { dx: x, dy: y },
+    )
+    .catch(() => null);
+}
+
+/**
+ * Carries out a scroll step and says where the page ended up, naming any axis that came to
+ * rest against the end so a log can tell "moved 800px" from "there was nothing left to
+ * move". Null means nothing on the page scrolls at all.
+ */
+async function scrollOutcome(page: Page, x: number, y: number): Promise<string | null> {
+  const moved = await scrollPageBy(page, x, y);
+  if (!moved) return null;
+  const ends = [
+    x !== 0 && moved.x === (x > 0 ? moved.maxX : 0) ? "x" : "",
+    y !== 0 && moved.y === (y > 0 ? moved.maxY : 0) ? "y" : "",
+  ]
+    .filter(Boolean)
+    .join("/");
+  return `scrolled to ${moved.x},${moved.y}${ends ? ` (${ends} at the end)` : ""}`;
+}
+
 async function runInAppClicks(
   page: Page,
   steps: string[],
@@ -1120,6 +1229,17 @@ async function runInAppClicks(
       // Bounded by the action budget, so a long delay cannot outlive it
       await sleep(pause, deadline);
       done.push(`waited ${pause}ms`);
+      continue;
+    }
+
+    // Brings a control below the fold into view so the step after this one can press it.
+    // A page with nothing to scroll is not a failure -- the app may already fit on screen,
+    // and the step that wanted the control will say so itself.
+    const scroll = parseScrollStep(step);
+    if (scroll) {
+      const outcome = await scrollOutcome(page, scroll.x, scroll.y);
+      done.push(outcome ?? `scroll(${scroll.x}, ${scroll.y}) found nothing that scrolls`);
+      await sleep(tune.inAppStepMs, deadline);
       continue;
     }
 
@@ -1467,6 +1587,16 @@ async function runWebSteps(
           break;
         }
 
+        case "web_scroll": {
+          const x = Math.round(step.x || 0);
+          const y = Math.round(step.y || 0);
+          if (!x && !y) throw new Error("no distance to scroll was given");
+          // A page with nothing to scroll is not a failure: it may already fit on screen,
+          // and the step that wanted the element will say so itself.
+          log.outcome = (await scrollOutcome(page, x, y)) ?? "nothing on the page scrolls";
+          break;
+        }
+
         case "web_wait_element": {
           const selector = step.selector.trim();
           if (!selector) throw new Error("no CSS selector given");
@@ -1578,6 +1708,8 @@ function describeWebStep(step: WebStep): string {
       return `Type into \`${step.selector}\``;
     case "web_delay":
       return `Wait ${Math.round((step.waitMs || 0) / 1000)}s`;
+    case "web_scroll":
+      return `Scroll ${Math.round(step.x || 0)},${Math.round(step.y || 0)}px`;
     case "web_wait_element":
       return `Wait for \`${step.selector}\``;
     case "ai_web_button":
