@@ -11,6 +11,46 @@ import { Api, TelegramClient } from "telegram";
 // a real client gives them rather than being loaded as web pages.
 
 /**
+ * The theme a client hands a Mini App. Kept in step with the palette the messenger viewer
+ * sends over the `theme_changed` bridge, so an app reading either sees the same colours.
+ */
+const THEME_PARAMS = {
+  bg_color: "#ffffff",
+  text_color: "#1a1a2e",
+  hint_color: "#999999",
+  link_color: "#4361ee",
+  button_color: "#4361ee",
+  button_text_color: "#ffffff",
+  secondary_bg_color: "#f7f8fc",
+};
+
+/**
+ * The launch parameters a client adds rather than the server: Telegram signs `tgWebAppData`
+ * and returns it, but the theme is the client's to supply, and RequestSimpleWebView answers
+ * without the version or platform.
+ *
+ * An app built on telegram-web-app.js defaults whatever is missing, which is why most open
+ * fine without these. @telegram-apps/sdk instead validates the whole set and throws
+ * LaunchParamsRetrieveError ("opened outside Telegram?") when the theme is absent, which the
+ * app shows as its own error page -- a blank panel with no clue where the fault is.
+ */
+const CLIENT_LAUNCH_PARAMS: [name: string, value: string][] = [
+  ["tgWebAppVersion", "8.0"],
+  ["tgWebAppPlatform", "web"],
+  ["tgWebAppThemeParams", JSON.stringify(THEME_PARAMS)],
+];
+
+/** Fills in the launch parameters Telegram leaves to the client, keeping any already there. */
+export function withClientLaunchParams(url: string): string {
+  let out = url;
+  for (const [name, value] of CLIENT_LAUNCH_PARAMS) {
+    if (new RegExp(`[#&]${name}=`).test(out)) continue;
+    out += `${out.includes("#") ? "&" : "#"}${name}=${encodeURIComponent(value)}`;
+  }
+  return out;
+}
+
+/**
  * A t.me mini app link: `t.me/BotName/AppShortName` or `t.me/BotName`, either of which may
  * carry `?startapp=PARAM`. The parameter is how a bot hands the app a context (which
  * giveaway, which group); plenty of apps have no use for one, so it is optional.
@@ -121,7 +161,7 @@ async function resolveMiniAppLink(
           writeAllowed: true,
         }),
       )) as Api.WebViewResultUrl;
-      if (res?.url) return { url: res.url, resolved: true };
+      if (res?.url) return { url: withClientLaunchParams(res.url), resolved: true };
     } else {
       const res = (await client.invoke(
         new Api.messages.RequestMainWebView({
@@ -131,7 +171,7 @@ async function resolveMiniAppLink(
           ...(link.startParam ? { startParam: link.startParam } : {}),
         }),
       )) as Api.WebViewResultUrl;
-      if (res?.url) return { url: res.url, resolved: true };
+      if (res?.url) return { url: withClientLaunchParams(res.url), resolved: true };
     }
   } catch {
     /* bot refused, or the app short name is wrong -- caller falls back */
@@ -158,7 +198,7 @@ export async function resolveMiniAppUrl(
     const res = (await client.invoke(
       new Api.messages.RequestWebView({ peer: peer ?? bot, bot, url, platform }),
     )) as Api.WebViewResultUrl;
-    if (res?.url) return { url: res.url, resolved: true };
+    if (res?.url) return { url: withClientLaunchParams(res.url), resolved: true };
   } catch {
     /* not accepted as an inline webview -- try the simple form below */
   }
@@ -167,7 +207,7 @@ export async function resolveMiniAppUrl(
     const res = (await client.invoke(
       new Api.messages.RequestSimpleWebView({ bot, url, platform }),
     )) as Api.WebViewResultUrl;
-    if (res?.url) return { url: res.url, resolved: true };
+    if (res?.url) return { url: withClientLaunchParams(res.url), resolved: true };
   } catch {
     /* bot refused; caller falls back to the bare URL */
   }
@@ -220,7 +260,8 @@ export async function openableBotMenuApp(
         fromBotMenu: true,
       } as any),
     )) as Api.WebViewResultUrl;
-    if (res?.url) return { url: res.url, text: button.text, signed: true };
+    if (res?.url)
+      return { url: withClientLaunchParams(res.url), text: button.text, signed: true };
   } catch {
     /* the bot refused; the caller decides whether the bare address is any use */
   }

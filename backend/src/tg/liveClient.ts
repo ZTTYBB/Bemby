@@ -6,7 +6,7 @@ import { NewMessage, Raw, type NewMessageEvent } from "telegram/events";
 import { db, getDefaultTgApiCredentials } from "../db/database";
 import { parseTgProxy } from "../jobs/runner";
 import { resolveAppClientParams } from "./appClient";
-import { parseMiniAppLink } from "./miniApp";
+import { parseMiniAppLink, withClientLaunchParams } from "./miniApp";
 
 export type TgLiveMessage = {
   chatId: string;
@@ -2025,7 +2025,7 @@ export async function resolveWebApp(
           writeAllowed: true,
         }),
       )) as any;
-      return { url: result.url as string, resolved: true };
+      return { url: withClientLaunchParams(result.url as string), resolved: true };
     }
 
     const result = (await entry.client.invoke(
@@ -2036,7 +2036,7 @@ export async function resolveWebApp(
         startParam,
       }),
     )) as any;
-    return { url: result.url as string, resolved: true };
+    return { url: withClientLaunchParams(result.url as string), resolved: true };
   }
 
   // Direct web app URL with a known bot
@@ -2066,7 +2066,7 @@ export async function resolveWebApp(
               ...(fromBotMenu ? { fromBotMenu: true } : {}),
             } as any),
           )) as any;
-          return { url: result.url as string, resolved: true };
+          return { url: withClientLaunchParams(result.url as string), resolved: true };
         } catch {
           const result = (await entry.client.invoke(
             new Api.messages.RequestSimpleWebView({
@@ -2075,7 +2075,7 @@ export async function resolveWebApp(
               platform: "web",
             } as any),
           )) as any;
-          return { url: result.url as string, resolved: true };
+          return { url: withClientLaunchParams(result.url as string), resolved: true };
         }
       }
     } catch {

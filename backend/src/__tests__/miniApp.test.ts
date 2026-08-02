@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Api } from 'telegram';
-import { webButtonOf, parseBotStartLink } from '../tg/miniApp';
+import { webButtonOf, parseBotStartLink, withClientLaunchParams } from '../tg/miniApp';
 import { solveArithmetic } from '../jobs/cloudflare';
 
 describe('webButtonOf', () => {
@@ -90,5 +90,36 @@ describe('solveArithmetic', () => {
   it('ignores numbers that are not a posed question', () => {
     expect(solveArithmetic('2026/08/10 到期')).toBeUndefined();
     expect(solveArithmetic('当前积分 43')).toBeUndefined();
+  });
+});
+
+describe('withClientLaunchParams', () => {
+  const signed =
+    'https://web.nebula-media.org/#tgWebAppData=query_id%3Dx%26hash%3Dab' +
+    '&tgWebAppVersion=8.0&tgWebAppPlatform=web&tgWebAppBotInline=1';
+
+  it('adds the theme Telegram leaves to the client', () => {
+    const out = withClientLaunchParams(signed);
+    expect(out.startsWith(signed)).toBe(true);
+    const theme = new URLSearchParams(out.split('#')[1]).get('tgWebAppThemeParams');
+    expect(JSON.parse(theme!)).toMatchObject({ bg_color: '#ffffff' });
+  });
+
+  it('fills in the version and platform a simple webview answers without', () => {
+    const out = withClientLaunchParams('https://app.example.com/#tgWebAppData=query_id%3Dx');
+    const params = new URLSearchParams(out.split('#')[1]);
+    expect(params.get('tgWebAppVersion')).toBe('8.0');
+    expect(params.get('tgWebAppPlatform')).toBe('web');
+  });
+
+  it('keeps what Telegram already sent', () => {
+    const out = withClientLaunchParams(signed + '&tgWebAppThemeParams=%7B%7D');
+    expect(out.match(/tgWebAppThemeParams=/g)).toHaveLength(1);
+    expect(out).toContain('tgWebAppVersion=8.0');
+    expect(out.match(/tgWebAppVersion=/g)).toHaveLength(1);
+  });
+
+  it('opens a fragment on an address that has none', () => {
+    expect(withClientLaunchParams('https://app.example.com/?a=b')).toContain('/?a=b#tgWebAppVersion=8.0');
   });
 });
