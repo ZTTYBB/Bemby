@@ -2062,11 +2062,24 @@ async function bulkMuteBotForever() {
   showToast(t('templates.bulkMuteBotForeverDone'));
 }
 
-const SHARE_KEYS: (keyof JobTemplate)[] = ['name', 'jobType', 'botUsername', 'timezone', 'replyTimeoutMs', 'retryMax', 'config', 'startCommand', 'checkinButton'];
+const SHARE_KEYS: (keyof JobTemplate)[] = ['name', 'jobType', 'botUsername', 'timezone', 'replyTimeoutMs', 'retryMax', 'config'];
+
+// The start command and the button are stored on every template, defaulted, but only these
+// job types read them -- a custom or embywatch template shared with them in tow reads as if
+// it sends "/start" and looks for "签到", which it never does.
+const SHARE_KEYS_BY_TYPE: Partial<Record<JobTemplate['jobType'], (keyof JobTemplate)[]>> = {
+  checkin: ['startCommand', 'checkinButton'],
+  autoreg: ['startCommand'],
+};
+
+function shareShape(tpl: JobTemplate): Record<string, unknown> {
+  const keys = [...SHARE_KEYS, ...(SHARE_KEYS_BY_TYPE[tpl.jobType] ?? [])];
+  return Object.fromEntries(keys.map(k => [k, tpl[k]]));
+}
 
 async function shareSelected() {
   const selected = templates.value.filter(t => selectedIds.value.includes(t.id));
-  const text = JSON.stringify(selected.map(tpl => Object.fromEntries(SHARE_KEYS.map(k => [k, tpl[k]]))), null, 2);
+  const text = JSON.stringify(selected.map(shareShape), null, 2);
   await writeClipboard(text);
   sharedMulti.value = true;
   setTimeout(() => { sharedMulti.value = false; }, 1500);
@@ -2088,7 +2101,7 @@ async function writeClipboard(text: string) {
 }
 
 async function shareTemplate(tpl: JobTemplate) {
-  const text = JSON.stringify(Object.fromEntries(SHARE_KEYS.map(k => [k, tpl[k]])), null, 2);
+  const text = JSON.stringify(shareShape(tpl), null, 2);
   await writeClipboard(text);
   copiedTplId.value = tpl.id;
   setTimeout(() => { copiedTplId.value = null; }, 1500);
