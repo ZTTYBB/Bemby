@@ -270,6 +270,7 @@
                     <option value="subscribe_channel">{{ t('jobs.custom.actionSubscribeChannel') }}</option>
                     <option value="open_mini_app" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenMiniApp') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
                     <option value="open_mini_app_url" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenMiniAppUrl') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
+                    <option value="open_bot_menu_app" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenBotMenuApp') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
                     <option value="open_url" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenUrl') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
                   </select>
                   <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === 0" @click="moveUp(i)"><i class="fa-solid fa-arrow-up"></i></button>
@@ -586,12 +587,12 @@
                   </div>
                 </div>
 
-                <!-- open_mini_app / open_mini_app_url -->
-                <div v-if="action.type === 'open_mini_app' || action.type === 'open_mini_app_url'" class="custom-action-params">
+                <!-- open_mini_app / open_mini_app_url / open_bot_menu_app -->
+                <div v-if="action.type === 'open_mini_app' || action.type === 'open_mini_app_url' || action.type === 'open_bot_menu_app'" class="custom-action-params">
                   <div class="form-group" style="margin-bottom:0">
-                    <label class="form-label">{{ action.type === 'open_mini_app_url' ? t('jobs.custom.labelMiniAppOwner') : t('jobs.custom.labelContactOptional') }}</label>
+                    <label class="form-label">{{ action.type === 'open_mini_app' ? t('jobs.custom.labelContactOptional') : action.type === 'open_mini_app_url' ? t('jobs.custom.labelMiniAppOwner') : t('jobs.custom.labelMenuAppOwner') }}</label>
                     <input v-model.trim="action.contact" class="form-input" :placeholder="t('jobs.custom.contactOptionalPlaceholder')" />
-                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ action.type === 'open_mini_app_url' ? t('jobs.custom.miniAppOwnerHint') : t('jobs.custom.contactOptionalHint') }}</div>
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ action.type === 'open_mini_app' ? t('jobs.custom.contactOptionalHint') : action.type === 'open_mini_app_url' ? t('jobs.custom.miniAppOwnerHint') : t('jobs.custom.menuAppOwnerHint') }}</div>
                   </div>
                   <div v-if="action.type === 'open_mini_app_url'" class="form-group" style="margin-bottom:0;margin-top:8px">
                     <label class="form-label">{{ t('jobs.custom.labelMiniAppUrl') }}</label>
@@ -1062,7 +1063,7 @@ import WebStepsEditor from '../components/WebStepsEditor.vue';
 import { webStepsFromConfig, webStepsToConfig, type WebStepForm } from '../composables/webSteps';
 
 type CustomActionForm = {
-  type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'ai_multiple_btn' | 'enter_captcha' | 'join_group' | 'subscribe_channel' | 'open_mini_app' | 'open_mini_app_url' | 'open_url';
+  type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'ai_multiple_btn' | 'enter_captcha' | 'join_group' | 'subscribe_channel' | 'open_mini_app' | 'open_mini_app_url' | 'open_bot_menu_app' | 'open_url';
   content: string;
   contentDropdown: string;
   contentCustom: string;
@@ -1503,6 +1504,17 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
         };
+        if (a.type === 'open_bot_menu_app') return {
+          type: 'open_bot_menu_app' as const,
+          ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
+          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+          ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
+          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+        };
         if (a.type === 'open_url') return {
           type: 'open_url' as const,
           url: a.url.trim(),
@@ -1717,6 +1729,7 @@ function openEdit(tpl: JobTemplate) {
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel' as const, channelId: a.channelId, checkMembership: a.checkMembership ?? false };
           if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
           if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
           if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
           if (a.type === 'ai_multiple_btn') return { ...base, type: 'ai_multiple_btn' as const, contact: a.contact ?? '', buttonAiHint: a.hint ?? '', gapMs: a.gapMs ?? 1000, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           if (a.type === 'click_button') {

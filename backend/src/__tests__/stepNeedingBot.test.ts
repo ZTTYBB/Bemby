@@ -34,6 +34,18 @@ describe("stepNeedingBot", () => {
     ).toBeNull();
   });
 
+  it("holds the line for the bot's menu button, which is nothing without a bot", () => {
+    // There is no address to fall back on: the bot has to be asked what it pins
+    expect(stepNeedingBot([{ type: "open_bot_menu_app" } as CustomAction], "")).toEqual({
+      at: 0,
+      type: "open_bot_menu_app",
+    });
+    expect(
+      stepNeedingBot([{ type: "open_bot_menu_app", contact: "@misayamidiabot" } as CustomAction], ""),
+    ).toBeNull();
+    expect(stepNeedingBot([{ type: "open_bot_menu_app" } as CustomAction], "a_bot")).toBeNull();
+  });
+
   it("names the first step that cannot run, counting from the whole list", () => {
     const actions = [
       { type: "delay", waitMs: 1 },

@@ -212,6 +212,30 @@ export type CustomAction =
       tryAllProxies?: boolean;
     }
   | {
+      // Open the Mini App a bot pins beside the composer -- the button at the bottom left
+      // of its chat, next to the attachment clip. It belongs to the bot rather than to any
+      // message, so nothing in the chat history points at it and no address needs typing:
+      // the bot is asked what its button is, and Telegram signs it for this account.
+      type: "open_bot_menu_app";
+      /** Bot whose menu button to open. Blank uses the job's bot. */
+      contact?: string;
+      /**
+       * Steps to run inside the app, in order, same vocabulary as `open_mini_app`
+       * (control text, `css:`, `delay()`, `scroll()`, `{aiBtn}`, `{input}`, `{aiInput}`).
+       * Blank auto-detects a checkin control.
+       */
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      /** Budget for the browser part of this action. Blank/0 uses the default. */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy list id, or "direct". Blank uses the job's. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
+      tryAllProxies?: boolean;
+    }
+  | {
       // Open a plain web page in the installed browser, passing any Cloudflare challenge,
       // and drive it with the sub-steps below. Nothing about this action goes through
       // Telegram: the URL is opened directly.

@@ -176,6 +176,58 @@ export async function resolveMiniAppUrl(
 }
 
 /**
+ * The Mini App a bot pins beside the composer, and its label -- the button at the bottom
+ * left of the chat. It is a property of the bot, not of any message, so it appears nowhere
+ * in the history and this is the only way to reach it.
+ *
+ * Three shapes come back from Telegram here. The default and "commands" variants only say
+ * which menu a client should show and carry no app at all; only `botMenuButton` has an
+ * address, and a bot without one returns null rather than an empty address.
+ */
+export async function botMenuButtonOf(
+  client: TelegramClient,
+  bot: Api.TypeEntityLike,
+): Promise<{ text: string; url: string } | null> {
+  const entity = (await client.getEntity(bot)) as Api.User;
+  if (!(entity instanceof Api.User) || !entity.bot) return null;
+  const full = (await client.invoke(new Api.users.GetFullUser({ id: entity as any }))) as any;
+  const raw = full?.fullUser?.botInfo?.menuButton;
+  if (!raw || typeof raw.url !== "string" || !raw.url) return null;
+  return { text: String(raw.text ?? "").trim() || "Mini App", url: raw.url };
+}
+
+/**
+ * Asks a bot for its menu button and has Telegram sign it for this account.
+ *
+ * `fromBotMenu` is what makes the signing work: the address is the bot's registered one
+ * rather than a button in a message, and asked for any other way Telegram takes it for an
+ * inline-keyboard webview and hands back a URL carrying no account data at all -- the app
+ * then loads and fails on its own "No initData found".
+ */
+export async function openableBotMenuApp(
+  client: TelegramClient,
+  bot: Api.TypeEntityLike,
+): Promise<{ url: string; text: string; signed: boolean } | null> {
+  const button = await botMenuButtonOf(client, bot);
+  if (!button) return null;
+  try {
+    const res = (await client.invoke(
+      new Api.messages.RequestWebView({
+        peer: bot,
+        bot,
+        url: button.url,
+        platform: "web",
+        fromBotMenu: true,
+      } as any),
+    )) as Api.WebViewResultUrl;
+    if (res?.url) return { url: res.url, text: button.text, signed: true };
+  } catch {
+    /* the bot refused; the caller decides whether the bare address is any use */
+  }
+  return { url: button.url, text: button.text, signed: false };
+}
+
+/**
  * Signs an address the operator typed rather than one read off a button. A
  * `t.me/<bot>/<app>` link names its own bot and is resolved from the link; anything else
  * is signed through `bot`, which is the only way Telegram will attach the init data.

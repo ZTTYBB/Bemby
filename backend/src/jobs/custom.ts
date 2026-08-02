@@ -32,6 +32,7 @@ import {
   type LoadOptions,
 } from "./cloudflare";
 import {
+  openableBotMenuApp,
   openableButtonUrl,
   openableMiniAppUrl,
   webButtonOf,
@@ -681,7 +682,10 @@ export function stepNeedingBot(
   if (botUsername.trim()) return null;
   const at = actions.findIndex((a) => {
     switch (a.type) {
+      // Both need to know whose: one hunts a button in a conversation, the other asks a
+      // bot what it pins beside the composer. Neither has anything to work from otherwise.
       case "open_mini_app":
+      case "open_bot_menu_app":
         return !a.contact?.trim();
       case "open_mini_app_url":
       case "send_contact_message":
@@ -2507,38 +2511,74 @@ export async function runCustom(
                 break;
               }
 
+              case "open_bot_menu_app":
               case "open_mini_app_url": {
-                // Placeholders expand as they do for a command, so one template URL can
-                // still carry a per-run value
-                const rawUrl = expandCommand(action.url ?? "").trim();
-                if (!rawUrl) throw new Error("This action needs a Mini App URL");
-                // Blank names the job's own bot, which is the common case: a template set
-                // up for one bot works for every account linked to it
-                const owner = action.contact?.trim() || botUsername.trim();
-                step.label = `Open Mini App ${rawUrl}`;
+                // Both open a signed Mini App in the browser and differ only in where the
+                // address comes from -- one is typed, the other asked of the bot -- so the
+                // resolution is per type and everything past it is shared.
+                let url: string;
+                let unsigned = false;
+                // Init data ages, so each browser attempt is signed afresh
+                let refresh: () => Promise<string>;
 
-                // An address that already carries its account data needs no signing: it is
-                // what Telegram would have handed back anyway
-                const carriesAccount = /[#&]tgWebAppData=/.test(rawUrl);
-                const { url, signed } = await openableMiniAppUrl(
-                  client,
-                  rawUrl,
-                  owner || undefined,
-                );
-                step.cfMiniApp = true;
-                step.cfMiniAppSigned = signed || carriesAccount;
+                if (action.type === "open_bot_menu_app") {
+                  const owner = action.contact?.trim() || botUsername.trim();
+                  if (!owner) {
+                    throw new Error(
+                      "This action needs the bot whose menu button to open. Set one on the " +
+                        "job, or give the step its own contact.",
+                    );
+                  }
+                  const app = await openableBotMenuApp(client, owner);
+                  if (!app) {
+                    throw new Error(
+                      `${owner} pins no Mini App beside the composer, so it has no menu ` +
+                        "button to open. Use “Open Mini App by URL” with its address instead.",
+                    );
+                  }
+                  step.label = `Open "${app.text}" (${owner} menu button)`;
+                  step.cfMiniApp = true;
+                  step.cfMiniAppSigned = app.signed;
+                  if (!app.signed) {
+                    throw new Error(
+                      `Telegram would not sign ${owner}'s menu Mini App, so it cannot be ` +
+                        "opened logged in.",
+                    );
+                  }
+                  url = app.url;
+                  refresh = async () => (await openableBotMenuApp(client, owner))?.url ?? app.url;
+                } else {
+                  // Placeholders expand as they do for a command, so one template URL can
+                  // still carry a per-run value
+                  const rawUrl = expandCommand(action.url ?? "").trim();
+                  if (!rawUrl) throw new Error("This action needs a Mini App URL");
+                  // Blank names the job's own bot, which is the common case: a template set
+                  // up for one bot works for every account linked to it
+                  const owner = action.contact?.trim() || botUsername.trim();
+                  step.label = `Open Mini App ${rawUrl}`;
 
-                // Naming a bot and being refused by it is a misconfiguration worth stopping
-                // for. Naming none is a deliberate choice -- the page is opened on this
-                // account's browser and exit as it stands, which is all some apps need.
-                if (!signed && owner) {
-                  throw new Error(
-                    `Telegram would not sign this Mini App URL through ${owner}, so it cannot be ` +
-                      "opened logged in. Check the bot owns the app, use its t.me/<bot>/<app> link, " +
-                      "or clear the contact to open the address as it stands.",
-                  );
+                  // An address that already carries its account data needs no signing: it
+                  // is what Telegram would have handed back anyway
+                  const carriesAccount = /[#&]tgWebAppData=/.test(rawUrl);
+                  const resolved = await openableMiniAppUrl(client, rawUrl, owner || undefined);
+                  step.cfMiniApp = true;
+                  step.cfMiniAppSigned = resolved.signed || carriesAccount;
+
+                  // Naming a bot and being refused by it is a misconfiguration worth
+                  // stopping for. Naming none is a deliberate choice -- the page is opened
+                  // on this account's browser and exit as it stands, which some apps need.
+                  if (!resolved.signed && owner) {
+                    throw new Error(
+                      `Telegram would not sign this Mini App URL through ${owner}, so it cannot be ` +
+                        "opened logged in. Check the bot owns the app, use its t.me/<bot>/<app> link, " +
+                        "or clear the contact to open the address as it stands.",
+                    );
+                  }
+                  url = resolved.url;
+                  unsigned = !resolved.signed && !carriesAccount;
+                  refresh = async () =>
+                    (await openableMiniAppUrl(client, rawUrl, owner || undefined)).url;
                 }
-                const unsigned = !signed && !carriesAccount;
 
                 const cfHost = (() => {
                   try {
@@ -2598,8 +2638,7 @@ export async function runCustom(
                     return response;
                   },
                   proxyCandidates: candidates,
-                  // Init data ages, so each attempt is signed afresh
-                  refreshUrl: async () => (await openableMiniAppUrl(client, rawUrl, owner)).url,
+                  refreshUrl: refresh,
                 });
                 step.cfHost = cf.finalHost;
                 step.cfChallenged = cf.challenged;

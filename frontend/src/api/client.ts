@@ -392,6 +392,19 @@ export type CustomAction =
       tryAllProxies?: boolean;
     }
   | {
+      /** The Mini App a bot pins beside the composer, opened without naming an address. */
+      type: "open_bot_menu_app";
+      /** Bot whose menu button to open. Blank uses the job's bot. */
+      contact?: string;
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      maxWaitMs?: number;
+      proxyId?: string;
+      tryAllProxies?: boolean;
+    }
+  | {
       type: "open_mini_app";
       contact?: string;
       button?: string;
