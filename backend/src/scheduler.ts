@@ -530,11 +530,46 @@ export function startScheduler(): void {
 export function getSchedulerStatus(): Array<{
   jobId: number;
   jobName: string;
+  jobType: string;
   nextRun: string;
 }> {
   return Array.from(schedule.values()).map(({ job, nextRun }) => ({
     jobId: job.id,
     jobName: job.name,
+    jobType: job.jobType,
     nextRun: nextRun.toISOString(),
   }));
+}
+
+/**
+ * Drops a job's pending run and arms the one after it, which is how an operator calls off a
+ * run they can see coming without disabling the job. The job keeps its schedule; only this
+ * occurrence is given up, so the list shows it again on its next eligible day.
+ */
+export function skipNextRun(jobId: number): { ok: boolean; nextRun?: string } {
+  const entry = schedule.get(jobId);
+  if (!entry) return { ok: false };
+
+  // Counted from the pending run's own day, not from today: that run may already be days out
+  // (its window has passed today), and a day counted from today would land on or before it --
+  // rescheduling the very run being called off, sometimes to an earlier minute.
+  const pendingDay = DateTime.fromJSDate(entry.nextRun)
+    .setZone(entry.timezone)
+    .startOf("day");
+  const today = DateTime.now().setZone(entry.timezone).startOf("day");
+  const daysUntilPending = Math.max(0, Math.round(pendingDay.diff(today, "days").days));
+
+  // Past that day, the next opportunity is one interval on -- one day for a daily job
+  const interval = checkDailyRunEnabled()
+    ? Math.max(
+        1,
+        resolveRunEveryDays(jobId, entry.job.runEveryDays ?? 1, entry.job.runEveryDaysMax),
+      )
+    : 1;
+  const daysAhead = daysUntilPending + interval;
+
+  scheduleOne(entry.job, entry.account, daysAhead);
+  const nextRun = schedule.get(jobId)?.nextRun.toISOString();
+  console.log(`[scheduler] "${entry.job.name}" run skipped by operator; next run: ${nextRun}`);
+  return { ok: true, nextRun };
 }

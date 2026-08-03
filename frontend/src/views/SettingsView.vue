@@ -554,6 +554,24 @@
             </button>
           </div>
 
+          <!-- Schedule list placement -->
+          <div class="settings-subsection" style="margin-top: 28px">
+            {{ t("settings.schedulePageSection") }}
+          </div>
+          <div class="form-group">
+            <label class="form-check">
+              <input
+                type="checkbox"
+                v-model="scheduleSeparatePageSetting"
+                @change="saveSchedulePage"
+              />
+              <span>{{ t("settings.schedulePageToggle") }}</span>
+            </label>
+            <p style="font-size: 12px; color: #888; margin: 4px 0 0 24px">
+              {{ t("settings.schedulePageHint") }}
+            </p>
+          </div>
+
           <!-- TG account display -->
           <div class="settings-subsection" style="margin-top: 28px">
             {{ t("settings.accountDisplaySection") }}
@@ -1804,6 +1822,7 @@ import type {
 } from "../api/client";
 import { t } from "../i18n";
 import { setAccountDisplayWithTgName } from "../composables/accountDisplay";
+import { setSchedulePageSeparate } from "../composables/schedulePage";
 
 const timezones = [
   "Australia/Sydney",
@@ -2521,6 +2540,7 @@ const defaultTgApiError = ref("");
 
 // ── TG account display ─────────────────────────────────────────────────────────
 const accountDisplayWithTgName = ref(false);
+const scheduleSeparatePageSetting = ref(false);
 
 async function saveDefaultTgApi() {
   defaultTgApiMsg.value = "";
@@ -2647,6 +2667,7 @@ onMounted(async () => {
     defaultTgApiId.value = Number(s.default_tg_api_id) || 0;
     defaultTgApiHashMasked.value = s.default_tg_api_hash ?? "";
     accountDisplayWithTgName.value = s.account_display_with_tg_name === "true";
+    scheduleSeparatePageSetting.value = s.schedule_separate_page === "true";
     form.default_play_duration = Number(s.default_play_duration ?? 300);
     form.default_device_name = s.default_device_name ?? "Mac";
     form.ai_model = s.ai_model ?? "";
@@ -2998,6 +3019,18 @@ async function saveAccountDisplay() {
   } catch {
     // revert on failure
     accountDisplayWithTgName.value = !accountDisplayWithTgName.value;
+  }
+}
+
+async function saveSchedulePage() {
+  try {
+    await settingsApi.update({
+      schedule_separate_page: String(scheduleSeparatePageSetting.value),
+    });
+    // Move the menu entry and the jobs-page panel at once
+    setSchedulePageSeparate(scheduleSeparatePageSetting.value);
+  } catch {
+    scheduleSeparatePageSetting.value = !scheduleSeparatePageSetting.value;
   }
 }
 

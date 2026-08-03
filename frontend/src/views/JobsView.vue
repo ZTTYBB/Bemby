@@ -5,49 +5,8 @@
       <button class="btn btn-primary" @click="openAdd"><i class="fa-solid fa-plus"></i> {{ t('jobs.addBtn') }}</button>
     </div>
 
-    <!-- Scheduler status -->
-    <div v-if="scheduleStatus.length" class="card sched-card">
-      <button class="sched-head" @click="schedOpen = !schedOpen">
-        <span class="sched-title">
-          <i :class="schedOpen ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"></i>
-          {{ t('jobs.nextRuns') }}
-          <span class="sched-count">{{ scheduleStatus.length }}</span>
-        </span>
-        <span v-if="sortedScheduleStatus.length" class="sched-summary">
-          {{ t('jobs.nextUp') }}:
-          <strong>{{ sortedScheduleStatus[0].jobName }}</strong>
-          · {{ fmtDateTime(sortedScheduleStatus[0].nextRun) }}
-        </span>
-      </button>
-      <div v-if="schedOpen" class="sched-body">
-        <input
-          v-model.trim="schedSearch"
-          class="form-input sched-search"
-          :placeholder="t('jobs.filterPlaceholder')"
-        />
-        <div class="sched-scroll">
-          <div v-for="day in scheduleByDay" :key="day.key" class="sched-day">
-            <div class="sched-day-head">
-              <span class="sched-day-label">{{ day.label }}</span>
-              <span class="sched-day-count">{{ day.items.length }}</span>
-            </div>
-            <div class="sched-day-items">
-              <span
-                v-for="s in day.items"
-                :key="s.jobId"
-                class="sched-chip"
-                :class="{ 'sched-chip-next': s.jobId === nextJobId }"
-                :title="s.jobName"
-              >
-                <span class="sched-time">{{ fmtTime(s.nextRun) }}</span>
-                <span class="sched-name">{{ s.jobName }}</span>
-              </span>
-            </div>
-          </div>
-          <div v-if="!scheduleByDay.length" class="sched-empty">{{ t('jobs.noScheduleMatch') }}</div>
-        </div>
-      </div>
-    </div>
+    <!-- Scheduler status; hidden when the operator moved it to its own menu entry -->
+    <ScheduleList v-if="!scheduleSeparatePage" ref="scheduleListRef" collapsible />
 
     <div class="card">
       <!-- Filters -->
@@ -1146,11 +1105,13 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
-import { jobsApi, accountsApi, statusApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type ScheduleStatus, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig, type CheckinConfig } from '../api/client';
+import { jobsApi, accountsApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig, type CheckinConfig } from '../api/client';
 import { t, locale } from '../i18n';
 import { regexValid } from '../utils/regexCheck';
 import { usePersistedRef } from '../composables/usePersistedRef';
 import { formatAccountLabel, loadAccountDisplaySetting } from '../composables/accountDisplay';
+import { loadSchedulePageSetting, scheduleSeparatePage } from '../composables/schedulePage';
+import ScheduleList from '../components/ScheduleList.vue';
 import { debounce } from '../composables/useDebounce';
 import PaginationBar from '../components/PaginationBar.vue';
 import WebStepsEditor from '../components/WebStepsEditor.vue';
@@ -1195,32 +1156,6 @@ type CustomActionForm = {
 const jobs = ref<Job[]>([]);
 const accounts = ref<Account[]>([]);
 const templates = ref<JobTemplate[]>([]);
-const scheduleStatus = ref<ScheduleStatus[]>([]);
-const sortedScheduleStatus = computed(() =>
-  [...scheduleStatus.value].sort((a, b) => a.nextRun.localeCompare(b.nextRun))
-);
-const schedOpen = usePersistedRef<boolean>('bemby:jobs:schedOpen', true);
-const schedSearch = ref('');
-const nextJobId = computed(() => sortedScheduleStatus.value[0]?.jobId ?? null);
-// Upcoming runs grouped by local calendar day, filtered by the in-panel search.
-const scheduleByDay = computed(() => {
-  const q = schedSearch.value.toLowerCase();
-  const filtered = q
-    ? sortedScheduleStatus.value.filter((s) => s.jobName.toLowerCase().includes(q))
-    : sortedScheduleStatus.value;
-  const groups = new Map<string, { key: string; label: string; items: ScheduleStatus[] }>();
-  for (const s of filtered) {
-    const d = new Date(s.nextRun);
-    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-    let g = groups.get(key);
-    if (!g) {
-      g = { key, label: fmtDayLabel(d), items: [] };
-      groups.set(key, g);
-    }
-    g.items.push(s);
-  }
-  return [...groups.values()];
-});
 const settings = ref<Settings | null>(null);
 const uaPresets = computed<UAPreset[]>(() => {
   try { return JSON.parse(settings.value?.ua_presets ?? '[]'); } catch { return []; }
@@ -1522,6 +1457,7 @@ function moveDown(i: number) {
 
 onMounted(async () => {
   loadAccountDisplaySetting();
+  loadSchedulePageSetting();
   await Promise.all([loadJobs(), loadAccounts(), loadStatus(), loadSettings(), loadTemplates()]);
 });
 
@@ -1681,23 +1617,16 @@ async function loadAccounts() {
   accounts.value = await accountsApi.list();
 }
 
+const scheduleListRef = ref<{ reload: () => Promise<void> } | null>(null);
+
+// The panel owns its own data; job changes here just ask it to look again
 async function loadStatus() {
-  try { scheduleStatus.value = await statusApi.get(); } catch { /* ignore */ }
+  await scheduleListRef.value?.reload();
 }
 
 function fmtWindow(start: number, end: number) {
   const fmt = (n: number) => `${String(Math.floor(n / 100)).padStart(2, '0')}:${String(n % 100).padStart(2, '0')}`;
   return `${fmt(start)} – ${fmt(end)}`;
-}
-
-function fmtDateTime(iso: string) {
-  const localeMap: Record<string, string> = { en: 'en-AU', zh: 'zh-CN' };
-  return new Date(iso).toLocaleString(localeMap[locale.value] ?? 'en-AU', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
-
-function fmtTime(iso: string) {
-  const localeMap: Record<string, string> = { en: 'en-AU', zh: 'zh-CN' };
-  return new Date(iso).toLocaleTimeString(localeMap[locale.value] ?? 'en-AU', { hour: '2-digit', minute: '2-digit' });
 }
 
 // Absolute timestamp including the year, for the last-success tooltip where the
@@ -1751,20 +1680,6 @@ function fmtSince(iso: string) {
   const years = Math.floor(months / 12);
   const remMonths = months % 12;
   return remMonths ? ago(unit(years, 'year'), unit(remMonths, 'month')) : ago(unit(years, 'year'));
-}
-
-// Day header: "Today"/"Tomorrow" for the next two days, otherwise weekday + date.
-function fmtDayLabel(d: Date) {
-  const localeMap: Record<string, string> = { en: 'en-AU', zh: 'zh-CN' };
-  const loc = localeMap[locale.value] ?? 'en-AU';
-  const today = new Date();
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const dayMs = 86_400_000;
-  const diff = Math.round((startOf(d) - startOf(today)) / dayMs);
-  const dateStr = d.toLocaleDateString(loc, { weekday: 'short', month: 'short', day: '2-digit' });
-  if (diff === 0) return `${t('jobs.today')} · ${dateStr}`;
-  if (diff === 1) return `${t('jobs.tomorrow')} · ${dateStr}`;
-  return dateStr;
 }
 
 function openAdd() {
@@ -2616,145 +2531,6 @@ tbody tr:nth-child(even):not(.row-selected) td {
 .action-sheet-cancel {
   color: #888;
   font-weight: 500;
-}
-
-.sched-card {
-  margin-bottom: 16px;
-  padding: 0;
-  overflow: hidden;
-}
-.sched-head {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 18px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-}
-.sched-head:hover {
-  background: #f7f8fa;
-}
-.sched-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #888;
-  flex-shrink: 0;
-}
-.sched-title .fa-solid {
-  font-size: 11px;
-  color: #aaa;
-}
-.sched-count {
-  font-size: 11px;
-  font-weight: 600;
-  color: #555;
-  background: #eef0f4;
-  border-radius: 10px;
-  padding: 1px 8px;
-  letter-spacing: 0;
-}
-.sched-summary {
-  font-size: 13px;
-  color: #888;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-.sched-summary strong {
-  color: #333;
-}
-.sched-body {
-  padding: 0 18px 14px;
-}
-.sched-search {
-  width: 100%;
-  height: 32px;
-  font-size: 13px;
-  padding: 0 10px;
-  margin-bottom: 12px;
-}
-.sched-scroll {
-  max-height: 340px;
-  overflow-y: auto;
-}
-.sched-day {
-  margin-bottom: 12px;
-}
-.sched-day-head {
-  position: sticky;
-  top: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0 6px;
-  margin-bottom: 6px;
-  background: #fff;
-  border-bottom: 1px solid #eef0f4;
-  z-index: 1;
-}
-.sched-day-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: #444;
-}
-.sched-day-count {
-  font-size: 11px;
-  color: #999;
-  background: #f2f3f6;
-  border-radius: 10px;
-  padding: 0 7px;
-}
-.sched-day-items {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.sched-chip {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  max-width: 240px;
-  font-size: 12.5px;
-  padding: 3px 9px;
-  border-radius: 6px;
-  background: #f5f6f8;
-  border: 1px solid transparent;
-}
-.sched-time {
-  font-weight: 600;
-  color: #4361ee;
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-}
-.sched-name {
-  color: #444;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sched-chip-next {
-  background: #eef1ff;
-  border-color: #c7d0ff;
-}
-.sched-chip-next .sched-name {
-  color: #2c3a99;
-  font-weight: 600;
-}
-.sched-empty {
-  font-size: 13px;
-  color: #999;
-  text-align: center;
-  padding: 16px 0;
 }
 
 .last-success {

@@ -664,6 +664,8 @@ export type Log = {
 export type ScheduleStatus = {
   jobId: number;
   jobName: string;
+  /** checkin | embywatch | custom | autoreg -- drives the icon and colour on the chip. */
+  jobType: string;
   nextRun: string;
 };
 
@@ -1072,6 +1074,11 @@ export type MemoryReport = {
 
 export const statusApi = {
   get: () => api.get<ScheduleStatus[]>("/status").then((r) => r.data),
+  /** Calls off one upcoming run; the job keeps its schedule and returns on its next day. */
+  skipRun: (jobId: number) =>
+    api
+      .post<{ ok: boolean; nextRun?: string }>(`/status/skip/${jobId}`)
+      .then((r) => r.data),
   memory: () => api.get<MemoryReport>("/status/memory").then((r) => r.data),
 };
 
@@ -1108,6 +1115,8 @@ export type Settings = {
   default_tg_api_hash?: string;
   /** "true" to show accounts as "{Bemby name} - {TG name}" throughout the app. */
   account_display_with_tg_name?: string;
+  /** "true" moves the upcoming-runs list to its own menu entry. */
+  schedule_separate_page?: string;
   /** Days to keep job logs; "0" keeps all logs. */
   log_retention_days?: string;
   /** Minimum minutes between scheduled runs; "0" disables staggering. */

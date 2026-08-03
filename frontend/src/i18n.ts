@@ -6,6 +6,7 @@ const zh = {
   nav: {
     accounts: "账户",
     jobs: "任务",
+    schedule: "计划",
     templates: "模板",
     settings: "设置",
     logs: "日志",
@@ -510,6 +511,7 @@ const zh = {
     title: "任务",
     addBtn: "添加任务",
     nextRuns: "下次计划运行",
+    skipRunHint: "取消这次运行（任务本身保持启用，将在下一个可运行日重新排期）",
     nextUp: "即将运行",
     today: "今天",
     tomorrow: "明天",
@@ -1064,6 +1066,9 @@ const zh = {
     generalSection: "通用设置",
     defaultTgApiSection: "Telegram API 凭据",
     defaultTgApiHint: "未配置独立凭据的账户将使用此处的 Telegram API ID 和 Hash。",
+    schedulePageSection: "计划列表",
+    schedulePageToggle: "把“计划”放到左侧独立菜单",
+    schedulePageHint: "开启后左侧菜单会多出“计划”一项，显示完整的下次运行列表；任务页面内的折叠面板同时隐藏。关闭则保持在任务页面内",
     accountDisplaySection: "TG 账号显示",
     accountDisplayToggle: "以「Bemby 账户名 - TG 账号名」显示账户",
     accountDisplayHint:
@@ -1371,6 +1376,7 @@ const en: typeof zh = {
   nav: {
     accounts: "Accounts",
     jobs: "Jobs",
+    schedule: "Schedule",
     templates: "Templates",
     settings: "Settings",
     logs: "Logs",
@@ -1887,6 +1893,7 @@ const en: typeof zh = {
     title: "Jobs",
     addBtn: "Add Job",
     nextRuns: "Next Scheduled Runs",
+    skipRunHint: "Call off this run. The job stays enabled and is rescheduled for its next eligible day",
     nextUp: "Next up",
     today: "Today",
     tomorrow: "Tomorrow",
@@ -2464,6 +2471,9 @@ const en: typeof zh = {
     defaultTgApiSection: "Telegram API Credentials",
     defaultTgApiHint:
       "Accounts without their own credentials will fall back to this Telegram API ID and Hash.",
+    schedulePageSection: "Schedule list",
+    schedulePageToggle: "Give Schedule its own menu entry",
+    schedulePageHint: "Adds a Schedule entry to the left menu showing the full list of upcoming runs, and hides the collapsible panel on the jobs page. Off keeps it inside the jobs page",
     accountDisplaySection: "TG account display",
     accountDisplayToggle: "Show accounts as {Bemby name} - {TG name}",
     accountDisplayHint:
