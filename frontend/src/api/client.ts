@@ -838,6 +838,16 @@ export const accountsApi = {
     api
       .get<BulkProfileBatch | null>("/accounts/bulk-profile/status")
       .then((r) => r.data),
+  /**
+   * AI-written profiles, already cleaned to what Telegram and the bulk form accept. One
+   * request covers the whole batch; `includeAbout: false` asks for names only.
+   */
+  bulkProfileGenerate: (count: number, hint?: string, includeAbout = true) =>
+    api
+      .post<{
+        profiles: { firstName: string; lastName: string; about: string }[];
+      }>("/accounts/bulk-profile/generate", { count, hint, includeAbout })
+      .then((r) => r.data),
   bulkProfileCancel: () =>
     api
       .post<{ cancelled: boolean }>("/accounts/bulk-profile/cancel")

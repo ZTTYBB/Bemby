@@ -26,6 +26,7 @@ import {
   type PasswordInfo,
 } from "../auth/tgAuth";
 import { checkSpamStatus } from "../jobs/checkin";
+import { generateProfiles } from "../jobs/profileGen";
 import {
   startBulkAdd,
   getBulkAddStatus,
@@ -398,6 +399,30 @@ router.post("/bulk-profile", bulkMgmtGuard, (req, res) => {
     return;
   }
   res.status(201).json(result.batch);
+});
+
+// POST /bulk-profile/generate -- AI-written profiles, cleaned to what Telegram accepts
+router.post("/bulk-profile/generate", bulkMgmtGuard, async (req, res) => {
+  const { count, hint, includeAbout } = req.body as {
+    count?: number;
+    hint?: string;
+    includeAbout?: boolean;
+  };
+  const wanted = Number(count);
+  if (!Number.isInteger(wanted) || wanted < 1 || wanted > 200) {
+    res.status(400).json({ error: "count must be between 1 and 200" });
+    return;
+  }
+  try {
+    const { profiles } = await generateProfiles(
+      wanted,
+      hint?.trim() || undefined,
+      includeAbout !== false,
+    );
+    res.json({ profiles });
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message ?? "Profile generation failed" });
+  }
 });
 
 // GET /bulk-profile/status -- current batch progress (null if none has run)
