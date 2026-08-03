@@ -4,12 +4,31 @@ All notable changes to Bemby are documented here.
 
 ---
 
-## 未发布 / Unreleased
+## v1.0.0
+
+第一个 1.0 版本：小程序（Mini App）支持、网页子步骤、注册任务增强、计划列表与批量资料生成，Cloudflare 验证改用 CloakBrowser。
+
+The first 1.0: Mini App support, page sub-steps, autoreg enhancements, the schedule list, AI-written bulk profiles, and Cloudflare solving on CloakBrowser.
 
 ### 中文
 
 **变更**
 
+- **在 Messenger 中打开小程序（Mini App）** -- 聊天头部与左侧机器人菜单新增打开按钮，由 Telegram 按当前账户签名后在 Bemby 内查看；机器人菜单里的小程序（贴在输入框旁的那个）也能直接打开。可在设置里切换"应用内 / 浏览器"两种打开方式。
+- **小程序内嵌代理** -- 多数小程序拒绝被非 Telegram 站点内嵌，因此内嵌前会先探测；不允许时改由内置代理提供同一页面，剥掉阻止内嵌的响应头，并注入小程序运行时所需的桥接。代理页面使用一次性票据而非面板令牌，票据只对该站点有效，页面脚本读不到（HttpOnly）。设置 `WEBVIEW_PUBLIC_ORIGIN`（指向同一实例的另一个主机名）可让小程序拥有自己的源，从而正确路由自身路径。
+- **按网址打开小程序（自定义任务）** -- 新增"打开小程序（网址）"动作：填 `t.me/<机器人>/<应用>` 链接由链接自身确定机器人，填普通 https 地址则由所属机器人签名；另有"打开机器人菜单小程序"动作，无需在聊天记录里翻找按钮。
+- **网页子步骤** -- 小程序/网页动作内可编排子步骤：点击、填写、等待元素、滚动（元素或页面）、断言文字；支持 CSS 选择器与多语言标签候选（同一按钮在不同语言下的多种写法）。
+- **自定义任务不再必须填目标机器人** -- 纯网页/小程序流程可以完全不涉及聊天。
+- **模板复制** -- 模板列表一键复制为新模板（自动命名"（副本）"）。
+- **注册任务：正则匹配注册码** -- 群里没有固定前缀时可用正则匹配，有捕获组时取第 1 组；也支持 `/pattern/i` 形式。前缀与正则二者填其一即可。
+- **注册任务：注册码即时修正** -- 新增"移除中文字符"与"移除指定字符"两个即时处理（不需要 AI、无额外等待），发送前按群里的约定清理注册码。
+- **注册任务：AI 修正注册码** -- 可选开关：发送前把注册码连同群内上下文（该消息、其前后消息、机器人提示）交给 AI，按群里的说明修正（删除干扰符号、替换字符、补全被拆分的码）；一次请求覆盖整批，AI 不可用时按原样发送。
+- **注册任务：发送前等待机器人就绪** -- 可分别配置"发送注册码前"与"发送用户名前"要等待的机器人文字（如"对我发送注册码"），避免机器人尚未就绪时白白浪费一个注册码；超时仍会发送并在日志中标注。
+- **用 ID 指定私密群组** -- 没有用户名、也没有邀请链接的私密群组，现在可以用群组 ID 指定：Messenger 的资料面板新增可复制的 ID（`-100…` 形式），任务中的群组/联系人字段都接受该 ID，由本账户的聊天列表解析（因此账户必须已在群内）。邀请链接也可在不重新加入的情况下解析。
+- **批量修改资料：AI 生成** -- 批量修改 Telegram 资料时可让 AI 按要求生成（例如"中国用户，简介用中文"）：一次请求覆盖全部账户，可勾选"不生成简介"只生成名字。生成结果会自动清理成可用格式：单行、不含制表符、名字/姓氏 64 字符与简介 70 字符以内、去重、去掉重复的姓氏。
+- **计划列表增强** -- 可在设置中把"计划"独立为左侧菜单项（完整列表、不再限高）；每个任务按类型显示图标与颜色（签到 / 观看 / 自定义 / 注册）；每一项可单独取消这次运行——任务保持启用，按其运行间隔顺延到下一个可运行日。
+- **显示最近成功时间** -- 任务列表可切换"最近成功"列，显示相对时间（悬停显示完整时间戳）。
+- **浏览器配置文件管理** -- 设置中可清理浏览器留下的配置文件（Cookie 与指纹会按出口保留，需要重置时使用）。
 - **Cloudflare 验证改用 CloakBrowser** -- 过 CF 的整套浏览器底层已从 `puppeteer-real-browser` + Playwright 下载的普通 Chromium，替换为 **CloakBrowser**：一个在源码层修补指纹（Canvas、WebGL、音频、字体、WebRTC、TLS、`navigator.webdriver` 等）的 Chromium，通过 Playwright 驱动。挑战检测、小程序步骤、网页步骤与代理轮换逻辑保持不变。首次启用时按需下载（约 200MB）到数据目录，升级后仍然保留；旧版本留下的浏览器（`pw-browsers`、`cf-chromium`）会在安装成功后自动清理。
 - **CloakBrowser 授权密钥（设置页）** -- 新增密钥管理：不填密钥时使用较旧的免费构建；在 cloakbrowser.dev/free 用 GitHub 账号可免费领取密钥以使用最新构建。每个免费密钥仅允许 1 个并发会话，因此可添加多个（来自不同 GitHub 账号）密钥，运行中的浏览器各占用一个，用完则该次启动回退到免费构建。密钥仅保存在本机，界面始终掩码显示，并可一键验证有效性与套餐。
 - **授权构建按需下载** -- 添加授权密钥后，设置页会提示「授权构建尚未下载」，并把安装按钮切换为<strong>下载授权构建</strong>；状态行也会标明当前装的是免费构建还是授权构建。下载始终由你触发，任务运行中不会自动下载。
@@ -19,6 +38,12 @@ All notable changes to Bemby are documented here.
 
 **修复**
 
+- **小程序不再显示自身的错误页** -- Telegram 返回的地址只带账户数据，主题、版本与平台是客户端该补的部分。基于 `@telegram-apps/sdk` 的小程序会校验整套启动参数，缺少主题即抛出"是否在 Telegram 之外打开"，表现为应用自己的报错页（例如 Nebula 的"Oops :("）。现在这些参数会补齐，签名地址与真实客户端一致。
+- **模板分享不再带上无关字段** -- 启动命令与签到按钮存在于每个模板上（含默认值），但只有签到与注册任务会用到，分享自定义/观看模板时却一并带出，读起来像是会发送 `/start`、会去找"签到"按钮。现在按任务类型只分享真正相关的字段；导入侧不受影响。
+- **Microsoft Edge 最小化后立即还原** -- vue-router 会在 `visibilitychange` 里调用 `history.replaceState` 保存滚动位置，Edge 把它当作"页面被激活"，于是窗口刚最小化就弹回。现在仅在该事件派发期间跳过这一次调用（且只在 Edge 上），后台标签页正常的跳转仍会更新地址栏。
+- **任务参数问题** -- 修正自定义任务参数在若干动作间传递时的问题。
+- **浏览器测试不再 504** -- 设置页的浏览器测试改为后台执行并轮询结果，长时间的验证不再被反向代理掐断。
+- **代理导入导出** -- 修正带代理配置的导入导出。
 - **只启动 CloakBrowser 构建** -- 旧版方案会启动 `PUPPETEER_EXECUTABLE_PATH` 指向的浏览器，升级前配置过该变量的安装会继续使用它——那是没有任何指纹修补的普通 Chromium，看似在过验证，实则毫无作用。现在该变量完全不再读取（启动时会提示可删除），数据目录中遗留的 `pw-browsers` / `.pw-browsers` / `cf-chromium` 也会在下次安装时清理。
 - **设置页显示的是真正会启动的浏览器** -- 版本号改为从构建目录读取，并新增所用二进制的完整路径。此前是运行该二进制取版本，而授权构建在没有密钥的环境下拒绝启动（密钥存在数据库而非环境变量里），于是页面仍显示被替换掉的旧版本。
 - **强制重装不再清空整个缓存** -- 「重新下载 / 更新浏览器」此前会删除全部构建，导致添加密钥后免费构建被一并删除；现在只清除本次要替换的那一档。
@@ -34,6 +59,21 @@ All notable changes to Bemby are documented here.
 
 **Changes**
 
+- **Open a Mini App from Messenger** -- an open button in the chat header and in the bot's left-hand menu; Telegram signs the address for the current account and it opens inside Bemby. The Mini App a bot pins beside the composer (its menu button) opens too, which appears nowhere in the chat history. A setting switches between opening in-app and in the browser.
+- **Mini App viewer proxy** -- most Mini Apps refuse to be framed by anything but Telegram, so framing is probed first; where it is refused the same page is served through a built-in proxy with the framing headers dropped and the Mini App bridge injected. The proxied page carries a single-use ticket rather than the panel's session token: it is good for that one site, and HttpOnly so the page's own scripts cannot read it. Setting `WEBVIEW_PUBLIC_ORIGIN` (another hostname pointing at the same instance) gives the app an origin of its own so its router sees its own paths.
+- **Open a Mini App by address (custom jobs)** -- an **Open Mini App (URL)** action: a `t.me/<bot>/<app>` link names its own bot, and a plain https address is signed through the bot that owns it. A companion action opens the bot's menu Mini App, so neither needs a button hunted for in the chat history.
+- **Page sub-steps** -- steps inside a Mini App or web action: click, fill, wait for an element, scroll (an element or the page), assert text. CSS selectors are supported, as are multi-language label alternatives for a control that is worded differently per locale.
+- **A custom job no longer requires a target bot** -- a purely web/Mini App flow need not involve a chat at all.
+- **Duplicate a template** -- copy any template into a new one from the list, named "(copy)".
+- **Autoreg: match codes by regex** -- for groups whose codes carry no stable prefix; capture group 1 is the code where the pattern has one, and `/pattern/i` works for flags. A prefix or a regex -- one of the two is enough.
+- **Autoreg: instant code fixups** -- **Strip Chinese characters** and **Strip these characters** clean a code the way the group asked, with no AI call and nothing to wait for.
+- **Autoreg: fix the code with AI** -- optional: before each code is sent the model is shown it along with the group context (its own message, the messages around it, the bot's prompt) and adjusts it as the group instructed -- a decoy symbol to delete, a character to swap, a split code to join. One request covers the batch, and the captured code is sent as it stands if the AI is unavailable.
+- **Autoreg: wait for the bot to be ready** -- separate optional waits for the wording that means "send me the code" and "send me the username", so a code is not spent on a bot that is not listening yet. On timeout it is sent anyway and the log says so.
+- **Name a private group by its ID** -- a group with no username and no invite link left can now be named by ID: the Messenger Info panel shows a copyable ID (`-100…` form), and a job's group or contact field takes it, resolved from the account's own chat list (so the account must be a member). An invite link also resolves without rejoining.
+- **Bulk profile: generate with AI** -- when bulk-updating Telegram profiles, the AI can write them to a requirement ("Chinese users, bios in Chinese"). One request covers every selected account, and a **Skip the bios** toggle asks for names only. What comes back is cleaned to what Telegram and the form accept: one line, no tabs, 64/64/70 character limits, no duplicates, no surname repeated into the given-name field.
+- **Schedule list** -- Settings can give **Schedule** its own menu entry, showing the full list without the height cap. Each chip carries an icon and colour for its job type (check-in / watch / custom / autoreg), and each can be called off individually: the job stays enabled and moves to its next eligible day, respecting its run-every-days interval.
+- **Last successful run** -- a toggleable column on the jobs list showing how long ago each job last succeeded, with the full timestamp on hover.
+- **Browser profile housekeeping** -- clear the profiles the solver keeps per exit (cookies and fingerprint) from Settings when a reset is wanted.
 - **Cloudflare solving now runs on CloakBrowser** -- the whole browser layer behind CF solving moved from `puppeteer-real-browser` plus a Playwright-downloaded stock Chromium to **CloakBrowser**: a Chromium whose fingerprint is patched at source (canvas, WebGL, audio, fonts, WebRTC, TLS, `navigator.webdriver`), driven through Playwright. Challenge detection, Mini App steps, page steps and proxy rotation are unchanged. It is downloaded on demand (~200MB) into the data dir so it survives an upgrade, and the browsers earlier versions left behind (`pw-browsers`, `cf-chromium`) are removed once the new one installs.
 - **CloakBrowser licence keys (Settings)** -- with no key the solver runs the older free build; a free key (one per GitHub account at cloakbrowser.dev/free) gets the current one. A free key allows a single concurrent session, so several keys can be stored and one is leased per running browser, with a launch falling back to the free build when every seat is taken. Keys are stored on the host, only ever shown masked, and can be checked for validity and plan from the same panel.
 - **The licensed build is offered as a download** -- once a key is added, Settings says the build it unlocks has not been downloaded and the install button becomes <strong>Download the licensed build</strong>; the status line names which build is on disk. Downloads still only happen when you ask, never mid-job.
@@ -43,6 +83,12 @@ All notable changes to Bemby are documented here.
 
 **Fixes**
 
+- **A Mini App no longer opens on its own error page** -- Telegram returns an address carrying only the account data; the theme, version and platform are the client's part to add. An app built on `@telegram-apps/sdk` validates the whole launch-parameter set and throws "opened outside Telegram?" when the theme is missing, which surfaces as the app's own error screen (Nebula's "Oops :(", in the report). Those parameters are filled in now, so a signed address matches what a real client hands over.
+- **A shared template no longer carries fields it never uses** -- the start command and check-in button exist on every template, defaulted, but only check-in and autoreg jobs read them; sharing a custom or watch template brought them along, reading as though it sends `/start` and hunts for a 签到 button. Only the fields the job type actually uses are shared now; importing is unaffected.
+- **Microsoft Edge restored a minimised window immediately** -- vue-router saves the scroll position with `history.replaceState` inside a `visibilitychange` handler, which Edge reads as the page being activated, so the window popped straight back up. That one call is now skipped for the duration of the event dispatch (and only on Edge), leaving genuine navigation in a background tab free to update the address bar.
+- **Job parameters** -- fixed parameters not carrying correctly between several custom-job actions.
+- **Browser tests no longer 504** -- the Settings browser test runs in the background and is polled for its result, so a long solve is not cut off by a reverse proxy.
+- **Proxy import/export** -- fixed importing and exporting configurations that carry proxies.
 - **Only CloakBrowser builds are launched** -- the previous solver ran whatever `PUPPETEER_EXECUTABLE_PATH` named, and installs that were set up before the switch kept using it: a stock Chromium with none of the fingerprint patches, which looks like it is solving challenges without doing any of the work. The variable is no longer read at all (a startup line says so), and the browsers left in the data dir (`pw-browsers`, `.pw-browsers`, `cf-chromium`) are cleaned up on the next install.
 - **Settings names the browser that will actually launch** -- the version is read from the build directory and the full binary path is shown. It used to come from running the binary, which the keyed build refuses to do without its licence key (the key lives in the database, not this process's environment), so the page went on naming the build it had replaced.
 - **A forced reinstall no longer empties the whole cache** -- "Re-download / update browser" deleted every build, so adding a key and reinstalling took the free build with it. Only the tier being replaced is cleared now.

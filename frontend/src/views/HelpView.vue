@@ -178,7 +178,7 @@
                 <tr>
                   <td>批量操作</td>
                   <td>
-                    勾选多个账户后，操作收纳于<strong>批量操作</strong>菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免限流：<strong>批量重命名</strong>（按 <code>{index}</code> 递增序号，可补零、实时预览）、<strong>获取属性</strong>、<strong>批量修改登录邮箱</strong>（<code>+</code> 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行且不存储，开始前需"测试登录"）、<strong>批量修改凭据</strong>（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥）、<strong>批量添加通行密钥</strong>、<strong>批量修改资料</strong>（批量设置 Telegram 名字/姓氏/简介，每行对应一个账户、字段用制表符 Tab 分隔，可从表格直接粘贴，或点击"生成随机名字"自动填充；作为后台批量任务运行，页面刷新不中断，失败账户自动重试）。设置环境变量 <code>BULK_ACCOUNT_MANAGEMENT=1</code> 后还提供<strong>批量添加账户</strong>（每行 <code>手机号----API网址</code>，自动创建并从各 API 网页读取验证码/2FA 完成认证）与<strong>批量清理</strong>。
+                    勾选多个账户后，操作收纳于<strong>批量操作</strong>菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免限流：<strong>批量重命名</strong>（按 <code>{index}</code> 递增序号，可补零、实时预览）、<strong>获取属性</strong>、<strong>批量修改登录邮箱</strong>（<code>+</code> 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行且不存储，开始前需"测试登录"）、<strong>批量修改凭据</strong>（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥）、<strong>批量添加通行密钥</strong>、<strong>批量修改资料</strong>（批量设置 Telegram 名字/姓氏/简介，每行对应一个账户、字段用制表符 Tab 分隔，可从表格直接粘贴，点击"生成随机名字"自动填充，或点击"AI 生成资料"按要求生成（例如"中国用户，简介用中文"，一次请求覆盖全部账户，可勾选"不生成简介"只生成名字；结果自动清理为单行、不含制表符并符合 Telegram 的长度上限）；作为后台批量任务运行，页面刷新不中断，失败账户自动重试）。设置环境变量 <code>BULK_ACCOUNT_MANAGEMENT=1</code> 后还提供<strong>批量添加账户</strong>（每行 <code>手机号----API网址</code>，自动创建并从各 API 网页读取验证码/2FA 完成认证）与<strong>批量清理</strong>。
                   </td>
                 </tr>
                 <tr>
@@ -364,9 +364,13 @@
                     <strong>Bulk Rename TG Profile</strong> (set the Telegram
                     first name, last name and intro for many accounts at once --
                     one Tab-separated line per account so columns can be pasted
-                    straight from a spreadsheet, or click "Generate random names"
-                    to fill them; it runs as a background batch that survives
-                    page reloads and retries failed accounts).
+                    straight from a spreadsheet, click "Generate random names"
+                    to fill them, or click "Generate with AI" to have them
+                    written to a requirement ("Chinese users, bios in Chinese") --
+                    one request covers every selected account, a toggle skips the
+                    bios, and what comes back is cleaned to one line, no tabs, and
+                    within Telegram's length limits; it runs as a background batch
+                    that survives page reloads and retries failed accounts).
                     Setting <code>BULK_ACCOUNT_MANAGEMENT=1</code> also enables
                     <strong>Bulk Add</strong> (one <code>phone----apiUrl</code>
                     per line, auto-creating and authenticating each account by
@@ -548,6 +552,16 @@
             <p class="help-para">
               工具栏中的拼图图标可切换 Telegram 小程序的打开方式：
               高亮时在应用内嵌入式面板打开，否则在浏览器中打开。
+            </p>
+            <p class="help-para">
+              小程序可从三处打开：机器人消息中的小程序按钮、聊天头部的打开按钮，以及左侧机器人菜单里的
+              <strong>面板</strong>（贴在输入框旁的机器人菜单小程序，聊天记录里找不到）。地址由 Telegram
+              按当前账户签名，并补齐主题、版本、平台等启动参数。多数小程序拒绝被非 Telegram
+              站点内嵌，因此内嵌前会先探测；不允许时改由内置代理提供同一页面，页面上方显示提示条。
+            </p>
+            <p class="help-para">
+              个人资料面板中的 <strong>ID</strong> 一行可点击复制（群组为 <code>-100…</code> 形式）。
+              没有用户名、也没有邀请链接的私密群组，可用该 ID 填进任务或模板的群组/联系人字段。
             </p>
 
             <div
@@ -789,6 +803,21 @@
               apps open: when highlighted, they open in an embedded in-app
               panel; otherwise they open in the browser.
             </p>
+            <p class="help-para">
+              A Mini App opens from three places: the Mini App button on a bot's message, the
+              open button in the chat header, and the bot's menu app in the left-hand menu (the
+              one pinned beside the composer, which appears nowhere in the chat history).
+              Telegram signs the address for the current account, and the launch parameters a
+              real client adds -- theme, version, platform -- are filled in. Most Mini Apps
+              refuse to be framed by anything but Telegram, so framing is probed first; where it
+              is refused the same page is served through a built-in proxy, with a banner saying
+              so.
+            </p>
+            <p class="help-para">
+              The <strong>ID</strong> row in the profile panel copies on click (a group's is the
+              <code>-100…</code> form). A private group with no username and no invite link left
+              can be named by that ID in a job's or template's group or contact field.
+            </p>
 
             <div
               class="card-section-title"
@@ -902,7 +931,7 @@
         <div class="card-body">
           <template v-if="locale === 'zh'">
             <div class="card-section-title">任务</div>
-            <p class="help-para">支持三种任务类型：</p>
+            <p class="help-para">支持四种任务类型：</p>
 
             <div
               class="card-section-title"
@@ -1203,6 +1232,48 @@
               class="card-section-title"
               style="margin-top: 16px; font-size: 11px"
             >
+              自动注册（Auto-register）
+            </div>
+            <p class="help-para">
+              监听群组里发布的注册码并抢注。<strong>注册码群组</strong>支持公开用户名、私有邀请链接，或群组 ID（<code>-100…</code>，在 Messenger 的资料面板复制；填 ID 表示本账户已在群内）。
+            </p>
+            <p class="help-para">
+              <strong>注册码前缀</strong>与<strong>注册码正则</strong>二者填其一即可：前缀支持 <code>*</code> 通配（例 <code>ABC-*-XYZ_</code>）；正则用于没有固定前缀的群，有捕获组时取第 1 组，也可写 <code>/pattern/i</code> 形式加标志。群里announce为“已被使用”的码会自动作废。
+            </p>
+            <p class="help-para">
+              发送前可对注册码做<strong>即时处理</strong>：勾选“移除中文字符”，或在“移除指定字符”里填 <code>~*</code> 之类逐字符删除——这两项不需要 AI、没有额外等待。若群里的说明更复杂（删除某个符号、替换字符、注册码被拆开写），可开启 <strong>AI 修正注册码</strong>：发送前把注册码连同该消息、其前后消息与机器人提示一并交给 AI，按群内说明修正；一次请求覆盖整批，AI 不可用时按原样发送。
+            </p>
+            <p class="help-para">
+              <strong>提交方式</strong>可选“点击注册按钮后发送注册码”或“随启动命令一并发送”。两处可选的等待文字用于避免浪费注册码：<strong>发送注册码前等待文字</strong>（如 <code>对我发送注册</code>）在点击注册按钮后等机器人就绪；<strong>发送用户名前等待文字</strong>在注册码被接受后等机器人索要用户名。超时仍会发送，并在日志中写明。
+            </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              小程序（Mini App）与网页子步骤
+            </div>
+            <p class="help-para">
+              自定义任务可打开小程序并在其中操作：<strong>打开小程序</strong>（在最近消息里找按钮）、<strong>打开小程序（网址）</strong>（<code>t.me/&lt;机器人&gt;/&lt;应用&gt;</code> 链接由链接自身确定机器人，普通 https 地址由“所属机器人”签名）、<strong>打开机器人菜单小程序</strong>（贴在输入框旁的那个，聊天记录里找不到）。
+            </p>
+            <p class="help-para">
+              打开后可编排<strong>子步骤</strong>：点击、填写、等待元素、滚动（元素或页面）、断言文字；标签支持多语言候选（同一按钮在不同语言下的写法），也支持 CSS 选择器。地址由 Telegram 按本任务的账户签名，并在已安装的指纹修补浏览器中打开，因此能通过 Cloudflare 验证；<strong>浏览器代理</strong>决定出口 IP（与 Telegram 连接分开），可开启“依次尝试其他代理”。
+            </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              计划列表
+            </div>
+            <p class="help-para">
+              任务页面顶部的<strong>下次计划运行</strong>面板按日期分组列出即将运行的任务。在<strong>设置</strong>中可把它独立为左侧菜单的<strong>计划</strong>页（完整列表、不再限高）。每一项按任务类型显示图标与颜色（签到 / 观看 / 自定义 / 注册）。
+            </p>
+            <p class="help-para">
+              点击某一项右侧的 <strong>✕</strong> 可<strong>取消这次运行</strong>：任务本身保持启用，按其运行间隔顺延到下一个可运行日（每 3 天运行的任务顺延 3 天）。这只影响这一次，不等于停用任务。
+            </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
               列排序
             </div>
             <p class="help-para">
@@ -1255,7 +1326,7 @@
           </template>
           <template v-else>
             <div class="card-section-title">Jobs</div>
-            <p class="help-para">Three job types are supported:</p>
+            <p class="help-para">Four job types are supported:</p>
 
             <div
               class="card-section-title"
@@ -1625,6 +1696,48 @@
               the whole dataset, not just the loaded page.
             </p>
 
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              Auto-register
+            </div>
+            <p class="help-para">
+              Watches a group for registration codes and races to claim one. The <strong>code group</strong> takes a public username, a private invite link, or a group ID (<code>-100…</code>, copied from the Info panel in Messenger; an ID means this account is already in the group).
+            </p>
+            <p class="help-para">
+              A <strong>code prefix</strong> or a <strong>code regex</strong> -- one of the two is enough. The prefix supports <code>*</code> as a wildcard (<code>ABC-*-XYZ_</code>); the regex covers groups with no stable prefix, taking capture group 1 where the pattern has one, and <code>/pattern/i</code> works for flags. Codes the group announces as used are burned automatically.
+            </p>
+            <p class="help-para">
+              Codes can be cleaned <strong>instantly</strong> before they are sent: tick “Strip Chinese characters”, or list characters like <code>~*</code> under “Strip these characters” to remove each of them -- neither needs the AI and neither adds any wait. Where the group's instruction is more involved (delete a symbol, swap a character, a code split across lines), turn on <strong>Fix the code with AI</strong>: the model is shown the code along with its own message, the messages around it and the bot's prompt, and adjusts it as instructed. One request covers the batch, and the captured code is sent as it stands if the AI is unavailable.
+            </p>
+            <p class="help-para">
+              <strong>How the code reaches the bot</strong> is either “click the register button first” or “alongside the start command”. Two optional waits keep a code from being wasted: <strong>wait for this before sending the code</strong> (e.g. <code>对我发送注册</code>) holds after the register button until the bot is listening, and <strong>wait for this before sending the username</strong> holds after a code is accepted until the bot asks for the name. On timeout it is sent anyway, and the log says so.
+            </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              Mini Apps and page sub-steps
+            </div>
+            <p class="help-para">
+              A custom job can open a Mini App and work inside it: <strong>Open Mini App</strong> (finds the button in recent messages), <strong>Open Mini App (URL)</strong> (a <code>t.me/&lt;bot&gt;/&lt;app&gt;</code> link names its own bot; a plain https address is signed through the owning bot), and <strong>Open the bot's menu Mini App</strong> (the one pinned beside the composer, which appears nowhere in the chat history).
+            </p>
+            <p class="help-para">
+              Once open, <strong>sub-steps</strong> drive it: click, fill, wait for an element, scroll (an element or the page), assert text. Labels accept multi-language alternatives for a control worded differently per locale, and CSS selectors work too. The address is signed by Telegram for this job's account and opened in the installed fingerprint-patched browser, which is what gets past Cloudflare; the <strong>browser proxy</strong> sets the exit IP (separate from the Telegram connection) and can work through the rest of the list when an exit is refused.
+            </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              Schedule list
+            </div>
+            <p class="help-para">
+              The <strong>Upcoming runs</strong> panel at the top of the Jobs page groups the next runs by day. Settings can move it to its own <strong>Schedule</strong> entry in the left menu, where the full list is shown without the height cap. Each chip carries an icon and colour for its job type (check-in / watch / custom / autoreg).
+            </p>
+            <p class="help-para">
+              The <strong>✕</strong> on a chip <strong>calls off that run</strong>: the job stays enabled and moves to its next eligible day, respecting its run-every-days interval (a job that runs every third day moves three days). It affects that occurrence only -- it is not the same as disabling the job.
+            </p>
             <div
               class="card-section-title"
               style="margin-top: 16px; font-size: 11px"
