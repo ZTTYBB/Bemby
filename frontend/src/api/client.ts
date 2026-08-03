@@ -475,6 +475,20 @@ export type CheckinConfig = {
 export type AutoregConfig = {
   groupId: string;
   codePrefix: string;
+  /** Matches codes with no stable prefix; capture group 1 is the code. Replaces codePrefix. */
+  codeRegex?: string;
+  /** Strip Chinese characters and punctuation out of a code before sending. */
+  stripChinese?: boolean;
+  /** Characters to strip out of a code before sending, e.g. `~*`. */
+  stripChars?: string;
+  /** Have the AI adjust each code before sending, going on the surrounding chat. */
+  aiModifyCode?: boolean;
+  aiModifyCodeHint?: string;
+  aiContextCount?: number;
+  /** Bot text meaning it is ready for a code, waited for after the register button. */
+  codeReadyContains?: string;
+  /** Bot text meaning it is ready for the username, waited for after a code is accepted. */
+  usernameReadyContains?: string;
   registerButton?: string;
   signupUsername: string;
   listenMinutes?: number;
@@ -1464,6 +1478,8 @@ export type TgContact = {
 
 export type TgProfile = {
   chatId: string;
+  /** The ID as Telegram shows it, which is what a job's chat field takes. */
+  peerId: string;
   name: string;
   type: "user" | "bot" | "group" | "channel";
   username: string | null;

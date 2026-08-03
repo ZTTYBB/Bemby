@@ -7,6 +7,7 @@ import { db, getDefaultTgApiCredentials } from "../db/database";
 import { parseTgProxy } from "../jobs/runner";
 import { resolveAppClientParams } from "./appClient";
 import { parseMiniAppLink, withClientLaunchParams } from "./miniApp";
+import { displayPeerId } from "./peerTarget";
 
 export type TgLiveMessage = {
   chatId: string;
@@ -1297,6 +1298,8 @@ export async function fetchAvatarsBatch(
 
 export type TgProfileInfo = {
   chatId: string;
+  /** The ID as Telegram clients and bots show it, which is what a job's chat field takes. */
+  peerId: string;
   name: string;
   type: "user" | "bot" | "group" | "channel";
   username: string | null;
@@ -1359,6 +1362,7 @@ export async function getEntityDetails(
   const isUser = entity instanceof Api.User;
   return {
     chatId,
+    peerId: displayPeerId(chatId),
     name: entityName(entity),
     type,
     username: (entity as any).username ?? null,

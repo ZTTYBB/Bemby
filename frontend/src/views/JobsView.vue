@@ -799,9 +799,47 @@
             <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.groupHint') }}</div>
           </div>
           <div class="form-group">
-            <label class="form-label">{{ t('jobs.autoreg.labelCodePrefix') }} <span style="color:#e63946">*</span></label>
+            <label class="form-label">{{ t('jobs.autoreg.labelCodePrefix') }} <span v-if="!autoregCfg.codeRegex" style="color:#e63946">*</span></label>
             <input v-model.trim="autoregCfg.codePrefix" class="form-input" placeholder="ABC-*-XYZ_" />
             <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.codePrefixHint') }}</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t('jobs.autoreg.labelCodeRegex') }} <span v-if="!autoregCfg.codePrefix" style="color:#e63946">*</span></label>
+            <input v-model.trim="autoregCfg.codeRegex" class="form-input" :placeholder="t('jobs.autoreg.codeRegexPlaceholder')" />
+            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.codeRegexHint') }}</div>
+            <div style="font-size:11px;color:#777;margin-top:3px">{{ t('jobs.autoreg.eitherPrefixOrRegex') }}</div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-check">
+                <input v-model="autoregCfg.stripChinese" type="checkbox" />
+                <span>{{ t('jobs.autoreg.labelStripChinese') }}</span>
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.stripChineseHint') }}</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.autoreg.labelStripChars') }}</label>
+              <input v-model.trim="autoregCfg.stripChars" class="form-input" :placeholder="t('jobs.autoreg.stripCharsPlaceholder')" />
+              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.stripCharsHint') }}</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-check">
+              <input v-model="autoregCfg.aiModifyCode" type="checkbox" />
+              <span>{{ t('jobs.autoreg.labelAiModifyCode') }}</span>
+            </label>
+            <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.aiModifyCodeHint') }}</div>
+          </div>
+          <div v-if="autoregCfg.aiModifyCode" class="form-row">
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.autoreg.labelAiModifyCodeHint') }}</label>
+              <input v-model.trim="autoregCfg.aiModifyCodeHint" class="form-input" :placeholder="t('jobs.autoreg.aiModifyCodeHintPlaceholder')" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.autoreg.labelAiContextCount') }}</label>
+              <input v-model.number="autoregCfg.aiContextCount" class="form-input" type="number" min="0" max="50" />
+              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.aiContextCountHint') }}</div>
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label">{{ t('jobs.autoreg.labelEntryMode') }}</label>
@@ -828,9 +866,19 @@
             </div>
           </div>
           <div class="form-group">
+            <label class="form-label">{{ t('jobs.autoreg.labelCodeReady') }}</label>
+            <input v-model.trim="autoregCfg.codeReadyContains" class="form-input" :placeholder="t('jobs.autoreg.codeReadyPlaceholder')" />
+            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.codeReadyHint') }}</div>
+          </div>
+          <div class="form-group">
             <label class="form-label">{{ t('jobs.autoreg.labelSignupUsername') }} <span style="color:#e63946">*</span></label>
             <input v-model.trim="autoregCfg.signupUsername" class="form-input" placeholder="myname{num:3}" />
             <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.signupUsernameHint') }}</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t('jobs.autoreg.labelUsernameReady') }}</label>
+            <input v-model.trim="autoregCfg.usernameReadyContains" class="form-input" :placeholder="t('jobs.autoreg.usernameReadyPlaceholder')" />
+            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.usernameReadyHint') }}</div>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -1100,6 +1148,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import { jobsApi, accountsApi, statusApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type ScheduleStatus, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig, type CheckinConfig } from '../api/client';
 import { t, locale } from '../i18n';
+import { regexValid } from '../utils/regexCheck';
 import { usePersistedRef } from '../composables/usePersistedRef';
 import { formatAccountLabel, loadAccountDisplaySetting } from '../composables/accountDisplay';
 import { debounce } from '../composables/useDebounce';
@@ -1333,6 +1382,14 @@ const embyServer = reactive<{ protocol: 'https' | 'http'; host: string; port: nu
 type AutoregCfgForm = {
   groupId: string;
   codePrefix: string;
+  codeRegex: string;
+  stripChinese: boolean;
+  stripChars: string;
+  aiModifyCode: boolean;
+  aiModifyCodeHint: string;
+  aiContextCount: number;
+  codeReadyContains: string;
+  usernameReadyContains: string;
   entryMode: 'button' | 'command';
   registerButton: string;
   signupUsername: string;
@@ -1345,6 +1402,14 @@ function defaultAutoregCfg(): AutoregCfgForm {
   return {
     groupId: '',
     codePrefix: '',
+    codeRegex: '',
+    stripChinese: false,
+    stripChars: '',
+    aiModifyCode: false,
+    aiModifyCodeHint: '',
+    aiContextCount: 6,
+    codeReadyContains: '',
+    usernameReadyContains: '',
     entryMode: 'button',
     registerButton: '',
     signupUsername: '',
@@ -1556,6 +1621,14 @@ function applyTemplate(tpl: JobTemplate) {
         Object.assign(autoregCfg, {
           groupId: c.groupId ?? '',
           codePrefix: c.codePrefix ?? '',
+          codeRegex: c.codeRegex ?? '',
+          stripChinese: c.stripChinese === true,
+          stripChars: c.stripChars ?? '',
+          aiModifyCode: c.aiModifyCode === true,
+          aiModifyCodeHint: c.aiModifyCodeHint ?? '',
+          aiContextCount: c.aiContextCount ?? 6,
+          codeReadyContains: c.codeReadyContains ?? '',
+          usernameReadyContains: c.usernameReadyContains ?? '',
           registerButton: c.registerButton ?? '',
           signupUsername: c.signupUsername ?? '',
           listenMinutes: c.listenMinutes ?? 30,
@@ -1862,6 +1935,14 @@ function openEdit(j: Job) {
         Object.assign(autoregCfg, {
           groupId: c.groupId ?? '',
           codePrefix: c.codePrefix ?? '',
+          codeRegex: c.codeRegex ?? '',
+          stripChinese: c.stripChinese === true,
+          stripChars: c.stripChars ?? '',
+          aiModifyCode: c.aiModifyCode === true,
+          aiModifyCodeHint: c.aiModifyCodeHint ?? '',
+          aiContextCount: c.aiContextCount ?? 6,
+          codeReadyContains: c.codeReadyContains ?? '',
+          usernameReadyContains: c.usernameReadyContains ?? '',
           registerButton: c.registerButton ?? '',
           signupUsername: c.signupUsername ?? '',
           listenMinutes: c.listenMinutes ?? 30,
@@ -1915,6 +1996,16 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
     else if (autoregCfg.registerButton.trim()) cfg.registerButton = autoregCfg.registerButton.trim();
     if (autoregCfg.listenMinutes > 0 && autoregCfg.listenMinutes !== 30) cfg.listenMinutes = autoregCfg.listenMinutes;
     if (autoregCfg.scanHistoryCount > 0) cfg.scanHistoryCount = autoregCfg.scanHistoryCount;
+    if (autoregCfg.codeRegex.trim()) cfg.codeRegex = autoregCfg.codeRegex.trim();
+    if (autoregCfg.stripChinese) cfg.stripChinese = true;
+    if (autoregCfg.stripChars.trim()) cfg.stripChars = autoregCfg.stripChars.trim();
+    if (autoregCfg.aiModifyCode) {
+      cfg.aiModifyCode = true;
+      if (autoregCfg.aiModifyCodeHint.trim()) cfg.aiModifyCodeHint = autoregCfg.aiModifyCodeHint.trim();
+      if (autoregCfg.aiContextCount >= 0 && autoregCfg.aiContextCount !== 6) cfg.aiContextCount = autoregCfg.aiContextCount;
+    }
+    if (autoregCfg.codeReadyContains.trim()) cfg.codeReadyContains = autoregCfg.codeReadyContains.trim();
+    if (autoregCfg.usernameReadyContains.trim()) cfg.usernameReadyContains = autoregCfg.usernameReadyContains.trim();
     if (autoregCfg.successContains.trim()) cfg.successContains = autoregCfg.successContains.trim();
     if (autoregCfg.failContains.trim()) cfg.failContains = autoregCfg.failContains.trim();
     return cfg;
@@ -2075,7 +2166,8 @@ async function saveJob() {
   if (form.jobType === 'autoreg' && !form.templateId) {
     if (!form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
     if (!autoregCfg.groupId) { formError.value = t('jobs.errors.autoregGroupRequired'); return; }
-    if (!autoregCfg.codePrefix) { formError.value = t('jobs.errors.autoregPrefixRequired'); return; }
+    if (!autoregCfg.codePrefix && !autoregCfg.codeRegex) { formError.value = t('jobs.errors.autoregPrefixRequired'); return; }
+    if (autoregCfg.codeRegex && !regexValid(autoregCfg.codeRegex)) { formError.value = t('jobs.errors.autoregRegexInvalid'); return; }
     if (!autoregCfg.signupUsername) { formError.value = t('jobs.errors.autoregUsernameRequired'); return; }
   }
   if (form.jobType === 'embywatch') {

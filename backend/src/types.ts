@@ -376,6 +376,26 @@ export type AutoregConfig = {
   groupId: string;
   /** Line prefix identifying a registration code, e.g. ABC-30-Register_ */
   codePrefix: string;
+  /**
+   * Regular expression identifying a code, for groups whose codes carry no stable prefix.
+   * Capture group 1 is the code when present, else the whole match. Takes the place of
+   * `codePrefix` when set.
+   */
+  codeRegex?: string;
+  /** Strip Chinese characters and punctuation out of a code before sending it. */
+  stripChinese?: boolean;
+  /** Characters to strip out of a code before sending, e.g. `~*·`. */
+  stripChars?: string;
+  /** Have the AI adjust each code before it is sent, going on the surrounding chat. */
+  aiModifyCode?: boolean;
+  /** What the AI should watch for, when the group's convention needs saying. */
+  aiModifyCodeHint?: string;
+  /** Group messages around the code shown to the AI as context. Default 6. */
+  aiContextCount?: number;
+  /** Bot text that means it is ready for a code; waited for after the register button. */
+  codeReadyContains?: string;
+  /** Bot text that means it is ready for the username; waited for after a code is accepted. */
+  usernameReadyContains?: string;
   /** Button on the bot's start reply that opens registration (partial match). Blank clicks the sole button. */
   registerButton?: string;
   /** Username sent to finish signup; supports {word:N} {num:N} {alpha:N} {uuid} placeholders */

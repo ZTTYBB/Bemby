@@ -968,6 +968,23 @@
                   <i class="fa-regular fa-copy tgc-copy-icon"></i>
                 </div>
 
+                <!-- A private group has no username to name it by, so the ID is what a job
+                     has to go on -->
+                <div
+                  class="tgc-profile-row"
+                  :title="t('tgc.copyPeerId')"
+                  @click="copyField(profileDetails.peerId)"
+                >
+                  <i class="fa-solid fa-hashtag tgc-profile-row-icon"></i>
+                  <div class="tgc-profile-row-body">
+                    <div class="tgc-profile-row-label">{{ t('tgc.peerId') }}</div>
+                    <div class="tgc-profile-row-value tgc-profile-row-mono">
+                      {{ profileDetails.peerId }}
+                    </div>
+                  </div>
+                  <i class="fa-regular fa-copy tgc-copy-icon"></i>
+                </div>
+
                 <div
                   v-if="profileDetails.phone"
                   class="tgc-profile-row"
@@ -1750,6 +1767,7 @@ import {
   formatAccountLabel,
   loadAccountDisplaySetting,
 } from "../composables/accountDisplay";
+import { displayPeerId } from "../utils/peerId";
 
 // ── Messenger state persistence ───────────────────────────────────────────────
 
@@ -2783,6 +2801,7 @@ async function openProfile() {
     if (activeChat.value) {
       profileDetails.value = {
         chatId: activeChat.value.chatId,
+        peerId: displayPeerId(activeChat.value.chatId),
         name: activeChat.value.name,
         type: activeChat.value.type,
         username: activeChat.value.username,
@@ -6713,6 +6732,10 @@ async function saveContactEdit() {
   font-size: 14px;
   color: #1a1a2e;
   word-break: break-word;
+}
+
+.tgc-profile-row-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .tgc-bio-text {

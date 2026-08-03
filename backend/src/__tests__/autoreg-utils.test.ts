@@ -10,7 +10,15 @@ vi.mock("../db/database", () => ({
 }));
 
 import { describe, it, expect, vi } from "vitest";
-import { extractCodes, containsAny } from "../jobs/autoreg";
+import {
+  extractCodes,
+  containsAny,
+  compileCodeRegex,
+  sanitizeAiCode,
+  buildCodeFixPrompt,
+  beginTextWait,
+  applyCodeEdits,
+} from "../jobs/autoreg";
 
 const PREFIX = "ABC-30-Register_";
 
@@ -179,5 +187,181 @@ describe("containsAny", () => {
   it("returns false when no keywords are configured", () => {
     expect(containsAny("anything", undefined)).toBe(false);
     expect(containsAny("anything", "")).toBe(false);
+  });
+});
+
+describe("extractCodes with a regex", () => {
+  it("takes capture group 1 so the surrounding wording stays out of the code", () => {
+    const re = compileCodeRegex("兑换码[:：]\\s*([A-Za-z0-9_-]{6,})");
+    const { codes } = extractCodes("今日兑换码：Xk3mhPuUZR 先到先得", "", re);
+    expect(codes).toEqual(["Xk3mhPuUZR"]);
+  });
+
+  it("takes the whole match when the pattern has no capture group", () => {
+    const re = compileCodeRegex("[A-Z]{3}-\\d{2}-[A-Za-z0-9]{8}");
+    const { codes } = extractCodes("code XYZ-30-a1b2c3d4 enjoy", "", re);
+    expect(codes).toEqual(["XYZ-30-a1b2c3d4"]);
+  });
+
+  it("finds every code in a multi-code post", () => {
+    const re = compileCodeRegex("([A-Za-z0-9]{10})");
+    const { codes } = extractCodes("aaaaaaaaaa\nbbbbbbbbbb", "", re);
+    expect(codes).toEqual(["aaaaaaaaaa", "bbbbbbbbbb"]);
+  });
+
+  it("treats a masked match as a used-code announcement, not a fresh code", () => {
+    const re = compileCodeRegex("([A-Za-z0-9]{6,})");
+    const { codes, usedPartials } = extractCodes("Xk3mhP░░░ 已被使用", "", re);
+    expect(codes).toEqual([]);
+    expect(usedPartials).toEqual(["Xk3mhP"]);
+  });
+
+  it("accepts the /pattern/flags form and keeps the flags", () => {
+    const re = compileCodeRegex("/code-([a-z0-9]+)/i");
+    expect(re.flags).toContain("i");
+    expect(re.flags).toContain("g");
+    expect(extractCodes("CODE-Ab12", "", re).codes).toEqual(["Ab12"]);
+  });
+
+  it("wins over the prefix when both are configured", () => {
+    const re = compileCodeRegex("(ZZZ-[0-9]+)");
+    const { codes } = extractCodes("ABC-30-Register_xk3mhpuUZR ZZZ-77", PREFIX, re);
+    expect(codes).toEqual(["ZZZ-77"]);
+  });
+
+  it("rejects a pattern that does not compile", () => {
+    expect(() => compileCodeRegex("([A-Z")).toThrow();
+  });
+});
+
+describe("sanitizeAiCode", () => {
+  const captured = "ABC-30-Register_xk3mhpuUZR";
+
+  it("takes the code the model replied with", () => {
+    expect(sanitizeAiCode("ABC-30-Register_xk3mhpuUZ", captured)).toBe(
+      "ABC-30-Register_xk3mhpuUZ",
+    );
+  });
+
+  it("strips quoting and picks the first line", () => {
+    expect(sanitizeAiCode('`ABC-1`\nthat is the code', captured)).toBe("ABC-1");
+  });
+
+  it("keeps the captured code when the model explained itself instead", () => {
+    expect(sanitizeAiCode("The code should be ABC-1 after removing ~", captured)).toBe(captured);
+    expect(sanitizeAiCode("", captured)).toBe(captured);
+    expect(sanitizeAiCode("x".repeat(200), captured)).toBe(captured);
+  });
+});
+
+describe("buildCodeFixPrompt", () => {
+  it("puts the code, its message, the nearby chat and the bot prompt in front of the model", () => {
+    const prompt = buildCodeFixPrompt(
+      "ABC-1~2",
+      {
+        message: "code: ABC-1~2",
+        nearby: ["删除符号“~”", "先到先得"],
+        botPrompt: "对我发送注册码",
+      },
+      "this group deletes the ~",
+    );
+    expect(prompt).toContain("Code as captured: ABC-1~2");
+    expect(prompt).toContain("删除符号“~”");
+    expect(prompt).toContain("对我发送注册码");
+    expect(prompt).toContain("this group deletes the ~");
+    expect(prompt).toMatch(/ONLY the exact code/);
+  });
+
+  it("leaves out sections there is nothing to say about", () => {
+    const prompt = buildCodeFixPrompt("ABC-1", { nearby: [] });
+    expect(prompt).not.toContain("Operator note");
+    expect(prompt).not.toContain("bot's last prompt");
+  });
+});
+
+describe("beginTextWait", () => {
+  function fakeClient() {
+    const handlers: Array<(e: any) => void> = [];
+    return {
+      handlers,
+      addEventHandler: (h: (e: any) => void) => handlers.push(h),
+      removeEventHandler: () => {},
+    } as any;
+  }
+  const say = (text: string) => ({ message: { message: text } });
+
+  it("resolves once the bot says it is ready", async () => {
+    const client = fakeClient();
+    const wait = beginTextWait(client, "123", "对我发送注册", 5_000);
+    client.handlers[0](say("请对我发送注册码"));
+    await expect(wait.result).resolves.toBe(true);
+  });
+
+  it("counts an edit of an existing message, not just a new one", async () => {
+    const client = fakeClient();
+    const wait = beginTextWait(client, "123", "ready", 5_000);
+    // The second handler is the EditedMessage one
+    client.handlers[1](say("now ready for your code"));
+    await expect(wait.result).resolves.toBe(true);
+  });
+
+  it("needs no wait when a message already in hand carries the wording", async () => {
+    const client = fakeClient();
+    const wait = beginTextWait(client, "123", "对我发送注册", 5_000, undefined, [
+      { message: "对我发送注册码" } as any,
+    ]);
+    await expect(wait.result).resolves.toBe(true);
+  });
+
+  it("gives up rather than blocking the run when the bot stays quiet", async () => {
+    const wait = beginTextWait(fakeClient(), "123", "ready", 10);
+    await expect(wait.result).resolves.toBe(false);
+  });
+
+  it("ignores messages that say something else", async () => {
+    const client = fakeClient();
+    const wait = beginTextWait(client, "123", "ready", 20);
+    client.handlers[0](say("hold on"));
+    await expect(wait.result).resolves.toBe(false);
+  });
+
+  it("settles false when cancelled, so a rejected code drops its wait", async () => {
+    const wait = beginTextWait(fakeClient(), "123", "ready", 5_000);
+    wait.cancel();
+    await expect(wait.result).resolves.toBe(false);
+  });
+});
+
+describe("applyCodeEdits", () => {
+  it("strips Chinese characters, punctuation and full-width forms", () => {
+    expect(applyCodeEdits("注册码ABC-1（有效）", { stripChinese: true })).toBe("ABC-1");
+    expect(applyCodeEdits("ABC－1", { stripChinese: true })).toBe("ABC1");
+    expect(applyCodeEdits("码abc、def。", { stripChinese: true })).toBe("abcdef");
+  });
+
+  it("leaves a code that is already plain alone", () => {
+    expect(applyCodeEdits("ABC-30-Register_xk3", { stripChinese: true })).toBe(
+      "ABC-30-Register_xk3",
+    );
+  });
+
+  it("strips each listed character wherever it appears", () => {
+    expect(applyCodeEdits("A~B~C*1", { stripChars: "~*" })).toBe("ABC1");
+    expect(applyCodeEdits("A·B·C", { stripChars: "·" })).toBe("ABC");
+  });
+
+  it("ignores whitespace in the character list, so `~ *` reads as two characters", () => {
+    expect(applyCodeEdits("A~B*C", { stripChars: " ~ * " })).toBe("ABC");
+  });
+
+  it("applies both fixes together", () => {
+    expect(
+      applyCodeEdits("注册码：A~B~C", { stripChinese: true, stripChars: "~" }),
+    ).toBe("ABC");
+  });
+
+  it("changes nothing when neither fix is configured", () => {
+    expect(applyCodeEdits("注册码A~B", {})).toBe("注册码A~B");
+    expect(applyCodeEdits("A~B", { stripChars: "" })).toBe("A~B");
   });
 });

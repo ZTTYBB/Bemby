@@ -38,6 +38,7 @@ import {
   webButtonOf,
   type WebButton,
 } from "../tg/miniApp";
+import { resolvePeerTarget } from "../tg/peerTarget";
 import { cfMaxCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
 import { cfTuning } from "./cfTuning";
 import type { CustomAction, CustomConfig, CustomStepLog } from "../types";
@@ -886,7 +887,7 @@ export async function runCustom(
 
               case "send_contact_message": {
                 const contact = action.contact.trim();
-                const entity = await client.getEntity(contact);
+                const entity = await resolvePeerTarget(client, contact);
                 let content = action.content;
                 if (hasAiInput(content)) {
                   const length = parseAiInputLength(content);
@@ -1409,7 +1410,7 @@ export async function runCustom(
                 const contact = action.contact.trim();
                 step.label = `Click button "${action.button}" from ${contact}`;
 
-                const entity = await client.getEntity(contact);
+                const entity = await resolvePeerTarget(client, contact);
                 const peer = await client.getInputEntity(entity);
                 const chatPeerId = await client.getPeerId(entity);
 
@@ -1788,7 +1789,7 @@ export async function runCustom(
                 // Chat context: the job's bot by default, otherwise a named contact.
                 const target: Api.TypeEntityLike = botMode
                   ? botUsername
-                  : await client.getEntity(contact);
+                  : await resolvePeerTarget(client, contact);
                 const peer = await client.getInputEntity(target);
                 const editPeerId = await client.getPeerId(target);
                 const anchor = botMode
@@ -2233,15 +2234,20 @@ export async function runCustom(
                   if (pendingApproval && action.checkMembership)
                     throw new Error("Join not confirmed: request is still pending approval");
                 } else {
-                  // Public username: strip leading @
-                  const username = raw.replace(/^@/, "");
-                  const entity = await client.getEntity(username);
+                  // A username, or an ID naming a group the account is already in
+                  const entity = await resolvePeerTarget(client, raw);
 
                   if (action.checkMembership && entity instanceof Api.Channel) {
                     if (await isChannelMember(client, entity)) {
                       step.result = "Already a member (verified)";
                       break;
                     }
+                  }
+                  // A basic group cannot be joined by ID or name; being in the chat list is
+                  // the only way one was reachable in the first place
+                  if (entity instanceof Api.Chat) {
+                    step.result = "Already a member";
+                    break;
                   }
 
                   let pendingApproval = false;
@@ -2334,9 +2340,8 @@ export async function runCustom(
                   if (pendingApproval && action.checkMembership)
                     throw new Error("Subscription not confirmed: request is still pending approval");
                 } else {
-                  // Public username: strip leading @
-                  const username = raw.replace(/^@/, "");
-                  const entity = await client.getEntity(username);
+                  // A username, or an ID naming a channel the account is already in
+                  const entity = await resolvePeerTarget(client, raw);
 
                   if (action.checkMembership && entity instanceof Api.Channel) {
                     if (await isChannelMember(client, entity)) {
