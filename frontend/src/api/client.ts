@@ -5,8 +5,12 @@ export const api = axios.create({ baseURL: "/api" });
 
 // Credential for addresses the browser loads by itself (see tgClientApi.photoUrl). Renewed
 // a little before it lapses so an image never asks with an expired one.
+//
+// A ref rather than a plain variable: photoUrl() is called from a template, so an <img>
+// rendered before the ticket arrives has to be re-evaluated once it does. A bare `let` is
+// invisible to Vue and those images would stay pointed at a ticket-less address for good.
 const TICKET_REFRESH_MARGIN_MS = 60_000;
-let mediaTicket = "";
+const mediaTicket = ref("");
 let mediaTicketExpiry = 0;
 
 function readRequirePwdChangeClaim(): boolean {
@@ -38,7 +42,7 @@ api.interceptors.response.use(
   (err) => {
     if (err.response?.status === 401) {
       localStorage.removeItem("token");
-      mediaTicket = "";
+      mediaTicket.value = "";
       mediaTicketExpiry = 0;
       window.location.href = "/login";
     }
@@ -1680,15 +1684,15 @@ export const tgClientApi = {
   // media ticket. The session token used to go here, which put a seven-day credential into
   // the browser's history and the server's access log for every image on screen.
   photoUrl: (accountId: number, chatId: string, msgId: number) =>
-    `/api/tg-client/${accountId}/messages/${encodeURIComponent(chatId)}/${msgId}/photo?ticket=${encodeURIComponent(mediaTicket)}`,
+    `/api/tg-client/${accountId}/messages/${encodeURIComponent(chatId)}/${msgId}/photo?ticket=${encodeURIComponent(mediaTicket.value)}`,
 
   /** Fetches (or refreshes) the media ticket. Cheap, and idempotent enough to call on open. */
   ensureMediaTicket: async (): Promise<void> => {
-    if (mediaTicket && Date.now() < mediaTicketExpiry - TICKET_REFRESH_MARGIN_MS) return;
+    if (mediaTicket.value && Date.now() < mediaTicketExpiry - TICKET_REFRESH_MARGIN_MS) return;
     const { ticket, expiresAt } = await api
       .post<{ ticket: string; expiresAt: number }>("/tg-client/media-ticket")
       .then((r) => r.data);
-    mediaTicket = ticket;
+    mediaTicket.value = ticket;
     mediaTicketExpiry = expiresAt;
   },
 

@@ -20,7 +20,7 @@ import dataRouter from "./routes/data";
 import debugRouter from "./routes/debug";
 import aiSuppliersRouter from "./routes/ai-suppliers";
 import templatesRouter from "./routes/templates";
-import tgClientRouter from "./routes/tgClient";
+import tgClientRouter, { mediaRouter as tgClientMediaRouter } from "./routes/tgClient";
 import webviewProxyRouter from "./routes/webviewProxy";
 import webviewSiteRouter from "./routes/webviewSite";
 import { isWebviewHost, webviewPublicOrigin } from "./tg/webviewTickets";
@@ -95,15 +95,25 @@ app.use(express.json({ limit: "5mb" }));
 //     served to the page as data or object URLs rather than fetched by address
 const CSP = [
   "default-src 'self'",
-  "script-src 'self'",
+  // Cloudflare injects its Web Analytics beacon into HTML it proxies, so an install sitting
+  // behind Cloudflare has a script on the page that the operator never put there. Allowed by
+  // name: without it every such install gets a console error on load for something it cannot
+  // turn off from here. Remove the origin if you do not front Bemby with Cloudflare.
+  "script-src 'self' https://static.cloudflareinsights.com",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "media-src 'self' data: blob:",
   "font-src 'self' data:",
   // The panel talks to its own API and its own WebSocket, and nothing else
   "connect-src 'self' ws: wss:",
-  // The messenger frames the viewer origin, which is a separate host by design
-  `frame-src 'self'${viewerOrigin ? ` ${viewerOrigin}` : ""}`,
+  // Any http(s) origin, because framing third-party pages is the feature: a Mini App that
+  // allows framing is shown at its own address, and only one that refuses is served through
+  // the proxy on this origin. Narrowing this to 'self' broke every app of the first kind.
+  //
+  // This is not the loose end it looks like. A framed document gets its own origin and its
+  // own CSP, so nothing here is what keeps it away from the panel; `script-src 'self'`
+  // above is, and it is untouched by this.
+  "frame-src 'self' https: http:",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -142,6 +152,11 @@ app.use("/api/data", requireAuth, dataRouter);
 app.use("/api/debug", requireAuth, debugRouter);
 app.use("/api/ai-suppliers", requireAuth, aiSuppliersRouter);
 app.use("/api/templates", requireAuth, templatesRouter);
+// Inline chat media is loaded straight by the browser, which cannot set an Authorization
+// header, so it authenticates with a short-lived media ticket instead. Mounted ahead of
+// `requireAuth` because that guard would otherwise refuse the request before the ticket was
+// ever looked at; anything this router does not match falls through to the guarded one.
+app.use("/api/tg-client", tgClientMediaRouter);
 app.use("/api/tg-client", requireAuth, tgClientRouter);
 
 // Serve Vue SPA

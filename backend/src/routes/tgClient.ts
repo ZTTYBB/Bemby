@@ -74,6 +74,13 @@ function tgError(err: any, accountId: number, res: Response): void {
 
 const router = Router();
 
+/**
+ * Routes a browser loads by address rather than by fetch, so they authenticate with a media
+ * ticket instead of a header. Mounted in server.ts ahead of the session guard; anything it
+ * does not match falls through to the guarded router.
+ */
+export const mediaRouter = Router();
+
 // GET /frameable?url= -- probe whether a page allows cross-origin framing
 router.get("/frameable", async (req, res) => {
   const url = req.query.url as string;
@@ -732,8 +739,14 @@ router.get("/:accountId/messages/:chatId/:msgId/thread", async (req, res) => {
   }
 });
 
-// GET /:accountId/messages/:chatId/:msgId/photo -- fetch photo for a message
-router.get("/:accountId/messages/:chatId/:msgId/photo", requireMediaAuth, async (req, res) => {
+// GET /:accountId/messages/:chatId/:msgId/photo -- fetch photo for a message.
+//
+// On `mediaRouter`, not the router below, because the difference is where the guard sits.
+// The main router is mounted behind `requireAuth`, which only reads the Authorization
+// header; an <img> cannot set one, so a request carrying a perfectly good media ticket was
+// refused by the outer guard before this route was ever consulted. This router is mounted
+// ahead of that guard and carries its own.
+mediaRouter.get("/:accountId/messages/:chatId/:msgId/photo", requireMediaAuth, async (req, res) => {
   const accountId = Number(req.params.accountId);
   const chatId = req.params.chatId;
   const msgId = Number(req.params.msgId);
