@@ -3,13 +3,21 @@
 // authorise, and the header rewriting in both directions.
 //
 // assertPublicUrl is stubbed because the upstream here is on loopback, which it exists to
-// refuse; its own rules are covered by the SSRF checks in proxy.test.ts.
+// refuse; its own rules are covered by safeFetch.test.ts.
 vi.mock("../tg/safeFetch", async () => {
   const actual = await vi.importActual<typeof import("../tg/safeFetch")>("../tg/safeFetch");
   return {
     ...actual,
     assertPublicUrl: async () => {},
-    ssrfSafeFetch: (url: string, init: RequestInit) => fetch(url, init),
+    ssrfSafeFetch: (
+      url: string,
+      init: RequestInit,
+      options?: { followRedirects?: boolean },
+    ) =>
+      fetch(url, {
+        ...init,
+        redirect: options?.followRedirects === false ? "manual" : "follow",
+      }),
   };
 });
 

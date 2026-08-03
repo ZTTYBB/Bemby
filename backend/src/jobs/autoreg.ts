@@ -5,7 +5,8 @@ import { NewMessage, NewMessageEvent } from "telegram/events";
 import { EditedMessage } from "telegram/events/EditedMessage";
 import type { TgProxy, AutoregConfig, CustomStepLog } from "../types";
 import type { TgDeviceParams } from "../auth/tgAuth";
-import { expandCommand, parseMessages, escapeHtml, callAI } from "./checkin";
+import { expandCommand, parseMessages, callAI } from "./checkin";
+import { escapeHtml } from "../tg/htmlEscape";
 import { resolvePeerTarget } from "../tg/peerTarget";
 
 // Reuses the custom-job step log shape so LogsView renders the same timeline.

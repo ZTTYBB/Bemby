@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import crypto from 'crypto';
 import { db } from '../db/database';
+import { decryptPayload, encryptPayload, type EncryptedEnvelope } from '../db/exportCrypto';
+import { decryptAccountRow, encryptSecret } from '../db/secretColumns';
 import { refreshScheduler } from '../scheduler';
 import {
   verifyPassword,
@@ -69,41 +70,6 @@ export function exportRequiresEncryption(
     (payload.jobs ?? []).some((j) => configHasSecret(j.config)) ||
     (payload.templates ?? []).some((t) => configHasSecret(t.config))
   );
-}
-
-type EncryptedEnvelope = {
-  encrypted: true;
-  version: '1';
-  salt: string;
-  iv: string;
-  tag: string;
-  data: string;
-};
-
-function encryptPayload(plaintext: string, secret: string): EncryptedEnvelope {
-  const salt = crypto.randomBytes(16);
-  const key = crypto.scryptSync(secret, salt, 32);
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  return {
-    encrypted: true,
-    version: '1',
-    salt: salt.toString('hex'),
-    iv: iv.toString('hex'),
-    tag: cipher.getAuthTag().toString('hex'),
-    data: encrypted.toString('base64'),
-  };
-}
-
-function decryptPayload(envelope: EncryptedEnvelope, secret: string): string {
-  const salt = Buffer.from(envelope.salt, 'hex');
-  const key = crypto.scryptSync(secret, salt, 32);
-  const iv = Buffer.from(envelope.iv, 'hex');
-  const tag = Buffer.from(envelope.tag, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-  decipher.setAuthTag(tag);
-  return decipher.update(Buffer.from(envelope.data, 'base64')) + decipher.final('utf8');
 }
 
 const router = Router();
@@ -287,7 +253,9 @@ export function clearDanglingProxyRefs(): number {
 router.post('/export', (req, res) => {
   const { secret } = req.body as { secret?: string };
 
-  const accounts = db.prepare('SELECT * FROM tg_accounts ORDER BY id').all() as AccountRow[];
+  const accounts = (db.prepare('SELECT * FROM tg_accounts ORDER BY id').all() as AccountRow[])
+    // The backup has its own encryption; the at-rest key must not be needed to restore it
+    .map(decryptAccountRow);
   const templates = db.prepare('SELECT * FROM job_templates ORDER BY id').all() as TemplateRow[];
   const jobs = db.prepare('SELECT * FROM jobs ORDER BY id').all() as JobRow[];
   const aiSuppliers = db.prepare('SELECT * FROM ai_suppliers ORDER BY id').all() as AiSupplierRow[];
@@ -412,9 +380,15 @@ router.post('/import', async (req, res) => {
       return;
     }
     const stored = getStoredCredentials();
+    // With no stored hash and no ADMIN_PASSWORD, the old fallback compared the input against
+    // the hash of the empty string, so an empty confirmPassword passed. Refuse outright
+    // instead: there is nothing to check against, and a wipe is not the place to fail open.
+    const envPassword = process.env.ADMIN_PASSWORD;
     const valid = stored.passwordHash
       ? await verifyPassword(confirmPassword, stored.passwordHash)
-      : timingSafeCompare(legacyHashPassword(confirmPassword), legacyHashPassword(process.env.ADMIN_PASSWORD ?? ''));
+      : envPassword
+        ? timingSafeCompare(legacyHashPassword(confirmPassword), legacyHashPassword(envPassword))
+        : false;
     if (!valid) {
       res.status(401).json({ error: 'Incorrect password', code: 'WRONG_PASSWORD' });
       return;
@@ -455,8 +429,8 @@ router.post('/import', async (req, res) => {
         `INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       ).run(
-        a.name, a.phoneNumber, a.apiId, a.apiHash,
-        forceReauth ? null : (a.sessionString ?? null),
+        a.name, a.phoneNumber, a.apiId, encryptSecret(a.apiHash),
+        encryptSecret(forceReauth ? null : (a.sessionString ?? null)),
         forceReauth ? 'unauthenticated' : (a.authStatus ?? 'unauthenticated'),
         a.proxyId ?? null,
       );

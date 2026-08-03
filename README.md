@@ -14,22 +14,36 @@
 
 一款自托管的自动化工具，用于管理每日 Telegram 机器人签到和 Emby 视频观看会话。内置 Web 管理门户，支持多账号和多任务管理。
 
-<table>
+Bemby可签到市面上所有的服（需要正确配置）。无论是TG内，网页，小程序，回答问题或者验证码。同时 Bemby 有完整的 Web TG 应用，支持批量入群，订阅，抽奖，更多玩法等你来挖掘。同时感谢群友们的建议，意见与测试。
+
+最后请大家支持公益服，切勿滥用，祝大家玩的开心。
+
+<table width="100%">
   <tr>
-    <td align="center" colspan="3"><img src="docs/accounts.png" alt="账户配置" /><br/><sub>账户配置</sub></td>
+    <td align="center" colspan="3"><img src="docs/accounts.png" alt="账户配置" width="100%" /><br/><sub>账户配置</sub></td>
   </tr>
   <tr>
-    <td align="center" colspan="3"><img src="docs/jobs.png" alt="任务配置" /><br/><sub>任务配置</sub></td>
+    <td align="center" colspan="3"><img src="docs/jobs.png" alt="任务配置" width="100%" /><br/><sub>任务配置</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/rich_content_logs.png" alt="丰富内容日志" /><br/><sub>丰富内容日志</sub></td>
-    <td align="center"><img src="docs/ai_debugging_console.png" alt="AI 调试" /><br/><sub>AI 调试</sub></td>
-    <td align="center"><img src="docs/ai_provider_config.png" alt="AI 设置" /><br/><sub>AI 设置</sub></td>
+    <td align="center" width="33.33%"><img src="docs/rich_content_logs.png" alt="丰富内容日志" width="100%" /><br/><sub>丰富内容日志</sub></td>
+    <td align="center" width="33.33%"><img src="docs/ai_debugging_console.png" alt="AI 调试" width="100%" /><br/><sub>AI 调试</sub></td>
+    <td align="center" width="33.33%"><img src="docs/ai_provider_config.png" alt="AI 设置" width="100%" /><br/><sub>AI 设置</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/template-checkin.png" alt="添加签到模版" /><br/><sub>添加签到模版</sub></td>
-    <td align="center"><img src="docs/template-emby-watch.png" alt="添加观看模版" /><br/><sub>添加观看模版</sub></td>
-    <td align="center"><img src="docs/setting-emby-watch-ua.png" alt="观看 UA配置" /><br/><sub>观看 UA 配置</sub></td>
+    <td align="center" width="33.33%"><img src="docs/template-checkin.png" alt="添加签到模版" width="100%" /><br/><sub>添加签到模版</sub></td>
+    <td align="center" width="33.33%"><img src="docs/template-emby-watch.png" alt="添加观看模版" width="100%" /><br/><sub>添加观看模版</sub></td>
+    <td align="center" width="33.33%"><img src="docs/setting-emby-watch-ua.png" alt="观看 UA配置" width="100%" /><br/><sub>观看 UA 配置</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="33.33%"><img src="docs/auto-registration.png" alt="抢注" width="100%" /><br/><sub>添加抢注任务</sub></td>
+    <td align="center" width="33.33%"><img src="docs/custom-job.png" alt="自定义任务" width="100%" /><br/><sub>添加自定义任务</sub></td>
+    <td align="center" width="33.33%"><img src="docs/pass-cf-verification.png" alt="过CF 人机验证" width="100%" /><br/><sub>过 CF 人机验证（自动过）</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="33.33%"><img src="docs/web-checkin.png" alt="网页签到" width="100%" /><br/><sub>网页版签到</sub></td>
+    <td align="center" width="33.33%"><img src="docs/lucky-draw.png" alt="抽奖" width="100%" /><br/><sub>抽奖</sub></td>
+    <td align="center" width="33.33%"><img src="docs/pass-cf-verification2.png" alt="过CF 人机验证2" width="100%" /><br/><sub>过 CF 人机验证（自动勾选）</sub></td>
   </tr>
 </table>
 
@@ -293,6 +307,7 @@ Emby 服务器将该会话识别为与所选 User Agent 预设对应的客户端
 
 - [x] 过 CF 签到 — 支持带 Cloudflare 防护的机器人签到（v1.0.0，CloakBrowser）
 - [x] 自动抢注 — 自动完成新账号注册流程（v1.0.0，自动注册任务）
+- [ ] 模板中心 — 允许用户快速分享与下载模板
 - [ ] 自动答题 — 自动识别并回答机器人问题
 
 ---
@@ -343,28 +358,40 @@ Bemby 仅供个人自动化和学习目的使用。请负责任地使用，并�
 [![Changelog](https://img.shields.io/badge/changelog-view-blue)](CHANGELOG.md)
 [![Telegram](https://img.shields.io/badge/Telegram-community-2CA5E0?logo=telegram&logoColor=white)](https://t.me/cool_bemby)
 
-[简体中文](#bemby-v0936) | **English**
+[简体中文](#bemby-v100) | **English**
 
 > If Bemby saves you time, please consider giving it a star on GitHub. It helps others find the project and keeps development going.
 
 A self-hosted automation tool for managing daily Telegram bot check-ins (签到) and Emby video-watch sessions. Includes a web admin portal for managing multiple accounts and jobs.
 
-<table>
+**Bemby can check in to every server out there**, given the right configuration: inside Telegram, on a web page, in a Mini App, or behind a question to answer or a captcha to solve. Bemby also ships a complete web Telegram client, with bulk group joining, subscribing, lucky draws and plenty more to discover. Thanks to everyone in the community group for their suggestions, feedback and testing.
+
+<table width="100%">
   <tr>
-    <td align="center" colspan="3"><img src="docs/accounts.png" alt="Account configuration" /><br/><sub>Account configuration</sub></td>
+    <td align="center" colspan="3"><img src="docs/accounts.png" alt="Account configuration" width="100%" /><br/><sub>Account configuration</sub></td>
   </tr>
   <tr>
-    <td align="center" colspan="3"><img src="docs/jobs.png" alt="Job configuration" /><br/><sub>Job configuration</sub></td>
+    <td align="center" colspan="3"><img src="docs/jobs.png" alt="Job configuration" width="100%" /><br/><sub>Job configuration</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/rich_content_logs.png" alt="Rich content logs" /><br/><sub>Rich content logs</sub></td>
-    <td align="center"><img src="docs/ai_debugging_console.png" alt="AI debug console" /><br/><sub>AI debug console</sub></td>
-    <td align="center"><img src="docs/ai_provider_config.png" alt="AI provider settings" /><br/><sub>AI provider settings</sub></td>
+    <td align="center" width="33.33%"><img src="docs/rich_content_logs.png" alt="Rich content logs" width="100%" /><br/><sub>Rich content logs</sub></td>
+    <td align="center" width="33.33%"><img src="docs/ai_debugging_console.png" alt="AI debug console" width="100%" /><br/><sub>AI debug console</sub></td>
+    <td align="center" width="33.33%"><img src="docs/ai_provider_config.png" alt="AI provider settings" width="100%" /><br/><sub>AI provider settings</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/template-checkin.png" alt="Add check-in template" /><br/><sub>Add check-in template</sub></td>
-    <td align="center"><img src="docs/template-emby-watch.png" alt="Add Emby Watch template" /><br/><sub>Add Emby Watch template</sub></td>
-    <td align="center"><img src="docs/setting-emby-watch-ua.png" alt="Emby Watch UA settings" /><br/><sub>Emby Watch UA settings</sub></td>
+    <td align="center" width="33.33%"><img src="docs/template-checkin.png" alt="Add check-in template" width="100%" /><br/><sub>Add check-in template</sub></td>
+    <td align="center" width="33.33%"><img src="docs/template-emby-watch.png" alt="Add Emby Watch template" width="100%" /><br/><sub>Add Emby Watch template</sub></td>
+    <td align="center" width="33.33%"><img src="docs/setting-emby-watch-ua.png" alt="Emby Watch UA settings" width="100%" /><br/><sub>Emby Watch UA settings</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="33.33%"><img src="docs/auto-registration.png" alt="Add an auto-registration job" width="100%" /><br/><sub>Add an auto-registration job</sub></td>
+    <td align="center" width="33.33%"><img src="docs/custom-job.png" alt="Add a custom job" width="100%" /><br/><sub>Add a custom job</sub></td>
+    <td align="center" width="33.33%"><img src="docs/pass-cf-verification.png" alt="Solving a Cloudflare challenge automatically" width="100%" /><br/><sub>Cloudflare challenge (automatic)</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="33.33%"><img src="docs/web-checkin.png" alt="Web check-in" width="100%" /><br/><sub>Web check-in</sub></td>
+    <td align="center" width="33.33%"><img src="docs/lucky-draw.png" alt="Lucky draw" width="100%" /><br/><sub>Lucky draw</sub></td>
+    <td align="center" width="33.33%"><img src="docs/pass-cf-verification2.png" alt="Solving a Cloudflare challenge manually" width="100%" /><br/><sub>Cloudflare challenge (manual)</sub></td>
   </tr>
 </table>
 

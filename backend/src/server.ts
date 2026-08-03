@@ -81,11 +81,40 @@ app.use(express.json({ limit: "5mb" }));
 
 // Baseline security headers. Kept dependency-free and conservative so the SPA
 // and the mini-app iframe keep working; the mini-app proxy strips these itself.
+//
+// The policy is more than `frame-ancestors` on purpose. The panel renders bot- and
+// site-authored content through `v-html` in the logs and the messenger, and the session
+// token lives in this origin's localStorage, so one escaping slip would otherwise be worth
+// the whole API. `script-src 'self'` means injected markup cannot execute, whatever gets
+// past the escaping upstream.
+//
+// The two loosenings are load-bearing rather than habit:
+//   'unsafe-inline' in style-src -- the log and messenger renderers emit inline styles, and
+//     Vue's own scoped-style handling sets them too
+//   data: and blob: in img-src/media-src -- avatars, message photos and inline media are
+//     served to the page as data or object URLs rather than fetched by address
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "media-src 'self' data: blob:",
+  "font-src 'self' data:",
+  // The panel talks to its own API and its own WebSocket, and nothing else
+  "connect-src 'self' ws: wss:",
+  // The messenger frames the viewer origin, which is a separate host by design
+  `frame-src 'self'${viewerOrigin ? ` ${viewerOrigin}` : ""}`,
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  res.setHeader("Content-Security-Policy", CSP);
   if (process.env.NODE_ENV === "production") {
     res.setHeader(
       "Strict-Transport-Security",

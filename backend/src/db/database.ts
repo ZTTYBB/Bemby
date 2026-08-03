@@ -2,6 +2,12 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import { fuzzyScore } from "./fuzzy";
+import {
+  ENCRYPTED_ACCOUNT_COLUMNS,
+  encryptSecret,
+  isEncryptedSecret,
+  isSecretEncryptionEnabled,
+} from "./secretColumns";
 
 const DB_PATH =
   process.env.DB_PATH ?? path.resolve(process.cwd(), "data/bemby.db");
@@ -605,6 +611,59 @@ runOnce("passkey-move-out-of-attributes", () => {
     }
   }
 });
+
+// With BEMBY_DATA_KEY configured, bring any credential still sitting in plain text up to
+// date. Not a runOnce migration: the key can be turned on at any point, and rows written
+// while it was off have to be caught the next time the app starts with it on. Rows already
+// encrypted are skipped, so this costs a single scan on a boot with nothing to do.
+try {
+  if (isSecretEncryptionEnabled()) {
+    const rows = db
+      .prepare("SELECT id, api_hash, session_string, passkey FROM tg_accounts")
+      .all() as Array<{
+      id: number;
+      api_hash: string | null;
+      session_string: string | null;
+      passkey: string | null;
+    }>;
+    const upd = db.prepare(
+      "UPDATE tg_accounts SET api_hash = ?, session_string = ?, passkey = ? WHERE id = ?",
+    );
+    let converted = 0;
+    db.transaction(() => {
+      for (const r of rows) {
+        const pending = ENCRYPTED_ACCOUNT_COLUMNS.some(
+          (c) => r[c] && !isEncryptedSecret(r[c]),
+        );
+        if (!pending) continue;
+        upd.run(
+          encryptSecret(r.api_hash),
+          encryptSecret(r.session_string),
+          encryptSecret(r.passkey),
+          r.id,
+        );
+        converted++;
+      }
+    })();
+    if (converted) {
+      console.log(`[secrets] encrypted stored credentials for ${converted} account(s)`);
+    }
+  } else {
+    const anyStored = db
+      .prepare(
+        "SELECT 1 FROM tg_accounts WHERE session_string IS NOT NULL OR passkey IS NOT NULL LIMIT 1",
+      )
+      .get();
+    if (anyStored) {
+      console.warn(
+        "[secrets] Telegram session strings and passkeys are stored unencrypted. Set " +
+          "BEMBY_DATA_KEY to encrypt them at rest (see env.example).",
+      );
+    }
+  }
+} catch (e) {
+  console.error("[secrets] encryption sweep failed:", e);
+}
 
 export const FALLBACK_TIMEZONE = "Australia/Sydney";
 

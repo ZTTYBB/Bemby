@@ -566,12 +566,3 @@ export type TgProxy = {
   password?: string;
 };
 
-export type JobLog = {
-  id: number;
-  jobId: number;
-  jobName: string | null;
-  accountName: string | null;
-  ranAt: string;
-  status: LogStatus;
-  message: string | null;
-};

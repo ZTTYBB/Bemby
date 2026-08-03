@@ -2139,6 +2139,9 @@ const commandSuggestions = computed(() => {
 onMounted(async () => {
   window.addEventListener("message", handleMiniAppMessage);
   loadAccountDisplaySetting();
+  // Inline photos are loaded by <img src>, which cannot send a header, so they go through a
+  // short-lived media ticket instead. Fetched before the first message renders.
+  await tgClientApi.ensureMediaTicket().catch(() => {});
   accounts.value = await accountsApi.list().catch(() => []);
   if (!authenticatedAccounts.value.length) return;
 
@@ -3914,6 +3917,8 @@ async function reconnectAccount() {
 }
 
 async function loadDialogs() {
+  // A long-lived tab outlives one ticket, and a stale one shows every photo as broken
+  await tgClientApi.ensureMediaTicket().catch(() => {});
   if (!selectedAccountId.value) return;
   loadingDialogs.value = true;
   dialogError.value = "";

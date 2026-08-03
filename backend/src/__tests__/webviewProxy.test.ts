@@ -3,7 +3,7 @@
 // upstream server through the real router.
 //
 // assertPublicUrl is stubbed because the upstream here is on loopback, which it exists to
-// refuse; its own rules are covered by the SSRF checks in proxy.test.ts.
+// refuse; its own rules are covered by safeFetch.test.ts.
 vi.mock("../tg/safeFetch", async () => {
   const actual = await vi.importActual<typeof import("../tg/safeFetch")>("../tg/safeFetch");
   return {
@@ -279,12 +279,25 @@ describe("what reaches the site", () => {
   });
 
   it("answers a preflight itself, so an opaque origin is not turned away", async () => {
-    const resp = await fetch(`${proxyUrl}/api/webview/r/x/https/example.com/`, {
+    const ticket = issueWebviewTicket(`${upstreamUrl}/app`, "app");
+    const resp = await fetch(`${proxyUrl}/api/webview/r/${ticket.id}/https/example.com/`, {
       method: "OPTIONS",
       headers: { "access-control-request-headers": "content-type" },
     });
     expect(resp.status).toBe(204);
     expect(resp.headers.get("access-control-allow-origin")).toBe("*");
     expect(resp.headers.get("access-control-allow-headers")).toBe("content-type");
+  });
+
+  it("tells a preflight holding no ticket nothing at all", async () => {
+    // This router is mounted outside the session guard, so an arbitrary site must not be
+    // able to talk it into echoing its own origin back with Allow-Credentials.
+    const resp = await fetch(`${proxyUrl}/api/webview/r/not-a-ticket/https/example.com/`, {
+      method: "OPTIONS",
+      headers: { origin: "https://evil.example", "access-control-request-headers": "content-type" },
+    });
+    expect(resp.status).toBe(401);
+    expect(resp.headers.get("access-control-allow-origin")).toBeNull();
+    expect(resp.headers.get("access-control-allow-credentials")).toBeNull();
   });
 });

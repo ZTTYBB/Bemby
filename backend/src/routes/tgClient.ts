@@ -18,7 +18,6 @@ import {
   editContact,
   searchPeers,
   fetchPhoto,
-  fetchAvatar,
   getEntityDetails,
   muteDialog,
   pinDialog,
@@ -29,7 +28,6 @@ import {
   markRead,
   resolvePeer,
   reconnectClient,
-  subscribeToMessages,
   getFolders,
   addChatToFolder,
   checkInvite,
@@ -65,6 +63,8 @@ import {
   getReadOutboxMaxId,
 } from "../tg/liveClient";
 import type { Response } from "express";
+import { issueMediaTicket } from "../auth/mediaTickets";
+import { requireMediaAuth } from "../middleware/auth";
 
 // Centralised error response: marks session expired for auth errors automatically.
 function tgError(err: any, accountId: number, res: Response): void {
@@ -116,6 +116,13 @@ router.post("/webview/ticket", (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err?.message ?? "url not allowed" });
   }
+});
+
+// POST /media-ticket -- a short-lived credential for addresses the browser loads itself.
+// An <img src> cannot set an Authorization header, and the session token has no business
+// being in a URL (see auth/mediaTickets).
+router.post("/media-ticket", (_req, res) => {
+  res.json(issueMediaTicket());
 });
 
 // GET /:accountId/folders
@@ -640,27 +647,6 @@ router.post("/:accountId/messages/:chatId/forward", async (req, res) => {
   }
 });
 
-// GET /:accountId/avatar/:chatId -- profile photo (single)
-router.get("/:accountId/avatar/:chatId", async (req, res) => {
-  const accountId = Number(req.params.accountId);
-  const chatId = decodeURIComponent(req.params.chatId);
-  try {
-    const entry = await getLiveClient(accountId);
-    const buf = await fetchAvatar(entry, chatId);
-    if (!buf) {
-      res.set("Cache-Control", "public, max-age=3600");
-      res.status(404).end();
-      return;
-    }
-    res.set("Content-Type", "image/jpeg");
-    res.set("Cache-Control", "public, max-age=86400");
-    res.send(buf);
-  } catch {
-    res.set("Cache-Control", "public, max-age=3600");
-    res.status(404).end();
-  }
-});
-
 // GET /:accountId/avatars?ids=chatId1,chatId2,... -- batch profile photos
 // Returns { [chatId]: base64String } for chats that have an avatar.
 router.get("/:accountId/avatars", async (req, res) => {
@@ -747,7 +733,7 @@ router.get("/:accountId/messages/:chatId/:msgId/thread", async (req, res) => {
 });
 
 // GET /:accountId/messages/:chatId/:msgId/photo -- fetch photo for a message
-router.get("/:accountId/messages/:chatId/:msgId/photo", async (req, res) => {
+router.get("/:accountId/messages/:chatId/:msgId/photo", requireMediaAuth, async (req, res) => {
   const accountId = Number(req.params.accountId);
   const chatId = req.params.chatId;
   const msgId = Number(req.params.msgId);
@@ -949,42 +935,6 @@ router.post("/:accountId/start-bot/:username", async (req, res) => {
     res.json(dialog);
   } catch (err: any) {
     tgError(err, accountId, res);
-  }
-});
-
-// GET /:accountId/events -- SSE stream for real-time messages
-router.get("/:accountId/events", async (req, res) => {
-  const accountId = Number(req.params.accountId);
-
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
-  res.write(":\n\n");
-
-  const send = (data: object) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
-
-  try {
-    // Ensure client is alive so the event handler is registered
-    await getLiveClient(accountId);
-
-    const heartbeat = setInterval(() => res.write(":\n\n"), 25_000);
-
-    const unsubscribe = subscribeToMessages(accountId, (msg) => {
-      send({ type: "message", ...msg });
-    });
-
-    req.on("close", () => {
-      clearInterval(heartbeat);
-      unsubscribe();
-    });
-  } catch (err: any) {
-    send({ type: "error", error: err.message });
-    res.end();
   }
 });
 

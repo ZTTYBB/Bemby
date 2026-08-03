@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { db, getDefaultTgApiCredentials } from "../db/database";
+import { decryptAccountRow } from "../db/secretColumns";
 import { runJob, type JobDetailLog } from "../jobs/runner";
 import { collectRunWarnings, completedMessage } from "../jobs/runWarnings";
 import {
@@ -435,6 +436,7 @@ router.post("/:id/run", async (req, res) => {
     const accountRow = db
       .prepare("SELECT * FROM tg_accounts WHERE id = ?")
       .get(jobRow.account_id) as AccountRow | undefined;
+    if (accountRow) decryptAccountRow(accountRow);
     if (!accountRow?.session_string) {
       res.status(400).json({ error: "Account is not authenticated" });
       return;
@@ -452,6 +454,7 @@ router.post("/:id/run", async (req, res) => {
     const accountRow = db
       .prepare("SELECT * FROM tg_accounts WHERE id = ?")
       .get(job.accountId) as AccountRow | undefined;
+    if (accountRow) decryptAccountRow(accountRow);
     if (accountRow?.session_string) {
       account = rowToAccount(accountRow);
     }

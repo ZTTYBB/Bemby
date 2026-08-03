@@ -4,6 +4,8 @@ import { LogLevel } from "telegram/extensions/Logger";
 import { StringSession } from "telegram/sessions";
 import { NewMessage, Raw, type NewMessageEvent } from "telegram/events";
 import { db, getDefaultTgApiCredentials } from "../db/database";
+import { decryptAccountRow } from "../db/secretColumns";
+import { escapeHtml as escHtml, safeHref } from "./htmlEscape";
 import { parseTgProxy } from "../jobs/runner";
 import { resolveAppClientParams } from "./appClient";
 import { parseMiniAppLink, withClientLaunchParams } from "./miniApp";
@@ -221,26 +223,6 @@ function chatIdToPeer(chatId: string): Api.TypePeer | null {
   return null;
 }
 
-function escHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-// Only allow http/https/tg URLs in href attributes -- strips anything else.
-// Returns the normalised href (not the raw input) so quotes and other unsafe
-// characters cannot break out of the attribute once escaped.
-function safeHref(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return /^(https?|tg):$/i.test(parsed.protocol) ? parsed.href : "";
-  } catch {
-    return "";
-  }
-}
 
 // Converts Telegram message entities to safe HTML. Returns null when there are
 // no formatting entities (plain text can be rendered directly).
@@ -455,19 +437,45 @@ export function markSessionExpired(accountId: number): void {
   }
 }
 
+/**
+ * Connections in progress, so two callers asking for the same idle account share one.
+ *
+ * Without this there was a gap between the map lookup above and the `set` at the end: both
+ * callers saw no entry, both built and connected a TelegramClient, and the second overwrote
+ * the first in `liveClients`. The first was then live, connected and unreachable, running
+ * its update loop against Telegram until the process restarted.
+ */
+const connecting = new Map<number, Promise<LiveEntry>>();
+
 export async function getLiveClient(accountId: number): Promise<LiveEntry> {
-  let entry = liveClients.get(accountId);
-  if (entry) {
-    entry.lastActiveAt = Date.now();
-    if (!entry.client.connected) await entry.client.connect();
-    return entry;
+  const existing = liveClients.get(accountId);
+  if (existing) {
+    existing.lastActiveAt = Date.now();
+    if (!existing.client.connected) await existing.client.connect();
+    return existing;
   }
 
+  const inFlight = connecting.get(accountId);
+  if (inFlight) return inFlight;
+
+  const pending = connectLiveClient(accountId);
+  connecting.set(accountId, pending);
+  try {
+    return await pending;
+  } finally {
+    // Cleared whether it resolved or threw, so a failed connect does not wedge the account
+    connecting.delete(accountId);
+  }
+}
+
+async function connectLiveClient(accountId: number): Promise<LiveEntry> {
+  let entry: LiveEntry | undefined;
   const account = db
     .prepare(
       "SELECT api_id, api_hash, session_string, proxy_id, app_client_id FROM tg_accounts WHERE id = ?",
     )
     .get(accountId) as AccountRow | undefined;
+  if (account) decryptAccountRow(account);
 
   if (!account?.session_string)
     throw new Error("Account not found or not authenticated");

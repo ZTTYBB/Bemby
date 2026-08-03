@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { db, getDefaultTgApiCredentials } from "../db/database";
+import { decryptAccountRow } from "../db/secretColumns";
 import { updateProfile } from "../auth/tgAuth";
 import { parseTgProxy } from "./runner";
 import { resolveAppClientParams } from "../tg/appClient";
@@ -147,6 +148,7 @@ async function updateOne(item: BulkProfileItem): Promise<void> {
     .prepare("SELECT * FROM tg_accounts WHERE id = ?")
     .get(item.accountId) as AccountRow | undefined;
   if (!account) throw new Error("Account not found");
+  decryptAccountRow(account);
   if (account.auth_status !== "authenticated" || !account.session_string) {
     throw new Error("Account is not authenticated");
   }

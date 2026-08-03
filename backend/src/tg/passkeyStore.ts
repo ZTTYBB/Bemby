@@ -1,4 +1,5 @@
 import { db } from "../db/database";
+import { decryptSecret, encryptSecret } from "../db/secretColumns";
 
 // Bemby stores a single passkey per account in the dedicated tg_accounts.passkey column
 // (JSON). One passkey per account keeps export/import trivial: the passkey travels with
@@ -24,12 +25,18 @@ export type PasskeySecret = {
 // The persisted form omits accountId -- it is the row's own id, injected on read.
 export type StoredPasskey = Omit<PasskeySecret, "accountId">;
 
+/**
+ * Reads the stored passkey. The column is encrypted at rest when a data key is configured
+ * (see db/secretColumns), so decryption happens here, at the one place the raw column value
+ * is turned into an object, rather than at every caller.
+ */
 export function parseStoredPasskey(
   raw: string | null | undefined,
 ): StoredPasskey | null {
-  if (!raw) return null;
+  const plain = decryptSecret(raw ?? null);
+  if (!plain) return null;
   try {
-    const value = JSON.parse(raw);
+    const value = JSON.parse(plain);
     return value && typeof value === "object" ? (value as StoredPasskey) : null;
   } catch {
     return null;
@@ -47,7 +54,7 @@ export function getAccountPasskey(accountId: number): PasskeySecret | null {
 export function savePasskeySecret(secret: PasskeySecret): void {
   const { accountId, ...stored } = secret;
   db.prepare("UPDATE tg_accounts SET passkey = ? WHERE id = ?").run(
-    JSON.stringify(stored),
+    encryptSecret(JSON.stringify(stored)),
     accountId,
   );
 }
@@ -94,11 +101,6 @@ export function storedPasskeyIdsForAccount(accountId: number): string[] {
 export function accountPasskeySecrets(accountId: number): PasskeySecret[] {
   const secret = getAccountPasskey(accountId);
   return secret ? [secret] : [];
-}
-
-// True when the account has a stored passkey usable for login (key + known DC).
-export function accountHasUsablePasskey(accountId: number): boolean {
-  return getAccountPasskey(accountId)?.dcId != null;
 }
 
 // Backfill/refresh the account's home DC on the stored secret.

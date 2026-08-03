@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { assertPublicUrl, ssrfSafeFetch } from "../tg/safeFetch";
 import {
+  registrableDomain,
   resolveWebviewTicket,
+  sameParty,
   ticketAllowsUrl,
   webviewProxyPath,
   type WebviewMode,
@@ -55,17 +57,6 @@ const UA_APP =
 const UA_PAGE =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
   "Chrome/126 Safari/537.36";
-
-/** The site's own domain, for telling its resources from a third party's. */
-function baseDomain(host: string): string {
-  const labels = host.toLowerCase().split(".");
-  return labels.length <= 2 ? labels.join(".") : labels.slice(-2).join(".");
-}
-
-function sameParty(host: string, domain: string): boolean {
-  const h = host.toLowerCase();
-  return h === domain || h.endsWith(`.${domain}`);
-}
 
 function allowCors(
   res: { setHeader: (k: string, v: string) => void },
@@ -238,7 +229,7 @@ function runtimeShim(base: string, domain: string, prefix: string, mode: Webview
 /** Rewrites a page so what it ships with comes back through this proxy. */
 function rewriteHtml(html: string, finalUrl: string, ticket: WebviewTicket): string {
   const prefix = `${webviewProxyPath(ticket.id)}/`;
-  const domain = baseDomain(new URL(finalUrl).hostname);
+  const domain = registrableDomain(new URL(finalUrl).hostname);
 
   // Only the site's own resources are proxied. A third party's stay as they are: the ticket
   // covers one site, so proxying them would earn a 403 -- which is exactly how the Telegram
@@ -333,7 +324,21 @@ function rewriteHtml(html: string, finalUrl: string, ticket: WebviewTicket): str
     : `${head}\n${out}`;
 }
 
+/** The ticket named by a viewer address, or undefined when there is no usable one. */
+function ticketFromUrl(rawUrl: string): WebviewTicket | undefined {
+  const id = /^\/r\/([^/?#]+)\//.exec(rawUrl)?.[1];
+  return id ? resolveWebviewTicket(decodeURIComponent(id)) : undefined;
+}
+
 router.options(/^\/r\//, (req, res) => {
+  // Answered only for an address holding a live ticket. Echoing an arbitrary Origin back
+  // with `Allow-Credentials` is a standing offer to every site on the web, and this router
+  // sits outside the session guard, so it should say nothing at all to a caller with no
+  // ticket to show.
+  if (!ticketFromUrl(req.url)) {
+    res.status(401).end();
+    return;
+  }
   allowCors(
     res,
     req.headers["access-control-request-headers"] as string | undefined,
@@ -343,12 +348,6 @@ router.options(/^\/r\//, (req, res) => {
 });
 
 router.all(/^\/r\//, async (req, res) => {
-  allowCors(
-    res,
-    req.headers["access-control-request-headers"] as string | undefined,
-    req.headers.origin as string | undefined,
-  );
-
   // Parsed off the raw URL rather than route params, so percent-encoding in the path and the
   // query reaches the site exactly as the page wrote it
   const parts = /^\/r\/([^/?#]+)\/(https?)\/([^/?#]+)([^?#]*)(\?[^#]*)?$/.exec(req.url);
@@ -363,6 +362,13 @@ router.all(/^\/r\//, async (req, res) => {
     res.status(401).json({ error: "This viewer session has expired. Open the app again." });
     return;
   }
+
+  // Only now, with a live ticket in hand, is the caller told anything cross-origin
+  allowCors(
+    res,
+    req.headers["access-control-request-headers"] as string | undefined,
+    req.headers.origin as string | undefined,
+  );
 
   const url = `${scheme}://${host}${rawPath || "/"}${search ?? ""}`;
   // The ticket is what bounds the proxy: without this it would fetch anything for anyone

@@ -140,20 +140,49 @@ export function webviewProxyUrl(ticketId: string, url: string): string {
   );
 }
 
-/** The site's own domain, as far as a host comparison needs it. */
-function baseDomain(host: string): string {
-  const labels = host.split(".");
-  return labels.length <= 2 ? host : labels.slice(-2).join(".");
+/**
+ * Second-level labels that are part of a public suffix rather than something anyone can
+ * register, when they sit under a two-letter country code: `com.au`, `co.uk`, `ac.nz` and
+ * their like. Without this the last two labels of `shop.com.au` read as `com.au`, and a
+ * ticket for one Australian site would authorise the proxy to fetch any of them.
+ *
+ * A heuristic rather than the full public suffix list, which is thousands of entries and a
+ * dependency this does not otherwise need. It errs towards the tighter answer: an unlisted
+ * suffix means the ticket covers less than it could, never more.
+ */
+const COUNTRY_SECOND_LEVEL = new Set([
+  "ac", "art", "asn", "biz", "co", "com", "edu", "firm", "gen", "go", "gob", "gouv", "gov",
+  "govt", "id", "in", "info", "ltd", "me", "mil", "ne", "net", "nom", "or", "org", "plc",
+  "sch", "school", "web",
+]);
+
+/**
+ * The registrable domain: the part of a host someone actually owns, which is what a
+ * same-party comparison has to be made against. Shared with the two viewer routers so all
+ * three agree on where one site ends and another begins.
+ */
+export function registrableDomain(host: string): string {
+  const labels = host.toLowerCase().replace(/\.$/, "").split(".");
+  if (labels.length <= 2) return labels.join(".");
+  const [sld, tld] = labels.slice(-2);
+  const take = tld.length === 2 && COUNTRY_SECOND_LEVEL.has(sld) ? 3 : 2;
+  // A host that is nothing but a public suffix has no registrable domain; returning it whole
+  // keeps the comparison below to an exact match rather than opening the suffix up.
+  if (labels.length < take) return labels.join(".");
+  return labels.slice(-take).join(".");
+}
+
+/** Whether a host belongs to the given registrable domain, itself included. */
+export function sameParty(host: string, domain: string): boolean {
+  const h = host.toLowerCase();
+  return h === domain || h.endsWith(`.${domain}`);
 }
 
 /**
- * Whether a ticket may fetch an address: its own origin, or another host on the same domain.
- * Apps commonly serve their page and their API from sibling hosts, so pinning to the exact
- * origin would break them, while allowing anything at all would make the proxy a relay for
- * any page holding a ticket.
- *
- * The domain is taken as the last two labels, which is one level too generous under a
- * multi-label public suffix (`example.co.uk`). It bounds the ticket to one party either way.
+ * Whether a ticket may fetch an address: its own origin, or another host on the same
+ * registrable domain. Apps commonly serve their page and their API from sibling hosts, so
+ * pinning to the exact origin would break them, while allowing anything at all would make
+ * the proxy a relay for any page holding a ticket.
  */
 export function ticketAllowsUrl(ticket: WebviewTicket, url: string): boolean {
   let parsed: URL;
@@ -164,7 +193,5 @@ export function ticketAllowsUrl(ticket: WebviewTicket, url: string): boolean {
   }
   if (!/^https?:$/i.test(parsed.protocol)) return false;
   if (parsed.origin === ticket.origin) return true;
-  const host = parsed.hostname.toLowerCase();
-  const domain = baseDomain(ticket.host);
-  return host === domain || host.endsWith(`.${domain}`);
+  return sameParty(parsed.hostname, registrableDomain(ticket.host));
 }

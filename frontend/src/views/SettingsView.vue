@@ -465,6 +465,21 @@
             <i class="fa-solid fa-shield-halved"></i>
             {{ credSaving ? t("common.saving") : t("settings.updateBtn") }}
           </button>
+
+          <div class="settings-subsection" style="margin-top: 22px">
+            {{ t("settings.sessionsSection") }}
+          </div>
+          <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+            {{ t("settings.sessionsHint") }}
+          </p>
+          <button
+            class="btn btn-secondary"
+            :disabled="revoking"
+            @click="signOutEverywhere"
+          >
+            <i class="fa-solid fa-right-from-bracket"></i>
+            {{ revoking ? t("common.saving") : t("settings.revokeSessionsBtn") }}
+          </button>
         </div>
       </div>
 
@@ -2600,6 +2615,7 @@ function toggleNotifyEvent(value: string) {
 
 const cred = reactive({ username: "", newPassword: "", currentPassword: "" });
 const credSaving = ref(false);
+const revoking = ref(false);
 const credMsg = ref("");
 const credError = ref("");
 
@@ -3250,17 +3266,35 @@ async function saveCredentials() {
   }
   credSaving.value = true;
   try {
-    await authApi.changeCredentials(
+    const { token } = await authApi.changeCredentials(
       cred.currentPassword,
       cred.username || undefined,
       cred.newPassword || undefined,
     );
+    // A credential change retires every token issued before it, this tab's included. The
+    // reply carries its replacement, so it has to be stored or the next request is a 401.
+    if (token) localStorage.setItem("token", token);
     credMsg.value = t("settings.credSaved");
     Object.assign(cred, { username: "", newPassword: "", currentPassword: "" });
   } catch (err: any) {
     credError.value = err.response?.data?.error ?? t("settings.credFailed");
   } finally {
     credSaving.value = false;
+  }
+}
+
+async function signOutEverywhere() {
+  credMsg.value = "";
+  credError.value = "";
+  revoking.value = true;
+  try {
+    const { token } = await authApi.revokeSessions();
+    if (token) localStorage.setItem("token", token);
+    credMsg.value = t("settings.sessionsRevoked");
+  } catch (err: any) {
+    credError.value = err.response?.data?.error ?? t("settings.credFailed");
+  } finally {
+    revoking.value = false;
   }
 }
 </script>

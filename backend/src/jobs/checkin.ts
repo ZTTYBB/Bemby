@@ -15,6 +15,7 @@ import {
   type CfRunState,
 } from './cloudflare';
 import { openableButtonUrl, webButtonOf, type WebButton } from '../tg/miniApp';
+import { escapeHtml, safeHref } from '../tg/htmlEscape';
 import { cfProxyCandidatesFor, rememberCfProxy } from '../tg/proxyProviders';
 
 export type CheckinAttemptLog = {
@@ -465,17 +466,6 @@ export async function selectMultipleButtonsWithAI(
 
 // ── HTML helpers ──────────────────────────────────────────────────────────────
 
-export function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function safeHref(url: string): string {
-  try {
-    return /^(https?|tg):$/i.test(new URL(url).protocol) ? url : '';
-  } catch {
-    return '';
-  }
-}
 
 function messageToHtml(text: string, entities?: Api.TypeMessageEntity[]): string {
   if (!entities?.length) return escapeHtml(text).replace(/\n/g, '<br>');

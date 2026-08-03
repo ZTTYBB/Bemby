@@ -248,6 +248,25 @@ describe('getLiveClient', () => {
     setupDb({ ...DEFAULT_ACCOUNT, session_string: null });
     await expect(getLiveClient(303)).rejects.toThrow('Account not found or not authenticated');
   });
+
+  it('builds one client when two callers ask for the same idle account at once', async () => {
+    // Both callers see no cached entry. Without an in-flight guard each builds and connects
+    // its own client and the second overwrites the first, leaving a live, connected session
+    // that nothing can reach and that keeps running until the process restarts.
+    const [first, second] = await Promise.all([getLiveClient(304), getLiveClient(304)]);
+
+    expect(first).toBe(second);
+    expect(MockTelegramClient).toHaveBeenCalledTimes(1);
+    expect(mockClientInstance.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not wedge the account when a connect fails', async () => {
+    setupDb(null);
+    await expect(getLiveClient(305)).rejects.toThrow();
+    // The failed attempt must not be cached, or the account could never connect again
+    setupDb(DEFAULT_ACCOUNT);
+    await expect(getLiveClient(305)).resolves.toBeDefined();
+  });
 });
 
 // ---- loadDialogs -----------------------------------------------------------

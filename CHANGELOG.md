@@ -6,9 +6,9 @@ All notable changes to Bemby are documented here.
 
 ## v1.0.0
 
-第一个 1.0 版本：小程序（Mini App）支持、网页子步骤、注册任务增强、计划列表与批量资料生成，Cloudflare 验证改用 CloakBrowser。
+第一个 1.0 版本：小程序（Mini App）支持、网页子步骤、注册任务增强、计划列表与批量资料生成，Cloudflare 验证改用 CloakBrowser，并完成一轮安全加固。
 
-The first 1.0: Mini App support, page sub-steps, autoreg enhancements, the schedule list, AI-written bulk profiles, and Cloudflare solving on CloakBrowser.
+The first 1.0: Mini App support, page sub-steps, autoreg enhancements, the schedule list, AI-written bulk profiles, Cloudflare solving on CloakBrowser, and a security hardening pass.
 
 ### 中文
 
@@ -36,6 +36,18 @@ The first 1.0: Mini App support, page sub-steps, autoreg enhancements, the sched
 - **虚拟显示由应用自行管理** -- headed 模式所需的 Xvfb 现由应用启动并复用（原先由 `puppeteer-real-browser` 负责）；无法启动时回退到 headless 并给出提示。
 - **自动更新默认关闭** -- CloakBrowser 的后台自动更新默认关闭，避免任务运行中突然下载约 200MB 并在数据卷中堆积旧构建；更新请使用设置页的「重新下载 / 更新浏览器」。
 
+**安全**
+
+- **登录验证码不再形同虚设** -- 之前验证码答案被签进发给浏览器的令牌里，而 JWT 的载荷是 base64 而非密文，解码即可读到答案；同一个验证码在 5 分钟内还能反复使用。现在答案只保存在服务端，发给客户端的只是一个不透明的 id，且一次验证即作废。
+- **修改密码会使旧令牌失效** -- 会话令牌现在带有"纪元"值，修改用户名或密码会推进它，此前签发的所有令牌随即失效。设置页新增<strong>退出所有其他设备</strong>按钮。升级不会让你掉线：第一次修改凭据后才开始生效。
+- **Telegram 凭据静态加密** -- 设置 `BEMBY_DATA_KEY` 后，会话字符串、每账户 API hash 与通行密钥私钥在 SQLite 中以 AES-256-GCM 加密存放；已存在的明文会在下次启动时就地加密。未设置时行为不变，但启动时会提示。**请妥善备份该密钥：丢失则相关账户需要重新登录。**
+- **SSRF 防护补漏** -- 此前 `::ffff:127.0.0.1` 这类 IPv4 映射地址、`fe80::` 链路本地地址以及 `100.64.0.0/10` 等保留段可以绕过检查。现在按地址本身（而非文本形式）判断，且校验移到了连接时的名称解析上，因此"检查后改答案"的 DNS 重绑定同样被挡住。
+- **面板内容安全策略** -- 之前只有 `frame-ancestors`。现在加上 `script-src 'self'`、`object-src 'none'`、`base-uri`、`form-action` 等，日志与消息里渲染的机器人内容即使转义出问题也无法执行脚本。
+- **图片地址不再携带会话令牌** -- 聊天图片改用 15 分钟有效的媒体票据，会话令牌不再出现在 URL、浏览器历史与访问日志中。
+- **小程序票据按可注册域限定** -- 之前取最后两段，`shop.com.au` 被读成 `com.au`，一张票据等于放行整个后缀下的所有站点。
+- **代理密码不再下发** -- 设置接口返回的代理列表中密码以掩码替代，未修改则原样回存（与 API hash 同样的做法）。
+- **其他** -- 用户名改为常量时间比较；验证码与凭据接口加上限流；替换式导入在既无存储密码也无 `ADMIN_PASSWORD` 时不再放行空密码；小程序页面的 `frame-ancestors` 取自配置而非请求头；升级 argon2 与 vite，两侧依赖告警清零。
+
 **修复**
 
 - **小程序不再显示自身的错误页** -- Telegram 返回的地址只带账户数据，主题、版本与平台是客户端该补的部分。基于 `@telegram-apps/sdk` 的小程序会校验整套启动参数，缺少主题即抛出"是否在 Telegram 之外打开"，表现为应用自己的报错页（例如 Nebula 的"Oops :("）。现在这些参数会补齐，签名地址与真实客户端一致。
@@ -54,6 +66,12 @@ The first 1.0: Mini App support, page sub-steps, autoreg enhancements, the sched
 - **网页子步骤遇到验证会立即停止** -- 子步骤开始前及等待元素期间会检查验证是否占据页面，一旦出现立即中止并说明原因，而不是耗尽各自的超时。
 - **判定验证前先等页面就绪** -- 普通网页此前在 `goto` 返回的瞬间就判断有无验证，此时文档可能还是空的，验证会被漏判。现在与小程序一样先等页面就绪。
 - **不再把未通过的挑战记为成功** -- 托管挑战会跳转到自己的 URL 并在校验期间短暂清空文档，此前会被误判为「已通过」，从而记录一次并未发生的签到。现在挑战仍在页面上时不认可任何成功信号，且「挑战已消失」需连续两次确认。失败时日志会写明未能通过 Cloudflare 验证。
+- **并发连接同一账户会泄漏一个客户端** -- 两个请求同时唤醒同一个闲置账户时，各自建立并连接一个 `TelegramClient`，后者覆盖前者，被覆盖的连接无人可达却持续运行到进程重启。现在共享同一个连接过程。
+- **小程序的重定向会被服务端吞掉** -- 站点返回的 3xx 此前在服务端跟完，浏览器地址不变，小程序路由停在被要求离开的页面上；现在按原样转交浏览器。
+
+**清理**
+
+- 移除无引用的导出、失效的单头像与 SSE 路由，以及 27 个未使用的翻译键；导出加密信封、HTML 转义与域名判断的重复实现合并为共用模块。
 
 ### English
 
@@ -81,6 +99,18 @@ The first 1.0: Mini App support, page sub-steps, autoreg enhancements, the sched
 - **The app manages its own virtual display** -- the Xvfb that headed mode needs is now started and shared by the app itself (it used to come from `puppeteer-real-browser`), falling back to headless with a warning when it cannot be started.
 - **Auto-update off by default** -- CloakBrowser's background update is disabled, so a job no longer triggers a surprise ~200MB download mid-run or leaves superseded builds on the data volume. Use "Re-download / update browser" in Settings instead.
 
+**Security**
+
+- **The login captcha was decorative** -- the answer was signed into the token handed to the browser, and a JWT payload is base64 rather than ciphertext, so decoding it gave the answer; the same challenge was also replayable for its full five minutes. The answer now stays on the server, the client gets an opaque id, and a challenge is good for one attempt.
+- **Changing the password now invalidates existing tokens** -- session tokens carry an epoch, and changing the username or password advances it, retiring every token issued before it. Settings gains a **Sign out all other devices** button. Upgrading does not sign you out: the epoch only starts to bite after the first credential change.
+- **Telegram credentials are encrypted at rest** -- with `BEMBY_DATA_KEY` set, session strings, per-account API hashes and passkey private keys are stored AES-256-GCM encrypted, and anything already in plain text is encrypted in place on the next start. Behaviour is unchanged without the key, but the boot log says so. **Back the key up: lose it and the affected accounts have to be authenticated again.**
+- **SSRF gaps closed** -- IPv4-mapped addresses such as `::ffff:127.0.0.1`, link-local `fe80::` and reserved ranges like `100.64.0.0/10` previously passed the check. Addresses are now judged as addresses rather than as text, and the check moved onto the connection's own name resolution, so a DNS answer that changes between the check and the connection is caught too.
+- **A real content security policy for the panel** -- previously `frame-ancestors` alone. Now `script-src 'self'`, `object-src 'none'`, `base-uri` and `form-action` as well, so bot-authored content rendered in the logs and the messenger cannot execute even if the escaping around it ever slips.
+- **Image addresses no longer carry the session token** -- chat photos use a 15-minute media ticket, keeping a seven-day credential out of URLs, browser history and access logs.
+- **Mini App tickets are scoped to the registrable domain** -- the old last-two-labels rule read `shop.com.au` as `com.au`, so one ticket authorised every site under that suffix.
+- **Proxy passwords are no longer sent to the client** -- the settings response masks them and restores the stored value when it comes back unchanged, the same round trip the API hash already made.
+- **Also** -- constant-time username comparison; rate limits on the captcha and credential endpoints; replace-mode import no longer accepts an empty password when neither a stored hash nor `ADMIN_PASSWORD` exists; the Mini App page's `frame-ancestors` comes from configuration rather than the request's Host header; argon2 and vite updated, leaving both dependency trees with no advisories.
+
 **Fixes**
 
 - **A Mini App no longer opens on its own error page** -- Telegram returns an address carrying only the account data; the theme, version and platform are the client's part to add. An app built on `@telegram-apps/sdk` validates the whole launch-parameter set and throws "opened outside Telegram?" when the theme is missing, which surfaces as the app's own error screen (Nebula's "Oops :(", in the report). Those parameters are filled in now, so a signed address matches what a real client hands over.
@@ -99,6 +129,12 @@ The first 1.0: Mini App support, page sub-steps, autoreg enhancements, the sched
 - **Page steps stop as soon as a challenge owns the page** -- checked before each step and while waiting for an element, so a challenge raised mid-run ends the step with the real reason instead of running out its timeout.
 - **The page is allowed to arrive before it is judged** -- a plain page used to be checked for a challenge the instant `goto` returned, when the document can still be empty and the interstitial has written nothing; it now waits for readiness the way a Mini App already did.
 - **A refused challenge is no longer logged as a pass** -- a managed challenge navigates to its own URL and briefly empties the document while it verifies, which used to read as "cleared" and recorded a checkin that never happened. Nothing counts as success while the interstitial is still up, and "the challenge is gone" now has to hold across two consecutive checks. The job log says plainly when the Cloudflare challenge was not passed.
+- **Connecting the same account twice at once leaked a client** -- two requests waking the same idle account each built and connected a `TelegramClient` and the second overwrote the first, leaving a live connection nothing could reach that ran until the process restarted. They now share one connection.
+- **Mini App redirects were swallowed server-side** -- a 3xx from the site was followed on the server, so the browser's address never changed and the app's router stayed on the page it had been told to leave. Redirects are now relayed to the browser.
+
+**Cleanup**
+
+- Unreferenced exports, the dead single-avatar and SSE routes and 27 unused translation keys removed; the export encryption envelope, HTML escaping and domain matching each collapsed from duplicate copies into one shared module.
 
 ---
 

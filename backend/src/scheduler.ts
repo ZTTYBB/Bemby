@@ -4,6 +4,7 @@ import {
   getDefaultTimezone,
   FALLBACK_TIMEZONE,
 } from "./db/database";
+import { decryptSecret } from "./db/secretColumns";
 import { runJob, type JobDetailLog } from "./jobs/runner";
 import {
   sendTgNotify,
@@ -237,9 +238,10 @@ export function loadEligibleJobs(): Array<{
       row.account_id != null
         ? (() => {
             // Credentials resolve as a pair: the account's own if complete, else global defaults
+            const ownApiHash = decryptSecret(row.api_hash as string | null);
             const ownCredentials =
-              row.api_id && row.api_hash
-                ? { apiId: row.api_id, apiHash: row.api_hash }
+              row.api_id && ownApiHash
+                ? { apiId: row.api_id, apiHash: ownApiHash }
                 : null;
             const credentials =
               ownCredentials ?? getDefaultTgApiCredentials();
@@ -249,7 +251,7 @@ export function loadEligibleJobs(): Array<{
               phoneNumber: row.phone_number,
               apiId: credentials?.apiId ?? null,
               apiHash: credentials?.apiHash ?? null,
-              sessionString: row.session_string,
+              sessionString: decryptSecret(row.session_string),
               authStatus: row.auth_status,
               proxyId: row.account_proxy_id ?? null,
               disabled: Boolean(row.account_disabled),
@@ -312,7 +314,7 @@ export async function executeJob(
         .prepare("SELECT session_string FROM tg_accounts WHERE id = ?")
         .get(account.id) as any;
       if (fresh?.session_string)
-        account = { ...account, sessionString: fresh.session_string };
+        account = { ...account, sessionString: decryptSecret(fresh.session_string) };
     }
 
     await runJob(job, account, detailLogs, signal);

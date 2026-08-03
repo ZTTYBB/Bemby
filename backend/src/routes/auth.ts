@@ -3,13 +3,15 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import svgCaptcha from 'svg-captcha';
 import { db } from '../db/database';
-import { getJwtSecret, requireAuth } from '../middleware/auth';
+import { bumpTokenEpoch, getJwtSecret, requireAuth, sessionClaims } from '../middleware/auth';
+import { consumeCaptcha, issueCaptcha } from '../auth/captchaStore';
 import {
   legacyHashPassword,
   hashPassword,
   isArgon2Hash,
   verifyPassword,
   timingSafeCompare as credTimingSafeCompare,
+  constantTimeStringEquals,
   getStoredCredentials as getStoredCreds,
 } from '../auth/credentials';
 
@@ -21,6 +23,27 @@ const loginLimiter = rateLimit({
   message: { error: 'Too many login attempts. Please try again later.' },
 });
 
+// Handing out challenges is cheap but not free, and an unbounded stream of them is the one
+// way to make the store churn. Generous enough that a person reloading a stuck captcha
+// never meets it.
+const captchaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many captcha requests. Please try again later.' },
+});
+
+// Both of these check the current password, so they are password guessing by another name
+// and belong behind the same kind of brake as the login form.
+const credentialLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again later.' },
+});
+
 const router = Router();
 
 // Hash at module load so the env var is never compared as plaintext during a request
@@ -29,11 +52,11 @@ const ADMIN_PASSWORD_HASH_FALLBACK: string | null = (() => {
   return p ? legacyHashPassword(p) : null;
 })();
 
-router.get('/captcha', (_req, res) => {
+router.get('/captcha', captchaLimiter, (_req, res) => {
   const captcha = svgCaptcha.create({ noise: 2, color: true, size: 5, ignoreChars: '0oO1lI' });
-  // Store the answer (lowercase) in a short-lived signed token — no session needed
-  const captchaToken = jwt.sign({ cap: captcha.text.toLowerCase(), typ: 'captcha' }, getJwtSecret(), { expiresIn: '5m' });
-  res.json({ svg: captcha.data, captchaToken });
+  // The answer stays in the process (see auth/captchaStore); what goes out is an opaque id.
+  // The field keeps its old name so an already-loaded page keeps working.
+  res.json({ svg: captcha.data, captchaToken: issueCaptcha(captcha.text) });
 });
 
 router.post('/login', loginLimiter, async (req, res) => {
@@ -54,30 +77,29 @@ router.post('/login', loginLimiter, async (req, res) => {
     return;
   }
 
-  let captchaPayload: { cap?: string };
-  try {
-    captchaPayload = jwt.verify(captchaToken, getJwtSecret(), { algorithms: ['HS256'] }) as { cap?: string };
-  } catch {
-    res.status(400).json({ error: 'Captcha expired, please refresh' });
-    return;
-  }
-
-  if (captchaPayload.cap !== captchaAnswer.toLowerCase().trim()) {
-    res.status(400).json({ error: 'Incorrect captcha' });
+  // One challenge, one attempt: consuming it here means a solved captcha cannot be replayed
+  // across a run of password guesses.
+  if (!consumeCaptcha(captchaToken, captchaAnswer)) {
+    res.status(400).json({ error: 'Incorrect or expired captcha, please refresh' });
     return;
   }
 
   const stored = getStoredCreds();
   let valid: boolean;
 
+  // The username is compared without short-circuiting and the password is always hashed,
+  // so a wrong username costs the same as a wrong password and neither can be told apart
+  // from the outside.
+  const usernameOk = constantTimeStringEquals(username, stored.username);
+
   if (stored.passwordHash) {
-    valid = username === stored.username && await verifyPassword(password, stored.passwordHash);
+    valid = (await verifyPassword(password, stored.passwordHash)) && usernameOk;
   } else {
     if (!ADMIN_PASSWORD_HASH_FALLBACK) {
       res.status(500).json({ error: 'ADMIN_PASSWORD env var is not set' });
       return;
     }
-    valid = username === stored.username && credTimingSafeCompare(legacyHashPassword(password), ADMIN_PASSWORD_HASH_FALLBACK);
+    valid = credTimingSafeCompare(legacyHashPassword(password), ADMIN_PASSWORD_HASH_FALLBACK) && usernameOk;
   }
 
   if (!valid) {
@@ -93,14 +115,25 @@ router.post('/login', loginLimiter, async (req, res) => {
 
   const defaultPwd = process.env.ADMIN_DEFAULT_PASSWORD ?? 'changeme';
   const requirePasswordChange = password === defaultPwd;
-  const payload = requirePasswordChange
-    ? { sub: username, typ: 'auth', requirePasswordChange: true }
-    : { sub: username, typ: 'auth' };
-  const token = jwt.sign(payload, getJwtSecret(), { expiresIn: '7d' });
+  const token = jwt.sign(sessionClaims(username, requirePasswordChange), getJwtSecret(), {
+    expiresIn: '7d',
+  });
   res.json(requirePasswordChange ? { token, requirePasswordChange: true } : { token });
 });
 
-router.put('/credentials', requireAuth, async (req, res) => {
+// POST /revoke-sessions -- sign out everywhere. A token cannot be withdrawn once signed, so
+// this moves the epoch every token is checked against, retiring the lot; the caller is then
+// handed a new one so the tab it was invoked from stays logged in.
+router.post('/revoke-sessions', requireAuth, (_req, res) => {
+  bumpTokenEpoch();
+  const { username } = getStoredCreds();
+  res.json({
+    message: 'All other sessions signed out',
+    token: jwt.sign(sessionClaims(username), getJwtSecret(), { expiresIn: '7d' }),
+  });
+});
+
+router.put('/credentials', requireAuth, credentialLimiter, async (req, res) => {
   const { username, currentPassword, newPassword } = req.body as {
     username?: string;
     currentPassword?: string;
@@ -136,9 +169,13 @@ router.put('/credentials', requireAuth, async (req, res) => {
     if (newHash) stmt.run('admin_password_hash', newHash);
   })();
 
-  // Issue a fresh token so any requirePasswordChange claim is cleared
+  // Changing the credentials has to mean something to a token already out there, or a
+  // stolen one survives the change for the rest of its seven days. Moving the epoch first
+  // retires every existing token; the fresh one below is signed under the new epoch, which
+  // also clears any requirePasswordChange claim.
+  bumpTokenEpoch();
   const newUsername = username || stored.username;
-  const freshToken = jwt.sign({ sub: newUsername, typ: 'auth' }, getJwtSecret(), { expiresIn: '7d' });
+  const freshToken = jwt.sign(sessionClaims(newUsername), getJwtSecret(), { expiresIn: '7d' });
   res.json({ message: 'Credentials updated', token: freshToken });
 });
 

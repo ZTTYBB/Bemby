@@ -2,8 +2,11 @@ import { Router, raw } from "express";
 import type { Request, Response } from "express";
 import { assertPublicUrl, ssrfSafeFetch } from "../tg/safeFetch";
 import {
+  registrableDomain,
   resolveWebviewTicket,
+  sameParty,
   ticketAllowsUrl,
+  webviewPublicOrigin,
   WEBVIEW_CLAIM_PATH,
   WEBVIEW_COOKIE,
   type WebviewTicket,
@@ -44,11 +47,6 @@ const DROP_REQUEST_HEADERS = new Set([
   "origin",
   "referer",
 ]);
-
-function baseDomain(host: string): string {
-  const labels = host.toLowerCase().split(".");
-  return labels.length <= 2 ? labels.join(".") : labels.slice(-2).join(".");
-}
 
 function readCookie(header: string | undefined, name: string): string | undefined {
   if (!header) return undefined;
@@ -172,13 +170,12 @@ function runtimeShim(domain: string, mode: WebviewTicket["mode"]): string {
 
 /** Only the site's absolute URLs need moving; a relative one already points here. */
 function rewriteHtml(html: string, finalUrl: string, ticket: WebviewTicket): string {
-  const domain = baseDomain(new URL(finalUrl).hostname);
+  const domain = registrableDomain(new URL(finalUrl).hostname);
   const fold = (raw: string): string => {
     try {
       const abs = new URL(raw, finalUrl);
       if (!/^https?:$/i.test(abs.protocol)) return raw;
-      const host = abs.hostname.toLowerCase();
-      if (host !== domain && !host.endsWith(`.${domain}`)) return raw;
+      if (!sameParty(abs.hostname, domain)) return raw;
       return `${abs.pathname}${abs.search}`;
     } catch {
       return raw;
@@ -259,7 +256,14 @@ router.all(/.*/, async (req: Request, res: Response) => {
       : new Uint8Array(req.body);
 
   try {
-    const upstream = await ssrfSafeFetch(url, { method: req.method, headers, body, redirect: "manual" as any });
+    // The redirect is relayed rather than resolved here: the browser has to see it, or the
+    // app's address never changes and its router stays on the page it was told to leave.
+    // The Location rewriting below is what needs the 3xx to actually arrive.
+    const upstream = await ssrfSafeFetch(
+      url,
+      { method: req.method, headers, body },
+      { followRedirects: false },
+    );
     const contentType = upstream.headers.get("content-type") ?? "text/html";
 
     res.status(upstream.status);
@@ -273,11 +277,10 @@ router.all(/.*/, async (req: Request, res: Response) => {
     if (location) {
       try {
         const abs = new URL(location, url);
-        const host = abs.hostname.toLowerCase();
-        const domain = baseDomain(new URL(ticket.origin).hostname);
+        const domain = registrableDomain(new URL(ticket.origin).hostname);
         res.setHeader(
           "Location",
-          host === domain || host.endsWith(`.${domain}`) ? `${abs.pathname}${abs.search}` : abs.toString(),
+          sameParty(abs.hostname, domain) ? `${abs.pathname}${abs.search}` : abs.toString(),
         );
       } catch {
         res.setHeader("Location", location);
@@ -293,11 +296,18 @@ router.all(/.*/, async (req: Request, res: Response) => {
     // Only the panel may frame this, and the panel is a sibling host on the same domain.
     // X-Frame-Options is deliberately absent: it cannot express that, and SAMEORIGIN here
     // would refuse the very frame this exists for.
-    const viewerDomain = baseDomain(String(req.headers.host ?? "").split(":")[0] || "");
+    //
+    // The domain comes from the configured viewer origin, not from the request's Host. A
+    // Host header is written by whoever is calling, so deriving the policy from it let a
+    // caller name the domain that would then be allowed to frame the page.
+    const configured = webviewPublicOrigin();
+    const viewerDomain = configured ? registrableDomain(new URL(configured).hostname) : "";
     res.setHeader(
       "Content-Security-Policy",
-      `frame-ancestors 'self' http://${viewerDomain}:* https://${viewerDomain}:* ` +
-        `http://*.${viewerDomain}:* https://*.${viewerDomain}:*`,
+      viewerDomain
+        ? `frame-ancestors 'self' http://${viewerDomain}:* https://${viewerDomain}:* ` +
+            `http://*.${viewerDomain}:* https://*.${viewerDomain}:*`
+        : "frame-ancestors 'self'",
     );
 
     if (!contentType.includes("text/html")) {

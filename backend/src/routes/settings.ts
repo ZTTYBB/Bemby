@@ -115,6 +115,80 @@ function maskApiHash(hash: string): string {
   return `${hash.slice(0, 4)}****${hash.slice(-4)}`;
 }
 
+// A proxy is stored as a URL with its credentials inside it, so sending the list to the
+// client sent the passwords with it -- while the seller's API key beside it was already held
+// back. The password is replaced by this sentinel on the way out and restored on the way
+// back in, the same round trip the API hash above already makes.
+export const PROXY_PASSWORD_MASK = "********";
+
+type ProxyEntry = { id?: string; url?: string; [key: string]: unknown };
+
+function parseProxyList(raw: string | undefined): ProxyEntry[] {
+  if (!raw) return [];
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? (list as ProxyEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Rewrites a proxy URL's password, leaving everything else about it intact. */
+function withProxyPassword(url: string, password: string | null): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.username && !parsed.password) return url;
+    if (password === null) return url;
+    parsed.password = password;
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function proxyPassword(url: string): string {
+  try {
+    return decodeURIComponent(new URL(url).password);
+  } catch {
+    return "";
+  }
+}
+
+/** The proxies setting with every password replaced by the sentinel. */
+export function maskProxies(raw: string | undefined): string {
+  const list = parseProxyList(raw);
+  if (!list.length) return raw ?? "[]";
+  return JSON.stringify(
+    list.map((p) =>
+      typeof p.url === "string" && proxyPassword(p.url)
+        ? { ...p, url: withProxyPassword(p.url, PROXY_PASSWORD_MASK) }
+        : p,
+    ),
+  );
+}
+
+/**
+ * Puts the real passwords back where the client sent the sentinel unchanged. An entry whose
+ * id is not already stored has nothing to restore from, so its value is taken at face value.
+ */
+export function unmaskProxies(incoming: string, storedRaw: string | undefined): string {
+  const list = parseProxyList(incoming);
+  if (!list.length) return incoming;
+  const stored = new Map(
+    parseProxyList(storedRaw)
+      .filter((p) => typeof p.id === "string" && typeof p.url === "string")
+      .map((p) => [p.id as string, p.url as string]),
+  );
+  return JSON.stringify(
+    list.map((p) => {
+      if (typeof p.url !== "string" || proxyPassword(p.url) !== PROXY_PASSWORD_MASK) return p;
+      const previous = typeof p.id === "string" ? stored.get(p.id) : undefined;
+      const password = previous ? proxyPassword(previous) : "";
+      return { ...p, url: withProxyPassword(p.url, password) };
+    }),
+  );
+}
+
 /** Returns client-safe settings: migration flags and secret keys removed, API hash masked. */
 function getClientSettings(): Record<string, string> {
   const rows = db
@@ -126,6 +200,10 @@ function getClientSettings(): Record<string, string> {
   // Never expose the raw hash to the client
   if (result.default_tg_api_hash) {
     result.default_tg_api_hash = maskApiHash(result.default_tg_api_hash);
+  }
+  // Nor the passwords sitting inside the proxy URLs
+  if (result.proxies) {
+    result.proxies = maskProxies(result.proxies);
   }
   // Synthetic flag so the client can gate AI features without seeing the key
   result.ai_key_configured = aiKeyConfigured() ? "true" : "false";
@@ -188,6 +266,16 @@ router.put("/", (req, res) => {
         String(updates[key]).includes("****")
       )
         continue;
+      // Put back any proxy password the client echoed as the mask rather than retyping
+      if (key === "proxies") {
+        const current = (
+          db.prepare("SELECT value FROM settings WHERE key = 'proxies'").get() as
+            | { value: string }
+            | undefined
+        )?.value;
+        stmt.run(key, unmaskProxies(String(updates[key]), current));
+        continue;
+      }
       // Browser timings are stored resolved: out-of-range or unparsable values become the
       // shipped default there and then, so what is saved is what a job will use
       if (key === CF_TUNING_KEY) {

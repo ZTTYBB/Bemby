@@ -141,13 +141,16 @@ describe('requireAuth -- token validation', () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  it('accepts token from the ?token= query param (required for SSE/EventSource)', () => {
+  it('refuses a session token supplied in the query string', () => {
+    // A token in a URL ends up in access logs and browser history. Addresses the browser
+    // loads by itself use a media ticket instead (see auth/mediaTickets).
     const token = makeToken({ sub: 'admin' });
     const req   = mockReq({ query: { token } });
     const res   = mockRes();
     const next  = vi.fn();
     requireAuth(req, res, next as NextFunction);
-    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
   });
 
   it('ignores a malformed Authorization header without "Bearer " prefix', () => {

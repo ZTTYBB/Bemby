@@ -3,6 +3,12 @@ import { ref } from "vue";
 
 export const api = axios.create({ baseURL: "/api" });
 
+// Credential for addresses the browser loads by itself (see tgClientApi.photoUrl). Renewed
+// a little before it lapses so an image never asks with an expired one.
+const TICKET_REFRESH_MARGIN_MS = 60_000;
+let mediaTicket = "";
+let mediaTicketExpiry = 0;
+
 function readRequirePwdChangeClaim(): boolean {
   const token = localStorage.getItem("token");
   if (!token) return false;
@@ -32,6 +38,8 @@ api.interceptors.response.use(
   (err) => {
     if (err.response?.status === 401) {
       localStorage.removeItem("token");
+      mediaTicket = "";
+      mediaTicketExpiry = 0;
       window.location.href = "/login";
     }
     if (
@@ -698,6 +706,12 @@ export const authApi = {
         message: string;
         token?: string;
       }>("/auth/credentials", { currentPassword, username, newPassword })
+      .then((r) => r.data),
+  // Retires every session token issued so far. The reply carries a new one for this tab,
+  // so signing everyone else out does not sign the operator out of the page they did it on.
+  revokeSessions: () =>
+    api
+      .post<{ message: string; token: string }>("/auth/revoke-sessions")
       .then((r) => r.data),
 };
 
@@ -1662,12 +1676,21 @@ export const tgClientApi = {
       .get<TgDialog[]>(`/tg-client/${accountId}/search`, { params: { q } })
       .then((r) => r.data),
 
-  photoUrl: (accountId: number, chatId: string, msgId: number) => {
-    const token = localStorage.getItem("token") ?? "";
-    return `/api/tg-client/${accountId}/messages/${encodeURIComponent(chatId)}/${msgId}/photo?token=${encodeURIComponent(token)}`;
-  },
+  // An <img src> cannot set an Authorization header, so the address carries a short-lived
+  // media ticket. The session token used to go here, which put a seven-day credential into
+  // the browser's history and the server's access log for every image on screen.
+  photoUrl: (accountId: number, chatId: string, msgId: number) =>
+    `/api/tg-client/${accountId}/messages/${encodeURIComponent(chatId)}/${msgId}/photo?ticket=${encodeURIComponent(mediaTicket)}`,
 
-  eventsUrl: (accountId: number) => `/api/tg-client/${accountId}/events`,
+  /** Fetches (or refreshes) the media ticket. Cheap, and idempotent enough to call on open. */
+  ensureMediaTicket: async (): Promise<void> => {
+    if (mediaTicket && Date.now() < mediaTicketExpiry - TICKET_REFRESH_MARGIN_MS) return;
+    const { ticket, expiresAt } = await api
+      .post<{ ticket: string; expiresAt: number }>("/tg-client/media-ticket")
+      .then((r) => r.data);
+    mediaTicket = ticket;
+    mediaTicketExpiry = expiresAt;
+  },
 
   folders: (accountId: number) =>
     api.get<TgFolder[]>(`/tg-client/${accountId}/folders`).then((r) => r.data),
@@ -1676,11 +1699,6 @@ export const tgClientApi = {
     api
       .post(`/tg-client/${accountId}/folders/${folderId}/chats`, { chatId })
       .then((r) => r.data),
-
-  avatarUrl: (accountId: number, chatId: string) => {
-    const token = localStorage.getItem("token") ?? "";
-    return `/api/tg-client/${accountId}/avatar/${encodeURIComponent(chatId)}?token=${encodeURIComponent(token)}`;
-  },
 
   avatarsBatch: (accountId: number, chatIds: string[]) =>
     api

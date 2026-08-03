@@ -18,9 +18,9 @@ import {
   recognizeCaptchaWithAI,
   buildCaptchaPrompt,
   findUrlButton,
-  escapeHtml,
   callAI,
 } from "./checkin";
+import { escapeHtml } from "../tg/htmlEscape";
 import {
   cfFailureFallback,
   cfNoCandidatesMessage,
