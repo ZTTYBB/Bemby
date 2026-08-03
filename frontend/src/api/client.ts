@@ -36,15 +36,36 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * A 401 from one of these means "those credentials are wrong", not "your session has
+ * expired", so it belongs to the form that asked and must be left for it to display.
+ *
+ * Sending them through the redirect below reloaded the whole page on every failed sign-in,
+ * which threw away the error before it could render: to the person typing, the login screen
+ * simply refreshed itself, over and over, saying nothing about what was wrong. The same
+ * applied to a wrong current password in Settings, which logged the operator out rather
+ * than telling them they had mistyped it.
+ */
+function isCredentialCheck(url: string | undefined): boolean {
+  if (!url) return false;
+  const path = url.split("?")[0];
+  return (
+    path.endsWith("/auth/login") ||
+    path.endsWith("/auth/captcha") ||
+    path.endsWith("/auth/credentials")
+  );
+}
+
 // Redirect to login on 401; surface force-password-change on 403
 api.interceptors.response.use(
   (r) => r,
   (err) => {
-    if (err.response?.status === 401) {
+    if (err.response?.status === 401 && !isCredentialCheck(err.config?.url)) {
       localStorage.removeItem("token");
       mediaTicket.value = "";
       mediaTicketExpiry = 0;
-      window.location.href = "/login";
+      // Already on the login screen, a reload only loses whatever it was showing
+      if (window.location.pathname !== "/login") window.location.href = "/login";
     }
     if (
       err.response?.status === 403 &&

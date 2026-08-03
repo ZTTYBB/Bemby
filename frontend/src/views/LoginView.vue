@@ -88,10 +88,13 @@ async function submit() {
       error.value = t('login.rateLimited');
     } else if (msg.toLowerCase().includes('captcha')) {
       error.value = msg.toLowerCase().includes('expired') ? t('login.captchaExpired') : t('login.captchaError');
-      await loadCaptcha();
     } else {
       error.value = t('login.error');
     }
+    // A challenge is spent the moment it is checked, whatever the attempt failed on, so
+    // every failure needs a new one. Without this the retry after a mistyped password was
+    // refused for the captcha instead, and the real problem never got a chance to show.
+    if (status !== 429) await loadCaptcha();
   } finally {
     loading.value = false;
   }
