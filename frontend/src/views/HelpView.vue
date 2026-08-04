@@ -1246,6 +1246,9 @@
             <p class="help-para">
               <strong>提交方式</strong>可选“点击注册按钮后发送注册码”或“随启动命令一并发送”。两处可选的等待文字用于避免浪费注册码：<strong>发送注册码前等待文字</strong>（如 <code>对我发送注册</code>）在点击注册按钮后等机器人就绪；<strong>发送用户名前等待文字</strong>在注册码被接受后等机器人索要用户名。超时仍会发送，并在日志中写明。
             </p>
+            <p class="help-para">
+              有些机器人会<strong>先校验注册码</strong>，通过后才在回复里给出真正开始注册的按钮或链接；注册码无效时则直接回复已被使用，此时应立即尝试下一个。判定文字由<strong>成功包含文字</strong>与<strong>失败包含文字</strong>决定（多个关键字用 <code>|</code> 分隔）。若通过后还需点击，请开启<strong>注册码通过后再点击一次按钮/链接</strong>并填写要匹配的文字（留空取第一个可点击项）。支持回调按钮与 <code>?start=</code> 链接（含正文中的文字链接）；纯网页链接需要浏览器，请改用自定义任务的“打开网址”动作。该步骤可标记为<strong>必需</strong>（找不到按钮即视为此码失效，换下一个）或保持可选（仅记录并继续发送用户名）——机器人只是有时才要求这一步时用后者。
+            </p>
             <div
               class="card-section-title"
               style="margin-top: 16px; font-size: 11px"
@@ -1714,6 +1717,9 @@
             <p class="help-para">
               <strong>How the code reaches the bot</strong> is either “click the register button first” or “alongside the start command”. Two optional waits keep a code from being wasted: <strong>wait for this before sending the code</strong> (e.g. <code>对我发送注册</code>) holds after the register button until the bot is listening, and <strong>wait for this before sending the username</strong> holds after a code is accepted until the bot asks for the name. On timeout it is sent anyway, and the log says so.
             </p>
+            <p class="help-para">
+              Some bots <strong>vet the code first</strong> and only then offer the button or link that actually opens registration; a code that is already used gets a rejection instead, and the next one should be tried at once. Which is which comes from <strong>Success contains</strong> and <strong>Fail contains</strong> (several keywords separated by <code>|</code>). Where a click is needed after that, turn on <strong>Click a button/link after the code is verified</strong> and give the text to match (blank takes the first clickable one). Callback buttons and <code>?start=</code> links are supported, including a link in the message text; a plain web link needs a browser, so use a custom job's “Open URL” action for that. Mark the step <strong>required</strong> (no button means this code is spent, so the next one is tried) or leave it optional (logged, and the username is sent anyway) -- the latter is for a bot that only sometimes asks for the extra click.
+            </p>
             <div
               class="card-section-title"
               style="margin-top: 16px; font-size: 11px"
@@ -1979,17 +1985,31 @@
                   </td>
                 </tr>
                 <tr>
-                  <td>通知目标用户名</td>
+                  <td>通知机器人 Token</td>
                   <td>
-                    接收通知的 Telegram 用户名，接受
-                    <code>username</code>、<code>@username</code> 或
-                    <code>https://t.me/username</code
-                    >。未填写时发至账户"收藏夹"。
+                    发送任务通知的机器人 Token（<code>@BotFather</code> →
+                    <code>/newbot</code>）。仅以掩码回显，留空即保留原值。
+                  </td>
+                </tr>
+                <tr>
+                  <td>通知默认目标</td>
+                  <td>
+                    机器人发送通知的目标：数字 Chat ID，或频道／群组的
+                    <code>@名称</code>。可用"查找会话"从机器人最近的对话中选取。
                   </td>
                 </tr>
                 <tr>
                   <td>通知触发时机</td>
                   <td>选择触发通知的事件：失败（默认）和/或成功，可多选。</td>
+                </tr>
+                <tr>
+                  <td>通知目标用户名（已弃用）</td>
+                  <td>
+                    未配置机器人 Token 时，由任务关联账号发送通知的目标，接受
+                    <code>username</code>、<code>@username</code> 或
+                    <code>https://t.me/username</code
+                    >。未填写时发至账户"收藏夹"。该方式将在后续版本中移除。
+                  </td>
                 </tr>
                 <tr>
                   <td>TG 应用客户端</td>
@@ -2126,12 +2146,19 @@
                   </td>
                 </tr>
                 <tr>
-                  <td>TG Notification Target</td>
+                  <td>Notification Bot Token</td>
                   <td>
-                    Telegram username to receive notifications. Accepts
-                    <code>username</code>, <code>@username</code>, or
-                    <code>https://t.me/username</code>. Falls back to Saved
-                    Messages if not set.
+                    Token of the bot that sends job notifications
+                    (<code>@BotFather</code> → <code>/newbot</code>). Only ever
+                    echoed back masked; blank keeps the stored one.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Notification Default Target</td>
+                  <td>
+                    Where the bot sends: a numeric chat ID, or a channel's /
+                    group's <code>@name</code>. "Find chats" picks one off the
+                    bot's recent conversations.
                   </td>
                 </tr>
                 <tr>
@@ -2139,6 +2166,15 @@
                   <td>
                     Which events trigger a notification: failed (default) and/or
                     success. Multi-select.
+                  </td>
+                </tr>
+                <tr>
+                  <td>TG Notification Target (deprecated)</td>
+                  <td>
+                    With no bot token set, where the job's own account sends.
+                    Accepts <code>username</code>, <code>@username</code>, or
+                    <code>https://t.me/username</code>, falling back to Saved
+                    Messages. This sender will be removed in a future release.
                   </td>
                 </tr>
                 <tr>
@@ -2485,18 +2521,29 @@
           <template v-if="locale === 'zh'">
             <div class="card-section-title">通知</div>
             <p class="help-para">
-              任务结束时，系统可通过关联的 Telegram 账户向指定目标发送通知。
-              在<strong>设置</strong>页面的"TG 通知"板块配置通知目标和触发时机。
+              任务结束时由 Telegram 机器人发送通知，在<strong>设置</strong>页面的"TG
+              通知"板块配置。由机器人发送意味着不依赖任务关联账号是否已登录，因此没有关联账号的任务同样能收到通知。
             </p>
             <table class="help-table">
               <tbody>
                 <tr>
-                  <td>通知目标</td>
+                  <td>机器人 Token</td>
                   <td>
-                    接收通知的 Telegram 用户名，接受
-                    <code>username</code>、<code>@username</code> 或
-                    <code>https://t.me/username</code>
-                    格式。未填写时回退到关联账户的"收藏夹"。
+                    在 Telegram 中打开
+                    <code>@BotFather</code>，发送
+                    <code>/newbot</code>，设置名称与用户名，复制返回的
+                    Token（形如
+                    <code>123456789:AAH…</code>）；已有机器人可用
+                    <code>/mybots</code> 或 <code>/token</code>
+                    重新获取。保存后仅以掩码回显，留空即保留原值。
+                  </td>
+                </tr>
+                <tr>
+                  <td>默认目标</td>
+                  <td>
+                    数字 Chat ID，或频道／群组的
+                    <code>@名称</code>。机器人无法主动发起对话：请先给机器人发送任意消息，再点击<strong>查找会话</strong>从它最近的对话中选取
+                    Chat ID；频道或群组需先将机器人加入。
                   </td>
                 </tr>
                 <tr>
@@ -2505,27 +2552,52 @@
                     选择触发通知的事件：<strong>任务失败</strong>（默认勾选）和/或<strong>任务成功</strong>，可多选。
                   </td>
                 </tr>
+                <tr>
+                  <td>发送测试</td>
+                  <td>
+                    立即发送一条真实通知，是同时验证 Token、网络可达性与目标是否有效的唯一方式。字段中未保存的 Token 与目标也会被采用，便于先试后存。
+                  </td>
+                </tr>
               </tbody>
             </table>
             <p class="help-note">用户主动中止的任务不触发失败通知。</p>
+            <p class="help-note">
+              未配置 Token 时沿用旧方式：由任务关联账号自行发送（未填目标时发至"收藏夹"）。该方式<strong>已弃用</strong>，将在后续版本中移除——它需要为每条通知建立一次完整的
+              MTProto 连接，且仅在该账号已登录时可用。请在<strong>设置</strong>中改用机器人 Token。
+            </p>
           </template>
           <template v-else>
             <div class="card-section-title">Notifications</div>
             <p class="help-para">
-              After a job completes, Bemby can send a Telegram notification via
-              the linked account. Configure the notification target and trigger
-              events in the <strong>Settings</strong> page under "TG
-              Notifications".
+              A Telegram bot sends a notification when a job finishes,
+              configured in the <strong>Settings</strong> page under "TG
+              Notifications". Sending as a bot means notifications do not depend
+              on the job's account being authenticated, so a job with no linked
+              account gets them too.
             </p>
             <table class="help-table">
               <tbody>
                 <tr>
-                  <td>Notification Target</td>
+                  <td>Bot Token</td>
                   <td>
-                    Telegram username to receive notifications. Accepts
-                    <code>username</code>, <code>@username</code>, or
-                    <code>https://t.me/username</code>. Falls back to the linked
-                    account's Saved Messages if not set.
+                    Open <code>@BotFather</code> in Telegram, send
+                    <code>/newbot</code>, choose a name and a username, and copy
+                    the token it replies with (like
+                    <code>123456789:AAH…</code>). For an existing bot,
+                    <code>/mybots</code> or <code>/token</code> reissues it. The
+                    stored token is only ever echoed back masked, and leaving the
+                    field blank keeps it.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Default Target</td>
+                  <td>
+                    A numeric chat ID, or a channel's / group's
+                    <code>@name</code>. A bot cannot start a conversation, so
+                    send your bot any message and then use
+                    <strong>Find chats</strong> to pick the chat ID off its
+                    recent conversations; a channel or group needs the bot added
+                    to it first.
                   </td>
                 </tr>
                 <tr>
@@ -2536,10 +2608,28 @@
                     <strong>Success</strong>. Multi-select.
                   </td>
                 </tr>
+                <tr>
+                  <td>Send test</td>
+                  <td>
+                    Sends a real notification now -- the only check that covers
+                    the token, the host's reachability and the target at once. An
+                    unsaved token or target in the fields is used, so either can
+                    be tried before it is committed.
+                  </td>
+                </tr>
               </tbody>
             </table>
             <p class="help-note">
               Jobs cancelled by the user do not trigger a failure notification.
+            </p>
+            <p class="help-note">
+              With no token set the old sender still applies: the job's own
+              account sends, falling back to Saved Messages when no target is
+              configured. That sender is <strong>deprecated and will be removed
+              in a future release</strong> -- it opens a full MTProto connection
+              per notification and only works while that account is
+              authenticated -- so move to a bot token in
+              <strong>Settings</strong>.
             </p>
           </template>
         </div>

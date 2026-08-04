@@ -523,6 +523,12 @@ export type AutoregConfig = {
   /** Bot text meaning it is ready for the username, waited for after a code is accepted. */
   usernameReadyContains?: string;
   registerButton?: string;
+  /** Click a button or t.me link on the bot's reply once a code is accepted. */
+  clickAfterCode?: boolean;
+  /** Text of that button or link (partial match); blank takes the sole/first one. */
+  afterCodeButton?: string;
+  /** On, a reply with no such button spends the code and the next one is tried. */
+  afterCodeRequired?: boolean;
   signupUsername: string;
   listenMinutes?: number;
   scanHistoryCount?: number;

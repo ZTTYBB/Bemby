@@ -786,6 +786,28 @@
               <input v-model.trim="autoregCfg.codeReadyContains" class="form-input" :placeholder="t('jobs.autoreg.codeReadyPlaceholder')" />
               <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.codeReadyHint') }}</div>
             </div>
+            <!-- Some bots vet the code first, then offer a button/link that opens registration -->
+            <div class="form-group">
+              <label class="form-check">
+                <input v-model="autoregCfg.clickAfterCode" type="checkbox" />
+                <span>{{ t('jobs.autoreg.labelClickAfterCode') }}</span>
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.clickAfterCodeHint') }}</div>
+            </div>
+            <div v-if="autoregCfg.clickAfterCode" class="form-row">
+              <div class="form-group">
+                <label class="form-label">{{ t('jobs.autoreg.labelAfterCodeButton') }}</label>
+                <input v-model.trim="autoregCfg.afterCodeButton" class="form-input" :placeholder="t('jobs.autoreg.afterCodeButtonPlaceholder')" />
+                <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.afterCodeButtonHint') }}</div>
+              </div>
+              <div class="form-group">
+                <label class="form-check">
+                  <input v-model="autoregCfg.afterCodeRequired" type="checkbox" />
+                  <span>{{ t('jobs.autoreg.labelAfterCodeRequired') }}</span>
+                </label>
+                <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.afterCodeRequiredHint') }}</div>
+              </div>
+            </div>
             <div class="form-group">
               <label class="form-label">{{ t('jobs.autoreg.labelSignupUsername') }} <span style="color:#e63946">*</span></label>
               <input v-model.trim="autoregCfg.signupUsername" class="form-input" placeholder="myname{num:3}" />
@@ -1320,6 +1342,9 @@ type AutoregCfgForm = {
   usernameReadyContains: string;
   entryMode: 'button' | 'command';
   registerButton: string;
+  clickAfterCode: boolean;
+  afterCodeButton: string;
+  afterCodeRequired: boolean;
   signupUsername: string;
   listenMinutes: number;
   scanHistoryCount: number;
@@ -1340,6 +1365,9 @@ function defaultAutoregCfg(): AutoregCfgForm {
     usernameReadyContains: '',
     entryMode: 'button',
     registerButton: '',
+    clickAfterCode: false,
+    afterCodeButton: '',
+    afterCodeRequired: false,
     signupUsername: '',
     listenMinutes: 30,
     scanHistoryCount: 0,
@@ -1493,6 +1521,11 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
       if (autoregCfg.aiContextCount >= 0 && autoregCfg.aiContextCount !== 6) cfg.aiContextCount = autoregCfg.aiContextCount;
     }
     if (autoregCfg.codeReadyContains.trim()) cfg.codeReadyContains = autoregCfg.codeReadyContains.trim();
+    if (autoregCfg.clickAfterCode) {
+      cfg.clickAfterCode = true;
+      if (autoregCfg.afterCodeButton.trim()) cfg.afterCodeButton = autoregCfg.afterCodeButton.trim();
+      if (autoregCfg.afterCodeRequired) cfg.afterCodeRequired = true;
+    }
     if (autoregCfg.usernameReadyContains.trim()) cfg.usernameReadyContains = autoregCfg.usernameReadyContains.trim();
     if (autoregCfg.successContains.trim()) cfg.successContains = autoregCfg.successContains.trim();
     if (autoregCfg.failContains.trim()) cfg.failContains = autoregCfg.failContains.trim();
@@ -1860,6 +1893,9 @@ function openEdit(tpl: JobTemplate) {
           codeReadyContains: c.codeReadyContains ?? '',
           usernameReadyContains: c.usernameReadyContains ?? '',
           registerButton: c.registerButton ?? '',
+          clickAfterCode: c.clickAfterCode === true,
+          afterCodeButton: c.afterCodeButton ?? '',
+          afterCodeRequired: c.afterCodeRequired === true,
           signupUsername: c.signupUsername ?? '',
           listenMinutes: c.listenMinutes ?? 30,
           scanHistoryCount: c.scanHistoryCount ?? 0,

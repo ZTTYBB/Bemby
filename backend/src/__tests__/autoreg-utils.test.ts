@@ -10,6 +10,7 @@ vi.mock("../db/database", () => ({
 }));
 
 import { describe, it, expect, vi } from "vitest";
+import { Api } from "telegram";
 import {
   extractCodes,
   containsAny,
@@ -17,6 +18,8 @@ import {
   sanitizeAiCode,
   buildCodeFixPrompt,
   beginTextWait,
+  beginAfterCodeWait,
+  findAfterCodeTarget,
   applyCodeEdits,
 } from "../jobs/autoreg";
 
@@ -363,5 +366,162 @@ describe("applyCodeEdits", () => {
   it("changes nothing when neither fix is configured", () => {
     expect(applyCodeEdits("注册码A~B", {})).toBe("注册码A~B");
     expect(applyCodeEdits("A~B", { stripChars: "" })).toBe("A~B");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findAfterCodeTarget -- the button or link a bot offers once a code is vetted
+// ---------------------------------------------------------------------------
+
+/** A message carrying the given inline buttons, laid out one per row. */
+function withButtons(buttons: Api.TypeKeyboardButton[], text = ""): Api.Message {
+  return {
+    id: 1,
+    message: text,
+    entities: [],
+    replyMarkup: new Api.ReplyInlineMarkup({
+      rows: buttons.map((b) => new Api.KeyboardButtonRow({ buttons: [b] })),
+    }),
+  } as unknown as Api.Message;
+}
+
+const callbackBtn = (text: string) =>
+  new Api.KeyboardButtonCallback({ text, data: Buffer.from(text) });
+const urlBtn = (text: string, url: string) => new Api.KeyboardButtonUrl({ text, url });
+
+describe("findAfterCodeTarget", () => {
+  it("finds the callback button whose label carries the search text", () => {
+    const msg = withButtons([callbackBtn("查看帮助"), callbackBtn("开始注册")]);
+    const target = findAfterCodeTarget(msg, "开始注册");
+    expect(target).toMatchObject({ kind: "callback", text: "开始注册" });
+  });
+
+  it("takes the first clickable button when no search text is given", () => {
+    const msg = withButtons([callbackBtn("开始注册"), callbackBtn("取消")]);
+    expect(findAfterCodeTarget(msg, "")).toMatchObject({ text: "开始注册" });
+  });
+
+  it("prefers a callback button over a link, whatever their order", () => {
+    const msg = withButtons([
+      urlBtn("注册", "https://t.me/mybot?start=abc"),
+      callbackBtn("注册"),
+    ]);
+    expect(findAfterCodeTarget(msg, "注册")).toMatchObject({ kind: "callback" });
+  });
+
+  it("reads a ?start= link button as the payload to send", () => {
+    const msg = withButtons([urlBtn("开始注册", "https://t.me/mybot?start=REG_9f2")]);
+    expect(findAfterCodeTarget(msg, "")).toMatchObject({
+      kind: "startLink",
+      botUsername: "mybot",
+      startParam: "REG_9f2",
+    });
+  });
+
+  it("reports a plain web link as a url, which the caller cannot click", () => {
+    const msg = withButtons([urlBtn("前往注册", "https://example.com/signup?t=1")]);
+    expect(findAfterCodeTarget(msg, "")).toMatchObject({
+      kind: "url",
+      url: "https://example.com/signup?t=1",
+    });
+  });
+
+  it("follows a ?start= link written into the message text", () => {
+    const body = "验证通过，请点击 开始注册 完成";
+    const msg = {
+      id: 2,
+      message: body,
+      entities: [
+        new Api.MessageEntityTextUrl({
+          offset: body.indexOf("开始注册"),
+          length: 4,
+          url: "https://t.me/mybot?start=xyz",
+        }),
+      ],
+    } as unknown as Api.Message;
+    expect(findAfterCodeTarget(msg, "")).toMatchObject({
+      kind: "startLink",
+      text: "开始注册",
+      startParam: "xyz",
+    });
+  });
+
+  it("finds a bare t.me start URL sitting in the text", () => {
+    const body = "https://t.me/mybot?start=plain";
+    const msg = {
+      id: 3,
+      message: body,
+      entities: [new Api.MessageEntityUrl({ offset: 0, length: body.length })],
+    } as unknown as Api.Message;
+    expect(findAfterCodeTarget(msg, "")).toMatchObject({
+      kind: "startLink",
+      startParam: "plain",
+    });
+  });
+
+  it("finds nothing when no label matches the search text", () => {
+    const msg = withButtons([callbackBtn("取消")]);
+    expect(findAfterCodeTarget(msg, "开始注册")).toBeNull();
+  });
+
+  it("finds nothing on a plain message with no buttons or links", () => {
+    const msg = { id: 4, message: "注册码有效", entities: [] } as unknown as Api.Message;
+    expect(findAfterCodeTarget(msg, "")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// beginAfterCodeWait
+// ---------------------------------------------------------------------------
+
+describe("beginAfterCodeWait", () => {
+  function fakeClient() {
+    const handlers: Array<(e: any) => void> = [];
+    return {
+      handlers,
+      addEventHandler: (h: (e: any) => void) => handlers.push(h),
+      removeEventHandler: () => {},
+    } as any;
+  }
+
+  it("resolves with the button once the bot offers it", async () => {
+    const client = fakeClient();
+    const wait = beginAfterCodeWait(client, "123", "开始注册", 5_000);
+    client.handlers[0]({ message: withButtons([callbackBtn("开始注册")]) });
+    await expect(wait.result).resolves.toMatchObject({ text: "开始注册" });
+  });
+
+  it("counts an edit that adds the button to an existing message", async () => {
+    const client = fakeClient();
+    const wait = beginAfterCodeWait(client, "123", "", 5_000);
+    // The second handler is the EditedMessage one
+    client.handlers[1]({ message: withButtons([callbackBtn("Register")]) });
+    await expect(wait.result).resolves.toMatchObject({ text: "Register" });
+  });
+
+  it("needs no wait when the offer is already in a message in hand", async () => {
+    const client = fakeClient();
+    const wait = beginAfterCodeWait(client, "123", "", 5_000, undefined, [
+      withButtons([callbackBtn("Register")]),
+    ]);
+    await expect(wait.result).resolves.toMatchObject({ text: "Register" });
+  });
+
+  it("resolves null rather than blocking when the bot offers nothing", async () => {
+    const wait = beginAfterCodeWait(fakeClient(), "123", "开始注册", 10);
+    await expect(wait.result).resolves.toBeNull();
+  });
+
+  it("ignores a reply whose buttons do not match the search text", async () => {
+    const client = fakeClient();
+    const wait = beginAfterCodeWait(client, "123", "开始注册", 20);
+    client.handlers[0]({ message: withButtons([callbackBtn("取消")]) });
+    await expect(wait.result).resolves.toBeNull();
+  });
+
+  it("settles null when cancelled, so a rejected code drops its wait", async () => {
+    const wait = beginAfterCodeWait(fakeClient(), "123", "", 5_000);
+    wait.cancel();
+    await expect(wait.result).resolves.toBeNull();
   });
 });

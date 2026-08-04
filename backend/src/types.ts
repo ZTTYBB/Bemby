@@ -398,6 +398,20 @@ export type AutoregConfig = {
   usernameReadyContains?: string;
   /** Button on the bot's start reply that opens registration (partial match). Blank clicks the sole button. */
   registerButton?: string;
+  /**
+   * Some bots vet the code first and only then offer a button (or a t.me link) that actually
+   * opens registration. On, that click happens between the code being accepted and the
+   * username being sent.
+   */
+  clickAfterCode?: boolean;
+  /** Button or link text to click once a code is accepted (partial match). Blank takes the sole/first one. */
+  afterCodeButton?: string;
+  /**
+   * Whether that button has to be there. On, a code whose reply never offers one is treated
+   * as spent and the next code is tried; off, the run carries on to the username -- which is
+   * what a bot that only sometimes asks for the extra click needs.
+   */
+  afterCodeRequired?: boolean;
   /** Username sent to finish signup; supports {word:N} {num:N} {alpha:N} {uuid} placeholders */
   signupUsername: string;
   /** How long to keep listening for codes before giving up, in minutes. Default 30. */

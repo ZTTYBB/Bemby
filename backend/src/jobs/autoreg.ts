@@ -8,6 +8,7 @@ import type { TgDeviceParams } from "../auth/tgAuth";
 import { expandCommand, parseMessages, callAI } from "./checkin";
 import { escapeHtml } from "../tg/htmlEscape";
 import { resolvePeerTarget } from "../tg/peerTarget";
+import { parseBotStartLink, webButtonOf, type BotStartLink } from "../tg/miniApp";
 
 // Reuses the custom-job step log shape so LogsView renders the same timeline.
 export type AutoregJobLog = {
@@ -633,6 +634,189 @@ async function beginButtonWait(
   return { result };
 }
 
+/**
+ * What a bot offers after vetting a code: a callback button, a `?start=` deep link (as a URL
+ * button or a link in the text), or a plain web link, which needs a browser and so cannot be
+ * followed from here.
+ */
+export type AfterCodeTarget =
+  | { kind: "callback"; text: string; button: Api.KeyboardButtonCallback; msg: Api.Message }
+  | { kind: "startLink"; text: string; botUsername: string; startParam: string; msg: Api.Message }
+  | { kind: "url"; text: string; url: string; msg: Api.Message };
+
+/** `?start=` deep links in the message body, both plain URLs and text links. */
+function startLinksInText(msg: Api.Message): Array<{ text: string; link: BotStartLink }> {
+  const found: Array<{ text: string; link: BotStartLink }> = [];
+  const body = msg.message ?? "";
+  for (const e of (msg.entities ?? []) as Array<{
+    offset?: number;
+    length?: number;
+    url?: string;
+  }>) {
+    // A text link carries its target on the entity; a bare URL is the slice it covers
+    const href =
+      e?.url ??
+      (typeof e?.offset === "number" && typeof e?.length === "number"
+        ? body.slice(e.offset, e.offset + e.length)
+        : "");
+    const link = href ? parseBotStartLink(href) : null;
+    if (!link) continue;
+    const label =
+      typeof e?.offset === "number" && typeof e?.length === "number"
+        ? body.slice(e.offset, e.offset + e.length)
+        : href;
+    found.push({ text: label, link });
+  }
+  return found;
+}
+
+/**
+ * The thing to click on one message, preferring a callback button over a link. `match` is a
+ * partial text match against the button/link label; blank takes the first of each kind.
+ */
+export function findAfterCodeTarget(
+  msg: Api.Message,
+  match: string,
+): AfterCodeTarget | null {
+  const wanted = match.trim();
+  const hits = (text: string) => !wanted || text.includes(wanted);
+
+  const markup = (msg as any).replyMarkup as Api.ReplyInlineMarkup | undefined;
+  const buttons = markup?.rows?.flatMap((r) => r.buttons) ?? [];
+
+  for (const b of buttons) {
+    if (b instanceof Api.KeyboardButtonCallback && hits(b.text ?? "")) {
+      return { kind: "callback", text: b.text ?? "", button: b, msg };
+    }
+  }
+  for (const b of buttons) {
+    const web = webButtonOf(b);
+    if (!web || !hits(web.text)) continue;
+    if (web.startLink) {
+      return {
+        kind: "startLink",
+        text: web.text,
+        botUsername: web.startLink.botUsername,
+        startParam: web.startLink.startParam,
+        msg,
+      };
+    }
+    return { kind: "url", text: web.text, url: web.url, msg };
+  }
+  for (const { text, link } of startLinksInText(msg)) {
+    if (!hits(text)) continue;
+    return {
+      kind: "startLink",
+      text,
+      botUsername: link.botUsername,
+      startParam: link.startParam,
+      msg,
+    };
+  }
+  return null;
+}
+
+export type AfterCodeWait = {
+  result: Promise<AfterCodeTarget | null>;
+  cancel: () => void;
+};
+
+/**
+ * Waits for the bot to offer the post-code button. Armed BEFORE the code is sent, since the
+ * offer often rides in the very reply that accepts it. Edits count: a bot that rewrites its
+ * own message to add the button is making the same offer as one that sends a new one.
+ */
+export function beginAfterCodeWait(
+  client: TelegramClient,
+  botPeerId: string,
+  match: string,
+  maxMs: number,
+  signal?: AbortSignal,
+  seed: Api.Message[] = [],
+): AfterCodeWait {
+  let settle: ((found: AfterCodeTarget | null) => void) | null = null;
+  const result = new Promise<AfterCodeTarget | null>((resolve) => {
+    const finish = (found: AfterCodeTarget | null) => {
+      if (!settle) return;
+      settle = null;
+      clearTimeout(timer);
+      client.removeEventHandler(handler, new NewMessage({}));
+      client.removeEventHandler(handler, new EditedMessage({}));
+      signal?.removeEventListener("abort", onAbort);
+      resolve(found);
+    };
+    settle = finish;
+    const timer = setTimeout(() => finish(null), maxMs);
+    const onAbort = () => finish(null);
+    const handler = async (event: NewMessageEvent) => {
+      const target = findAfterCodeTarget(event.message as Api.Message, match);
+      if (target) finish(target);
+    };
+    if (signal?.aborted) {
+      finish(null);
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    client.addEventHandler(
+      handler,
+      new NewMessage({ fromUsers: [botPeerId], chats: [botPeerId] }),
+    );
+    client.addEventHandler(
+      handler,
+      new EditedMessage({ fromUsers: [botPeerId], chats: [botPeerId] }),
+    );
+    for (const m of seed) {
+      const target = findAfterCodeTarget(m, match);
+      if (target) {
+        finish(target);
+        return;
+      }
+    }
+  });
+  return { result, cancel: () => settle?.(null) };
+}
+
+/**
+ * Performs the post-code click, recording on the step what it did. A callback button is
+ * pressed; a `?start=` link is followed the way a real client does, by sending its payload
+ * as a command. A plain web link needs a browser, so it throws rather than pretend.
+ */
+async function clickAfterCodeTarget(
+  client: TelegramClient,
+  target: AfterCodeTarget,
+  step: CustomStepLog,
+  botUsername: string,
+): Promise<void> {
+  if (target.kind === "callback") {
+    const peer = await client.getInputEntity(botUsername);
+    try {
+      const answer = (await client.invoke(
+        new Api.messages.GetBotCallbackAnswer({
+          peer,
+          msgId: target.msg.id,
+          data: target.button.data,
+        }),
+      )) as Api.messages.BotCallbackAnswer;
+      if (answer.message) step.callbackAnswer = answer.message;
+    } catch (err: any) {
+      // The click landed even when the bot never answered the callback
+      if (!err?.message?.includes("BOT_RESPONSE_TIMEOUT")) throw err;
+    }
+    step.result = `Clicked "${target.text}"`;
+    return;
+  }
+  if (target.kind === "startLink") {
+    await client.sendMessage(target.botUsername, {
+      message: `/start ${target.startParam}`,
+    });
+    step.result = `Followed link "${target.text}": /start ${target.startParam} to @${target.botUsername}`;
+    return;
+  }
+  throw new Error(
+    `"${target.text}" opens a web page (${target.url}), which cannot be clicked from here -- registration that finishes on a website needs a custom job's "Open URL" action`,
+  );
+}
+
 function findButton(
   msg: Api.Message,
   match: string,
@@ -700,6 +884,9 @@ export async function runAutoreg(
   );
   const codeReady = config.codeReadyContains?.trim();
   const usernameReady = config.usernameReadyContains?.trim();
+  const clickAfterCode = config.clickAfterCode === true;
+  const afterCodeButton = config.afterCodeButton?.trim() ?? "";
+  const afterCodeRequired = config.afterCodeRequired === true;
   const listenMs =
     Math.max(1, config.listenMinutes ?? DEFAULT_LISTEN_MINUTES) * 60_000;
   const entryMode = config.entryMode === "command" ? "command" : "button";
@@ -1021,9 +1208,23 @@ export async function runAutoreg(
           signal,
         );
         // Armed before the code goes out: the bot's "now send the username" can arrive in
-        // the very reply that accepts the code
-        const usernameWait = usernameReady
-          ? beginTextWait(client, botPeerId, usernameReady, replyTimeoutMs, signal)
+        // the very reply that accepts the code. With a click in between, the prompt comes
+        // after it instead, so the wait is armed there -- on this side of the click its
+        // timeout would be spent waiting for the click to happen.
+        const usernameWait =
+          usernameReady && !clickAfterCode
+            ? beginTextWait(client, botPeerId, usernameReady, replyTimeoutMs, signal)
+            : null;
+        // Same reasoning: the button that opens registration often rides in the reply that
+        // accepts the code, so the wait for it predates the send
+        const afterCodeWait = clickAfterCode
+          ? beginAfterCodeWait(
+              client,
+              botPeerId,
+              afterCodeButton,
+              replyTimeoutMs,
+              signal,
+            )
           : null;
         await client.sendMessage(botUsername, { message: payload });
         const { verdict, messages } = await verdictPromise;
@@ -1037,6 +1238,7 @@ export async function runAutoreg(
         if (verdict === "timeout") {
           // Bot went quiet: re-arm and give this code one more go
           usernameWait?.cancel();
+          afterCodeWait?.cancel();
           codeStep.error = `No reply within ${replyTimeoutMs}ms`;
           armed = false;
           if (!retriedCodes.has(code)) {
@@ -1047,12 +1249,130 @@ export async function runAutoreg(
         }
         if (verdict === "fail") {
           usernameWait?.cancel();
+          afterCodeWait?.cancel();
           codeStep.error = "Code rejected (likely already used)";
           // The bot re-prompts after a bad code, so stay armed and fire the next one
           armedAt = Date.now();
           continue;
         }
         codeStep.result = "Code accepted";
+
+        // 4b. Bots that vet the code first only open registration once the button on that
+        // reply is clicked (or its t.me link followed). Messages seen so far are seeded in,
+        // since the offer usually rides in the reply that just accepted the code.
+        if (afterCodeWait) {
+          const clickStep = beginStep(
+            "click_button",
+            `Click after code accepted${afterCodeButton ? ` "${afterCodeButton}"` : ""}`,
+          );
+          const c0 = Date.now();
+          // Set once a wait for the username prompt has run, so the paths that skip the
+          // click do not skip that wait with it
+          let readyNoted = false;
+          // The wait carries the timeout; what the verdict already collected is the
+          // fallback, for an offer that arrived as an edit the wait's handler missed
+          let target = await afterCodeWait.result;
+          checkCancelled();
+          if (!target) {
+            target =
+              messages
+                .map((m) => findAfterCodeTarget(m, afterCodeButton))
+                .find((t): t is AfterCodeTarget => t !== null) ?? null;
+          }
+
+          if (!target) {
+            const missing = `No ${afterCodeButton ? `"${afterCodeButton}" ` : ""}button or link on the bot's reply within ${replyTimeoutMs}ms`;
+            clickStep.durationMs = Date.now() - c0;
+            if (afterCodeRequired) {
+              clickStep.error = missing;
+              // The bot is mid-flow and will not take a username, so this code is spent
+              armed = false;
+              continue;
+            }
+            clickStep.result = `${missing} -- optional, carrying on`;
+          } else {
+            const parsed = await parseMessages([target.msg], client, signal);
+            if (parsed.html) clickStep.preClickHtml = parsed.html;
+            if (parsed.buttons.length) clickStep.preClickButtons = parsed.buttons;
+            // Both armed before the click: its answer, and the "now send the username"
+            // prompt that often rides in that answer
+            const clickReply = waitForVerdict(
+              client,
+              botUsername,
+              botPeerId,
+              replyTimeoutMs,
+              undefined,
+              config.failContains,
+              signal,
+            );
+            const readyWait = usernameReady
+              ? beginTextWait(client, botPeerId, usernameReady, replyTimeoutMs, signal)
+              : null;
+            let clickFailed: string | null = null;
+            try {
+              await clickAfterCodeTarget(client, target, clickStep, botUsername);
+              clickStep.clickedButton = target.text;
+            } catch (err: any) {
+              if (err?.message === "Job cancelled") throw err;
+              clickFailed = err?.message ?? String(err);
+            }
+
+            if (clickFailed) {
+              readyWait?.cancel();
+              // A click that would not go through spends the code either way; whether that
+              // ends this attempt is the operator's call
+              clickStep.error = clickFailed;
+              clickStep.durationMs = Date.now() - c0;
+              if (afterCodeRequired) {
+                armed = false;
+                continue;
+              }
+            } else {
+              const clicked = await clickReply;
+              checkCancelled();
+              clickStep.durationMs = Date.now() - c0;
+              if (clicked.messages.length) {
+                const after = await parseMessages(clicked.messages, client, signal);
+                clickStep.responseHtml = after.html || undefined;
+                clickStep.responseImage = after.images[0];
+              }
+              // A bot that only vets the code on the click says so here, not earlier
+              if (clicked.verdict === "fail") {
+                readyWait?.cancel();
+                clickStep.error = "Rejected after the click (likely already used)";
+                armedAt = Date.now();
+                continue;
+              }
+              if (readyWait) {
+                const reached = await readyWait.result;
+                checkCancelled();
+                readyNoted = true;
+                clickStep.result += reached
+                  ? ` · bot ready for the username ("${usernameReady}")`
+                  : ` · bot never said "${usernameReady}" within ${replyTimeoutMs}ms, sending anyway`;
+              }
+            }
+          }
+
+          // Carrying on past a click that did not happen still means waiting for the
+          // username prompt; the reply that accepted the code may already carry it
+          if (usernameReady && !readyNoted) {
+            const reached = await beginTextWait(
+              client,
+              botPeerId,
+              usernameReady,
+              replyTimeoutMs,
+              signal,
+              messages,
+            ).result;
+            checkCancelled();
+            clickStep.result = `${clickStep.result ?? ""}${
+              reached
+                ? ` · bot ready for the username ("${usernameReady}")`
+                : ` · bot never said "${usernameReady}" within ${replyTimeoutMs}ms, sending anyway`
+            }`;
+          }
+        }
 
         // The bot asks for the username in its own time; sent before it is listening, the
         // name is dropped and the accepted code is spent for nothing
