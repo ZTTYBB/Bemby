@@ -4,10 +4,9 @@ import { decryptAccountRow } from "../db/secretColumns";
 import { runJob, type JobDetailLog } from "../jobs/runner";
 import { collectRunWarnings, completedMessage } from "../jobs/runWarnings";
 import {
-  sendTgNotify,
+  notifyJobEvent,
   buildFailureMessage,
   buildSuccessMessage,
-  getNotifyConfig,
 } from "../jobs/notify";
 import { refreshScheduler } from "../scheduler";
 import type { Job, TgAccount } from "../types";
@@ -491,16 +490,11 @@ router.post("/:id/run", async (req, res) => {
       } catch (e) {
         console.warn(`[jobs] "${job.name}" last_success_at stamp failed:`, e);
       }
-      if (account?.sessionString) {
-        const cfg = getNotifyConfig();
-        if (cfg.events.includes("success") && cfg.username) {
-          sendTgNotify(
-            account,
-            buildSuccessMessage(job.name, job.jobType),
-            cfg.username,
-          ).catch((e) => console.warn("[notify] TG notification failed:", e));
-        }
-      }
+      void notifyJobEvent(
+        "success",
+        buildSuccessMessage(job.name, job.jobType),
+        account,
+      );
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -509,16 +503,12 @@ router.post("/:id/run", async (req, res) => {
       db.prepare(
         "UPDATE job_logs SET status = 'failed', message = ?, detail = ? WHERE id = ?",
       ).run(isCancelled ? "Cancelled" : message, detail, logId);
-      if (!isCancelled && account?.sessionString) {
-        const cfg = getNotifyConfig();
-        if (cfg.events.includes("failed")) {
-          const target = cfg.username ?? "me";
-          sendTgNotify(
-            account,
-            buildFailureMessage(job.name, job.jobType, message),
-            target,
-          ).catch((e) => console.warn("[notify] TG notification failed:", e));
-        }
+      if (!isCancelled) {
+        void notifyJobEvent(
+          "failed",
+          buildFailureMessage(job.name, job.jobType, message),
+          account,
+        );
       }
     })
     .finally(() => { unregisterJob(Number(logId)); clearLiveDetail(Number(logId)); });

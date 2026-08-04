@@ -38,6 +38,8 @@ export const SENSITIVE_SETTING_KEYS = [
   'proxies',
   'proxy_providers',
   'webshare_api_key',
+  // Whoever holds the notification bot's token can act as that bot
+  'notify_bot_token',
 ];
 
 // Config keys that carry a credential (e.g. Emby login) inside a job/template config blob.

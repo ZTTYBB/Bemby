@@ -33,6 +33,8 @@ describe("ALLOWED_KEYS", () => {
       "ai_model",
       "notify_tg_username",
       "notify_tg_events",
+      "notify_bot_token",
+      "notify_bot_target",
       "ua_presets",
       "log_retention_days",
       "schedule_min_gap_minutes",

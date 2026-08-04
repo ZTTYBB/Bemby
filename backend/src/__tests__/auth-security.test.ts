@@ -335,6 +335,10 @@ describe('CLIENT_HIDDEN_KEYS -- secrets excluded from GET /api/settings', () => 
   it('hides the legacy ai_api_key from the settings response', () => {
     expect(CLIENT_HIDDEN_KEYS.has('ai_api_key')).toBe(true);
   });
+
+  it('hides the notification bot token, which is served masked instead', () => {
+    expect(CLIENT_HIDDEN_KEYS.has('notify_bot_token')).toBe(true);
+  });
 });
 
 // ── getJwtSecret -- refuses to boot with a known-default secret ───────────────

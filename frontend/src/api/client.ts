@@ -1143,8 +1143,20 @@ export type Settings = {
   /** ai_models row id pinning the default model to an exact supplier. */
   ai_default_model_id?: string;
   ai_fallback_enabled?: string;
+  /**
+   * Target for the account-session sender, used only when no bot token is set.
+   * @deprecated That sender is due for removal; use notify_bot_token + notify_bot_target.
+   */
   notify_tg_username: string;
   notify_tg_events: string;
+  /** Bot API token from BotFather. Write-only: reads come back as notify_bot_token_masked. */
+  notify_bot_token?: string;
+  /** Chat the bot notifies: a numeric chat id, or @name for a public channel. */
+  notify_bot_target?: string;
+  /** Server-computed: "true" when a notification bot token is stored. */
+  notify_bot_configured?: string;
+  /** Server-computed: the stored token as 12345678:****wXyZ. Never the raw value. */
+  notify_bot_token_masked?: string;
   ua_presets: string;
   proxies: string;
   tg_app_clients: string;
@@ -1295,7 +1307,39 @@ export const settingsApi = {
         providerId ? { providerId } : {},
       )
       .then((r) => r.data),
+  /** Who the stored notification token belongs to, so a bad token is visible. */
+  getNotifyBot: () =>
+    api.get<NotifyBotInfo>("/settings/notify/bot").then((r) => r.data),
+  /** Chats the bot has heard from lately, for filling in the default target. */
+  getNotifyBotChats: () =>
+    api
+      .get<{ ok: boolean; chats?: NotifyBotChat[]; error?: string }>(
+        "/settings/notify/bot/chats",
+      )
+      .then((r) => r.data),
+  /**
+   * Sends a real message now: the only check that proves the whole path works. An unsaved
+   * token or target can be passed to try it before committing to it.
+   */
+  testNotifyBot: (target?: string, token?: string) =>
+    api
+      .post<{ ok: boolean; error?: string }>("/settings/notify/bot/test", {
+        ...(target ? { target } : {}),
+        ...(token ? { token } : {}),
+      })
+      .then((r) => r.data),
 };
+
+export type NotifyBotInfo = {
+  configured: boolean;
+  ok?: boolean;
+  id?: number;
+  username?: string;
+  name?: string;
+  error?: string;
+};
+
+export type NotifyBotChat = { id: number; type: string; title: string };
 
 /** A stored CloakBrowser licence key as the server will show it: never the raw value. */
 export type CfKeyView = { label: string; masked: string };

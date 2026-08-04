@@ -1087,7 +1087,33 @@ const zh = {
     saveSupplier: "保存",
     notifySection: "Telegram 通知",
     notifyHint:
-      "任务结束时通过关联账户向该 Telegram 用户发送通知。支持用户名、@用户名 或 t.me 链接。",
+      "任务结束时由 Telegram 机器人发送通知。除任务自行指定外，均发送到下方的默认目标。",
+    labelNotifyBotToken: "机器人 Token",
+    notifyBotTokenPlaceholder: "123456789:AAH...",
+    notifyBotTokenHint:
+      "获取方式：在 Telegram 中打开 @BotFather，发送 /newbot，设置名称与用户名，复制返回的 Token。已有机器人可用 /token 重新获取。留空则保留已保存的 Token。",
+    notifyBotOk: "机器人",
+    notifyBotBad: "Telegram 拒绝了该 Token",
+    labelNotifyBotTarget: "默认目标",
+    notifyBotTargetPlaceholder: "123456789 或 @频道名",
+    notifyBotTargetHint:
+      "机器人无法主动发起对话：请先给机器人发送任意消息，再点击“查找会话”选择你的 Chat ID。频道或群组请先将机器人加入，然后填写其 @名称。",
+    notifyFindChatsBtn: "查找会话",
+    notifyChatsLoading: "查找中…",
+    notifyNoChats: "没有最近的会话 — 请先给机器人发送消息后重试。",
+    notifyChatsFailed: "无法读取机器人的最近会话",
+    notifyTestBtn: "发送测试",
+    notifyTesting: "发送中…",
+    notifyTestSent: "测试通知已发送",
+    notifyTestFailed: "测试通知发送失败",
+    notifyNoBotWarning:
+      "尚未配置机器人 Token，通知仍由下方已弃用的账户发送方式发出。请在上方填入 Token 以完成迁移。",
+    notifyDeprecatedTag: "已弃用",
+    notifyLegacyTitle: "改用账户发送",
+    notifyLegacyDeprecated:
+      "已弃用 — 该发送方式将在后续版本中移除，请改为在上方配置机器人 Token。",
+    notifyLegacyHint:
+      "仅在未配置机器人 Token 时生效，且只适用于已登录关联账户的任务。支持用户名、@用户名 或 t.me 链接。",
     labelNotifyUsername: "通知目标",
     notifyUsernamePlaceholder: "@用户名、username 或 https://t.me/username",
     labelNotifyEvents: "通知时机",
@@ -2471,7 +2497,33 @@ const en: typeof zh = {
     saveSupplier: "Save",
     notifySection: "Telegram Notifications",
     notifyHint:
-      "Send a notification to this Telegram user via the job's linked account when a job finishes. Accepts username, @username, or a t.me link.",
+      "A Telegram bot sends a message when a job finishes. Notifications go to the default target below unless a job names its own.",
+    labelNotifyBotToken: "Bot token",
+    notifyBotTokenPlaceholder: "123456789:AAH...",
+    notifyBotTokenHint:
+      "To get one: open @BotFather in Telegram, send /newbot, choose a name and a username, and copy the token it replies with. /token reissues it for an existing bot. Leave blank to keep the stored token.",
+    notifyBotOk: "Bot",
+    notifyBotBad: "Token rejected by Telegram",
+    labelNotifyBotTarget: "Default target",
+    notifyBotTargetPlaceholder: "123456789 or @channelname",
+    notifyBotTargetHint:
+      "A bot cannot message you first, so send your bot any message, then use Find chats to pick your chat ID. For a channel or group, add the bot to it and use its @name.",
+    notifyFindChatsBtn: "Find chats",
+    notifyChatsLoading: "Looking…",
+    notifyNoChats: "No recent chats — send your bot a message, then try again.",
+    notifyChatsFailed: "Could not read the bot's recent chats",
+    notifyTestBtn: "Send test",
+    notifyTesting: "Sending…",
+    notifyTestSent: "Test notification sent",
+    notifyTestFailed: "Test notification failed",
+    notifyNoBotWarning:
+      "No bot token set, so notifications still go out through the deprecated account sender below. Set a token above to move off it.",
+    notifyDeprecatedTag: "deprecated",
+    notifyLegacyTitle: "Send from an account instead",
+    notifyLegacyDeprecated:
+      "Deprecated — this sender will be removed in a future release. Set a bot token above instead.",
+    notifyLegacyHint:
+      "Used only while no bot token is set, and only for jobs whose linked account is authenticated. Accepts username, @username, or a t.me link.",
     labelNotifyUsername: "Notification target",
     notifyUsernamePlaceholder: "@username, username, or https://t.me/username",
     labelNotifyEvents: "Notify on",

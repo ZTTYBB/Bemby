@@ -69,18 +69,97 @@
             {{ t("settings.notifyHint") }}
           </p>
 
+          <!-- With no token the deprecated account sender is what still runs, so say so
+               here rather than only inside the collapsed section below -->
+          <p
+            v-if="!notifyBot.configured"
+            style="font-size: 12px; margin: -6px 0 12px; color: #c47f17"
+          >
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            {{ t("settings.notifyNoBotWarning") }}
+          </p>
+
           <div v-if="notifyMsg" class="success-msg">{{ notifyMsg }}</div>
           <div v-if="notifyError" class="error-msg">{{ notifyError }}</div>
 
           <div class="form-group">
             <label class="form-label">{{
-              t("settings.labelNotifyUsername")
+              t("settings.labelNotifyBotToken")
             }}</label>
             <input
-              v-model.trim="notifyForm.username"
+              v-model.trim="notifyForm.botToken"
               class="form-input"
-              :placeholder="t('settings.notifyUsernamePlaceholder')"
+              autocomplete="off"
+              :placeholder="
+                notifyBotTokenMasked || t('settings.notifyBotTokenPlaceholder')
+              "
             />
+            <p style="font-size: 12px; color: #888; margin: 4px 0 0">
+              {{ t("settings.notifyBotTokenHint") }}
+            </p>
+            <p
+              v-if="notifyBot.configured"
+              style="font-size: 12px; margin: 4px 0 0"
+              :style="{ color: notifyBot.ok ? '#2e9e5b' : '#c0392b' }"
+            >
+              <i
+                :class="
+                  notifyBot.ok
+                    ? 'fa-solid fa-circle-check'
+                    : 'fa-solid fa-circle-exclamation'
+                "
+              ></i>
+              {{
+                notifyBot.ok
+                  ? `${t("settings.notifyBotOk")}: @${notifyBot.username}`
+                  : notifyBot.error || t("settings.notifyBotBad")
+              }}
+            </p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">{{
+              t("settings.labelNotifyBotTarget")
+            }}</label>
+            <input
+              v-model.trim="notifyForm.botTarget"
+              class="form-input"
+              :placeholder="t('settings.notifyBotTargetPlaceholder')"
+            />
+            <p style="font-size: 12px; color: #888; margin: 4px 0 0">
+              {{ t("settings.notifyBotTargetHint") }}
+            </p>
+            <button
+              class="btn btn-ghost btn-sm"
+              style="margin-top: 6px"
+              :disabled="notifyChatsLoading"
+              @click="loadNotifyChats"
+            >
+              <i class="fa-solid fa-magnifying-glass"></i>
+              {{
+                notifyChatsLoading
+                  ? t("settings.notifyChatsLoading")
+                  : t("settings.notifyFindChatsBtn")
+              }}
+            </button>
+            <p
+              v-if="notifyChatsHint"
+              style="font-size: 12px; color: #888; margin: 6px 0 0"
+            >
+              {{ notifyChatsHint }}
+            </p>
+            <div v-if="notifyChats.length" style="margin-top: 6px">
+              <button
+                v-for="c in notifyChats"
+                :key="c.id"
+                class="btn btn-ghost btn-sm"
+                style="display: block; width: 100%; text-align: left"
+                @click="notifyForm.botTarget = String(c.id)"
+              >
+                {{ c.title }}
+                <span style="color: #888">— {{ c.id }} ({{ c.type }})</span>
+              </button>
+            </div>
           </div>
 
           <div class="form-group">
@@ -104,14 +183,72 @@
             </div>
           </div>
 
-          <button
-            class="btn btn-primary"
-            :disabled="notifySaving"
-            @click="saveNotify"
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button
+              class="btn btn-primary"
+              :disabled="notifySaving"
+              @click="saveNotify"
+            >
+              <i class="fa-solid fa-floppy-disk"></i>
+              {{ notifySaving ? t("common.saving") : t("settings.saveBtn") }}
+            </button>
+            <button
+              class="btn btn-ghost"
+              :disabled="notifyTesting || notifySaving"
+              @click="testNotifyBot"
+            >
+              <i class="fa-solid fa-paper-plane"></i>
+              {{
+                notifyTesting
+                  ? t("settings.notifyTesting")
+                  : t("settings.notifyTestBtn")
+              }}
+            </button>
+          </div>
+
+          <!-- Pre-bot sender: deprecated and slated for removal. Only used while no token
+               is set, and only for jobs whose account is authenticated. -->
+          <div
+            style="
+              border-top: 1px solid var(--border, #333);
+              margin-top: 16px;
+              padding-top: 12px;
+            "
           >
-            <i class="fa-solid fa-floppy-disk"></i>
-            {{ notifySaving ? t("common.saving") : t("settings.saveBtn") }}
-          </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              @click="notifyLegacyOpen = !notifyLegacyOpen"
+            >
+              <i
+                :class="
+                  notifyLegacyOpen
+                    ? 'fa-solid fa-chevron-down'
+                    : 'fa-solid fa-chevron-right'
+                "
+              ></i>
+              {{ t("settings.notifyLegacyTitle") }}
+              <span style="color: #c47f17; font-weight: 400">
+                ({{ t("settings.notifyDeprecatedTag") }})
+              </span>
+            </button>
+            <div v-if="notifyLegacyOpen" style="margin-top: 10px">
+              <p style="font-size: 12px; margin: 0 0 8px; color: #c47f17">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                {{ t("settings.notifyLegacyDeprecated") }}
+              </p>
+              <p style="font-size: 12px; color: #888; margin: 0 0 8px">
+                {{ t("settings.notifyLegacyHint") }}
+              </p>
+              <label class="form-label">{{
+                t("settings.labelNotifyUsername")
+              }}</label>
+              <input
+                v-model.trim="notifyForm.username"
+                class="form-input"
+                :placeholder="t('settings.notifyUsernamePlaceholder')"
+              />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1834,6 +1971,8 @@ import type {
   TgAppClient,
   CfKeyView,
   CfKeyCheck,
+  NotifyBotInfo,
+  NotifyBotChat,
 } from "../api/client";
 import { t } from "../i18n";
 import { setAccountDisplayWithTgName } from "../composables/accountDisplay";
@@ -1901,10 +2040,24 @@ const supplierSaving = ref(false);
 const supplierError = ref("");
 const newModelInputs = ref<Record<number, string>>({});
 
-const notifyForm = reactive({ username: "", events: ["failed"] as string[] });
+const notifyForm = reactive({
+  botToken: "",
+  botTarget: "",
+  username: "",
+  events: ["failed"] as string[],
+});
 const notifySaving = ref(false);
 const notifyMsg = ref("");
 const notifyError = ref("");
+const notifyTesting = ref(false);
+// The stored token is never sent back in full; the mask stands in as the placeholder, and
+// leaving the field blank keeps whatever is stored.
+const notifyBotTokenMasked = ref("");
+const notifyBot = ref<NotifyBotInfo>({ configured: false });
+const notifyChats = ref<NotifyBotChat[]>([]);
+const notifyChatsLoading = ref(false);
+const notifyChatsHint = ref("");
+const notifyLegacyOpen = ref(false);
 
 // Cloudflare "I am not a bot" solver: an optional headless browser installed on
 // demand into the data dir (keeps the image small).
@@ -2704,12 +2857,15 @@ onMounted(async () => {
     loadCfKeys(s);
     loadCfTuning(s);
     notifyForm.username = s.notify_tg_username ?? "";
+    notifyForm.botTarget = s.notify_bot_target ?? "";
+    notifyBotTokenMasked.value = s.notify_bot_token_masked ?? "";
     try {
       if (s.notify_tg_events)
         notifyForm.events = JSON.parse(s.notify_tg_events);
     } catch {
       /* ignore */
     }
+    void loadNotifyBot(s.notify_bot_configured === "true");
   } catch {
     /* ignore */
   }
@@ -3132,15 +3288,73 @@ async function saveNotify() {
   notifyError.value = "";
   notifySaving.value = true;
   try {
-    await settingsApi.update({
+    const s = await settingsApi.update({
       notify_tg_username: notifyForm.username,
       notify_tg_events: JSON.stringify(notifyForm.events),
+      notify_bot_target: notifyForm.botTarget,
+      // Blank leaves the stored token alone, so an operator can edit the target
+      // without retyping the token
+      ...(notifyForm.botToken ? { notify_bot_token: notifyForm.botToken } : {}),
     });
+    notifyForm.botToken = "";
+    notifyBotTokenMasked.value = s.notify_bot_token_masked ?? "";
     notifyMsg.value = t("settings.saved");
+    await loadNotifyBot(s.notify_bot_configured === "true");
   } catch (err: any) {
     notifyError.value = err.response?.data?.error ?? t("settings.saveFailed");
   } finally {
     notifySaving.value = false;
+  }
+}
+
+/** Confirms the stored token with getMe, so a revoked or mistyped one is visible here. */
+async function loadNotifyBot(configured: boolean) {
+  if (!configured) {
+    notifyBot.value = { configured: false };
+    return;
+  }
+  try {
+    notifyBot.value = await settingsApi.getNotifyBot();
+  } catch {
+    notifyBot.value = { configured: true, ok: false };
+  }
+}
+
+// A bot cannot start a conversation, so the numeric chat id it should notify only exists
+// once someone has messaged it. This reads those chats back off getUpdates.
+async function loadNotifyChats() {
+  notifyChatsHint.value = "";
+  notifyChats.value = [];
+  notifyChatsLoading.value = true;
+  try {
+    const res = await settingsApi.getNotifyBotChats();
+    notifyChats.value = res.chats ?? [];
+    if (!notifyChats.value.length) notifyChatsHint.value = t("settings.notifyNoChats");
+  } catch (err: any) {
+    notifyChatsHint.value =
+      err.response?.data?.error ?? t("settings.notifyChatsFailed");
+  } finally {
+    notifyChatsLoading.value = false;
+  }
+}
+
+/** Sends a real message now: the only check that covers token, network and target. */
+async function testNotifyBot() {
+  notifyMsg.value = "";
+  notifyError.value = "";
+  notifyTesting.value = true;
+  try {
+    // Whatever is in the fields right now, saved or not, so a token can be tried first
+    await settingsApi.testNotifyBot(
+      notifyForm.botTarget || undefined,
+      notifyForm.botToken || undefined,
+    );
+    notifyMsg.value = t("settings.notifyTestSent");
+  } catch (err: any) {
+    notifyError.value =
+      err.response?.data?.error ?? t("settings.notifyTestFailed");
+  } finally {
+    notifyTesting.value = false;
   }
 }
 

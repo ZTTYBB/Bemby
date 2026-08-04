@@ -7,10 +7,9 @@ import {
 import { decryptSecret } from "./db/secretColumns";
 import { runJob, type JobDetailLog } from "./jobs/runner";
 import {
-  sendTgNotify,
+  notifyJobEvent,
   buildFailureMessage,
   buildSuccessMessage,
-  getNotifyConfig,
 } from "./jobs/notify";
 import type { Job, TgAccount } from "./types";
 import { DateTime, IANAZone } from "luxon";
@@ -338,16 +337,11 @@ export async function executeJob(
       console.warn(`[scheduler] "${job.name}" last_success_at stamp failed:`, e);
     }
     console.log(`[scheduler] "${job.name}" completed`);
-    if (account?.sessionString) {
-      const cfg = getNotifyConfig();
-      if (cfg.events.includes("success") && (cfg.username || false)) {
-        sendTgNotify(
-          account,
-          buildSuccessMessage(job.name, job.jobType),
-          cfg.username!,
-        ).catch((e) => console.warn("[notify] TG notification failed:", e));
-      }
-    }
+    void notifyJobEvent(
+      "success",
+      buildSuccessMessage(job.name, job.jobType),
+      account,
+    );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     const isCancelled = message === "Job cancelled";
@@ -358,16 +352,12 @@ export async function executeJob(
       ).run(isCancelled ? "Cancelled" : message, detail, logId);
     }
     console.error(`[scheduler] "${job.name}" failed:`, message);
-    if (!isCancelled && account?.sessionString) {
-      const cfg = getNotifyConfig();
-      if (cfg.events.includes("failed")) {
-        const target = cfg.username ?? "me";
-        sendTgNotify(
-          account,
-          buildFailureMessage(job.name, job.jobType, message),
-          target,
-        ).catch((e) => console.warn("[notify] TG notification failed:", e));
-      }
+    if (!isCancelled) {
+      void notifyJobEvent(
+        "failed",
+        buildFailureMessage(job.name, job.jobType, message),
+        account,
+      );
     }
   } finally {
     releaseRunSlot();

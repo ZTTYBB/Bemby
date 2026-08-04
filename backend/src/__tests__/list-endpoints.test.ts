@@ -40,6 +40,7 @@ vi.mock("../jobs/custom", () => ({ runCustom: vi.fn(), CustomJobError: class ext
 vi.mock("../jobs/embywatch", () => ({ runEmbywatch: vi.fn(), testEmbyConnection: vi.fn() }));
 vi.mock("../jobs/runner", () => ({ runJob: vi.fn(), parseTgProxy: vi.fn() }));
 vi.mock("../jobs/notify", () => ({
+  notifyJobEvent: vi.fn(),
   sendTgNotify: vi.fn(),
   buildFailureMessage: vi.fn(),
   buildSuccessMessage: vi.fn(),

@@ -14,6 +14,7 @@ vi.mock("../jobs/cancellation", () => ({
 }));
 vi.mock("../jobs/notify", () => ({
   getNotifyConfig: vi.fn().mockReturnValue({ events: [], username: null }),
+  notifyJobEvent: vi.fn(),
   sendTgNotify: vi.fn(),
   buildSuccessMessage: vi.fn(),
   buildFailureMessage: vi.fn(),

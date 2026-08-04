@@ -49,6 +49,15 @@ import {
   syncProviders,
   type ProxyProvider,
 } from "../tg/proxyProviders";
+import {
+  getBotInfo,
+  getNotifyConfig,
+  maskBotToken,
+  NOTIFY_BOT_TARGET_KEY,
+  NOTIFY_BOT_TOKEN_KEY,
+  recentBotChats,
+  sendBotNotify,
+} from "../jobs/notify";
 
 const router = Router();
 
@@ -64,8 +73,11 @@ export const ALLOWED_KEYS = [
   "ai_model",
   "ai_default_model_id",
   "ai_fallback_enabled",
+  // Deprecated: target for the account-session sender, kept until that sender is removed
   "notify_tg_username",
   "notify_tg_events",
+  NOTIFY_BOT_TOKEN_KEY,
+  NOTIFY_BOT_TARGET_KEY,
   "ua_presets",
   "proxies",
   "tg_app_clients",
@@ -94,6 +106,8 @@ export const CLIENT_HIDDEN_KEYS = new Set([
   // Proxy provider credentials: served separately, with keys replaced by a flag
   "webshare_api_key",
   "proxy_providers",
+  // Notification bot token: served masked, under a separate key
+  NOTIFY_BOT_TOKEN_KEY,
 ]);
 
 /** True when an AI key exists anywhere the runtime looks: a supplier, the legacy setting or the env. */
@@ -244,6 +258,11 @@ function getClientSettings(): Record<string, string> {
   result.cf_tuning_limits = JSON.stringify(CF_TUNING_LIMITS);
   // Synthetic count so the client can show whether proxy importing is set up
   result.proxy_providers_count = String(providersForClient().length);
+  // The notification bot's token, masked. Its presence is what decides whether job
+  // notifications go out as the bot or fall back to the job's own account session.
+  const botToken = getNotifyConfig().botToken;
+  result.notify_bot_configured = botToken ? "true" : "false";
+  result.notify_bot_token_masked = botToken ? maskBotToken(botToken) : "";
   return result;
 }
 
@@ -260,9 +279,9 @@ router.put("/", (req, res) => {
   db.transaction(() => {
     for (const key of ALLOWED_KEYS) {
       if (!(key in updates)) continue;
-      // Skip if the client sent back the masked hash unchanged
+      // Skip if the client sent back the masked hash or bot token unchanged
       if (
-        key === "default_tg_api_hash" &&
+        (key === "default_tg_api_hash" || key === NOTIFY_BOT_TOKEN_KEY) &&
         String(updates[key]).includes("****")
       )
         continue;
@@ -526,6 +545,80 @@ router.post("/cf-solver/test", (req, res) => {
 // done. Returns a finished-with-nothing state when no test has been run since boot.
 router.get("/cf-solver/test", (_req, res) => {
   res.json(cfTestState ?? { running: false, startedAt: 0, builds: [] });
+});
+
+// ── Notification bot ──────────────────────────────────────────────────────────
+// Job notifications are sent by a Telegram bot, so they no longer depend on a job having
+// an authenticated account. A bot cannot start a conversation, and cannot resolve a user
+// by @username, so the target has to be a numeric chat id the operator obtains by messaging
+// the bot first -- which is what the two endpoints below are for.
+
+/** The token to work with: the one supplied in the request, else the one stored. */
+function resolveBotToken(body: unknown): string | null {
+  const supplied = (body as { token?: string } | undefined)?.token?.trim();
+  if (supplied && !supplied.includes("****")) return supplied;
+  return getNotifyConfig().botToken;
+}
+
+// GET /notify/bot -- who the stored token belongs to, so a mistyped or revoked token shows
+// up here rather than as notifications that quietly never arrive.
+router.get("/notify/bot", async (_req, res) => {
+  const token = getNotifyConfig().botToken;
+  if (!token) {
+    res.json({ configured: false });
+    return;
+  }
+  const info = await getBotInfo(token);
+  if (!info.ok) {
+    res.json({ configured: true, ok: false, error: info.error });
+    return;
+  }
+  res.json({
+    configured: true,
+    ok: true,
+    id: info.result.id,
+    username: info.result.username ?? "",
+    name: info.result.first_name ?? "",
+  });
+});
+
+// GET /notify/bot/chats -- chat ids the bot has heard from lately, for filling in the
+// default target. Telegram only keeps recent updates, so an empty list usually means
+// "message the bot and try again".
+router.get("/notify/bot/chats", async (req, res) => {
+  const token = resolveBotToken(req.query);
+  if (!token) {
+    res.status(400).json({ ok: false, error: "No bot token configured" });
+    return;
+  }
+  const chats = await recentBotChats(token);
+  if (!chats.ok) {
+    res.status(502).json({ ok: false, error: chats.error });
+    return;
+  }
+  res.json({ ok: true, chats: chats.result });
+});
+
+// POST /notify/bot/test -- send a real message now. The only check that proves the whole
+// path: token valid, host can reach the Bot API, and the target has started the bot.
+router.post("/notify/bot/test", async (req, res) => {
+  const token = resolveBotToken(req.body);
+  const cfg = getNotifyConfig();
+  const target = (req.body?.target as string | undefined)?.trim() || cfg.botTarget;
+  if (!token) {
+    res.status(400).json({ ok: false, error: "No bot token configured" });
+    return;
+  }
+  if (!target) {
+    res.status(400).json({ ok: false, error: "No notification target configured" });
+    return;
+  }
+  try {
+    await sendBotNotify(token, target, "🔔 Bemby test notification");
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: err?.message ?? "Send failed" });
+  }
 });
 
 // ── Proxy providers ───────────────────────────────────────────────────────────
