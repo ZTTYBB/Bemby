@@ -5,49 +5,8 @@
       <button class="btn btn-primary" @click="openAdd"><i class="fa-solid fa-plus"></i> {{ t('jobs.addBtn') }}</button>
     </div>
 
-    <!-- Scheduler status -->
-    <div v-if="scheduleStatus.length" class="card sched-card">
-      <button class="sched-head" @click="schedOpen = !schedOpen">
-        <span class="sched-title">
-          <i :class="schedOpen ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"></i>
-          {{ t('jobs.nextRuns') }}
-          <span class="sched-count">{{ scheduleStatus.length }}</span>
-        </span>
-        <span v-if="sortedScheduleStatus.length" class="sched-summary">
-          {{ t('jobs.nextUp') }}:
-          <strong>{{ sortedScheduleStatus[0].jobName }}</strong>
-          · {{ fmtDateTime(sortedScheduleStatus[0].nextRun) }}
-        </span>
-      </button>
-      <div v-if="schedOpen" class="sched-body">
-        <input
-          v-model.trim="schedSearch"
-          class="form-input sched-search"
-          :placeholder="t('jobs.filterPlaceholder')"
-        />
-        <div class="sched-scroll">
-          <div v-for="day in scheduleByDay" :key="day.key" class="sched-day">
-            <div class="sched-day-head">
-              <span class="sched-day-label">{{ day.label }}</span>
-              <span class="sched-day-count">{{ day.items.length }}</span>
-            </div>
-            <div class="sched-day-items">
-              <span
-                v-for="s in day.items"
-                :key="s.jobId"
-                class="sched-chip"
-                :class="{ 'sched-chip-next': s.jobId === nextJobId }"
-                :title="s.jobName"
-              >
-                <span class="sched-time">{{ fmtTime(s.nextRun) }}</span>
-                <span class="sched-name">{{ s.jobName }}</span>
-              </span>
-            </div>
-          </div>
-          <div v-if="!scheduleByDay.length" class="sched-empty">{{ t('jobs.noScheduleMatch') }}</div>
-        </div>
-      </div>
-    </div>
+    <!-- Scheduler status; hidden when the operator moved it to its own menu entry -->
+    <ScheduleList v-if="!scheduleSeparatePage" ref="scheduleListRef" collapsible />
 
     <div class="card">
       <!-- Filters -->
@@ -67,6 +26,14 @@
           <option v-for="opt in botUrlTplOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
         <input v-model="filterName" class="form-input" style="width:160px;height:30px;font-size:13px;padding:0 8px" :placeholder="t('jobs.filterPlaceholder')" />
+        <button
+          class="btn btn-sm"
+          :class="showLastSuccess ? 'btn-primary' : 'btn-ghost'"
+          :title="t('jobs.toggleLastSuccessHint')"
+          @click="showLastSuccess = !showLastSuccess"
+        >
+          <i class="fa-solid fa-clock-rotate-left"></i> {{ t('jobs.colLastSuccess') }}
+        </button>
         <button v-if="jobs.length" class="btn btn-sm btn-secondary" style="margin-left:auto" @click="toggleAllJobs">
           {{ allJobsSelected ? t('common.deselectAll') : t('common.selectAll') }}
         </button>
@@ -94,13 +61,14 @@
               <th class="th-sort" :class="sortKey === 'type' ? 'sort-active' : ''" @click="setSort('type')">{{ t('jobs.colType') }} <span class="sort-icon">{{ sortIcon('type') }}</span></th>
               <th class="th-sort col-hide-mobile" :class="sortKey === 'botUrl' ? 'sort-active' : ''" @click="setSort('botUrl')">{{ t('jobs.colBotUrlTpl') }} <span class="sort-icon">{{ sortIcon('botUrl') }}</span></th>
               <th class="th-sort col-hide-mobile" :class="sortKey === 'window' ? 'sort-active' : ''" @click="setSort('window')">{{ t('jobs.colWindow') }} <span class="sort-icon">{{ sortIcon('window') }}</span></th>
+              <th v-if="showLastSuccess" class="th-sort" :class="sortKey === 'lastSuccess' ? 'sort-active' : ''" @click="setSort('lastSuccess')">{{ t('jobs.colLastSuccess') }} <span class="sort-icon">{{ sortIcon('lastSuccess') }}</span></th>
               <th class="th-sort" :class="sortKey === 'enabled' ? 'sort-active' : ''" @click="setSort('enabled')">{{ t('jobs.colEnabled') }} <span class="sort-icon">{{ sortIcon('enabled') }}</span></th>
               <th>{{ t('common.actions') }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="!jobs.length">
-              <td colspan="7" class="empty">{{ t('jobs.noJobs') }}</td>
+              <td :colspan="showLastSuccess ? 8 : 7" class="empty">{{ t('jobs.noJobs') }}</td>
             </tr>
             <tr
               v-for="(j, idx) in jobs" :key="j.id"
@@ -118,6 +86,10 @@
                 <template v-else>{{ j.jobType === 'embywatch' ? j.botUsername : '@' + j.botUsername }}</template>
               </td>
               <td class="col-hide-mobile">{{ fmtWindow(j.scheduleWindowStart, j.scheduleWindowEnd) }}</td>
+              <td v-if="showLastSuccess">
+                <span v-if="j.lastSuccessAt" class="last-success" :title="fmtDateTimeFull(j.lastSuccessAt)">{{ fmtSince(j.lastSuccessAt) }}</span>
+                <span v-else class="last-success-never">{{ t('jobs.neverSucceeded') }}</span>
+              </td>
               <td>
                 <span
                   :class="j.enabled ? 'badge badge-green' : 'badge badge-grey'"
@@ -341,7 +313,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">{{ t('jobs.custom.labelTarget') }} <span style="color:#e63946">*</span></label>
+              <label class="form-label">{{ t('jobs.custom.labelTarget') }}</label>
               <input v-model.trim="form.botUsername" class="form-input" placeholder="BotUsername" />
             </div>
           </div>
@@ -374,6 +346,10 @@
                   <option value="enter_captcha" :disabled="aiKeyMissing">{{ t('jobs.custom.actionEnterCaptcha') }}{{ aiKeyMissing ? ' (' + t('jobs.noApiKey') + ')' : '' }}</option>
                   <option value="join_group">{{ t('jobs.custom.actionJoinGroup') }}</option>
                   <option value="subscribe_channel">{{ t('jobs.custom.actionSubscribeChannel') }}</option>
+                  <option value="open_mini_app" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenMiniApp') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
+                  <option value="open_mini_app_url" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenMiniAppUrl') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
+                  <option value="open_bot_menu_app" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenBotMenuApp') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
+                  <option value="open_url" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenUrl') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
                 </select>
                 <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === 0" @click="moveUp(i)"><i class="fa-solid fa-arrow-up"></i></button>
                 <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === customActions.length - 1" @click="moveDown(i)"><i class="fa-solid fa-arrow-down"></i></button>
@@ -515,6 +491,14 @@
                   <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
                 </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-checkbox-label">
+                    <input type="checkbox" v-model="action.cfChallenge" :disabled="cfBrowserMissing" />
+                    {{ t('jobs.custom.labelCfChallenge') }}
+                  </label>
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+                  <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
+                </div>
               </div>
 
               <!-- click_message_button -->
@@ -564,6 +548,14 @@
                   <label class="form-label">{{ t('jobs.custom.labelFailContains') }}</label>
                   <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-checkbox-label">
+                    <input type="checkbox" v-model="action.cfChallenge" :disabled="cfBrowserMissing" />
+                    {{ t('jobs.custom.labelCfChallenge') }}
+                  </label>
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+                  <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
                 </div>
               </div>
 
@@ -627,6 +619,116 @@
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.checkSubscriptionHint') }}</div>
                 </div>
               </div>
+
+              <!-- open_mini_app / open_mini_app_url / open_bot_menu_app -->
+              <div v-if="action.type === 'open_mini_app' || action.type === 'open_mini_app_url' || action.type === 'open_bot_menu_app'" class="custom-action-params">
+                <div class="form-group" style="margin-bottom:0">
+                  <label class="form-label">{{ action.type === 'open_mini_app' ? t('jobs.custom.labelContactOptional') : action.type === 'open_mini_app_url' ? t('jobs.custom.labelMiniAppOwner') : t('jobs.custom.labelMenuAppOwner') }}</label>
+                  <input v-model.trim="action.contact" class="form-input" :placeholder="t('jobs.custom.contactOptionalPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ action.type === 'open_mini_app' ? t('jobs.custom.contactOptionalHint') : action.type === 'open_mini_app_url' ? t('jobs.custom.miniAppOwnerHint') : t('jobs.custom.menuAppOwnerHint') }}</div>
+                </div>
+                <div v-if="action.type === 'open_mini_app_url'" class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelMiniAppUrl') }}</label>
+                  <input v-model.trim="action.url" class="form-input" :placeholder="t('jobs.custom.miniAppUrlPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppUrlHint') }}</div>
+                </div>
+                <div v-if="action.type === 'open_mini_app'" class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelMiniAppButton') }}</label>
+                  <input v-model.trim="action.button" class="form-input" :placeholder="t('jobs.custom.miniAppButtonPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppButtonHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelInAppButton') }}</label>
+                  <input v-model.trim="action.appButton" class="form-input" :placeholder="t('jobs.custom.inAppButtonPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.inAppButtonHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelSuccessContains') }}</label>
+                  <input v-model.trim="action.successContains" class="form-input" :placeholder="t('jobs.custom.successContainsPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.successContainsHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelFailContains') }}</label>
+                  <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
+                </div>
+                <div class="form-row" style="margin-bottom:0;margin-top:8px">
+                  <div class="form-group">
+                    <label class="form-label">{{ t('jobs.custom.labelMaxRetries') }}</label>
+                    <input v-model.number="action.maxRetries" class="form-input" type="number" min="0" max="10" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">{{ t('jobs.custom.labelMiniAppMaxWait') }}</label>
+                    <input v-model.number="action.miniAppMaxWaitMs" class="form-input" type="number" min="0" step="10000" placeholder="300000" />
+                  </div>
+                </div>
+                <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppMaxWaitHint') }}</div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelMiniAppProxy') }}</label>
+                  <select v-model="action.miniAppProxyId" class="form-select">
+                    <option value="">{{ t('jobs.custom.miniAppProxyJob') }}</option>
+                    <option value="direct">{{ t('jobs.custom.miniAppProxyDirect') }}</option>
+                    <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
+                  </select>
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppProxyHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-checkbox-label">
+                    <input type="checkbox" v-model="action.miniAppTryAllProxies" />
+                    {{ t('jobs.custom.labelMiniAppTryAll') }}
+                  </label>
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppTryAllHint') }}</div>
+                </div>
+              </div>
+
+              <!-- open_url -->
+              <div v-if="action.type === 'open_url'" class="custom-action-params">
+                <div class="form-group" style="margin-bottom:0">
+                  <label class="form-label">{{ t('jobs.web.labelUrl') }}</label>
+                  <input v-model.trim="action.url" class="form-input" :placeholder="t('jobs.web.urlPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.web.urlHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:10px">
+                  <WebStepsEditor :steps="action.webSteps" :ai-key-missing="aiKeyMissing" />
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelSuccessContains') }}</label>
+                  <input v-model.trim="action.successContains" class="form-input" :placeholder="t('jobs.custom.successContainsPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.successContainsHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelFailContains') }}</label>
+                  <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
+                </div>
+                <div class="form-row" style="margin-bottom:0;margin-top:8px">
+                  <div class="form-group">
+                    <label class="form-label">{{ t('jobs.custom.labelMaxRetries') }}</label>
+                    <input v-model.number="action.maxRetries" class="form-input" type="number" min="0" max="10" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">{{ t('jobs.custom.labelMiniAppMaxWait') }}</label>
+                    <input v-model.number="action.miniAppMaxWaitMs" class="form-input" type="number" min="0" step="10000" placeholder="300000" />
+                  </div>
+                </div>
+                <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppMaxWaitHint') }}</div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.custom.labelMiniAppProxy') }}</label>
+                  <select v-model="action.miniAppProxyId" class="form-select">
+                    <option value="">{{ t('jobs.custom.miniAppProxyJob') }}</option>
+                    <option value="direct">{{ t('jobs.custom.miniAppProxyDirect') }}</option>
+                    <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
+                  </select>
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppProxyHint') }}</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-checkbox-label">
+                    <input type="checkbox" v-model="action.miniAppTryAllProxies" />
+                    {{ t('jobs.custom.labelMiniAppTryAll') }}
+                  </label>
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppTryAllHint') }}</div>
+                </div>
+              </div>
             </div>
 
             <button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px" @click="addAction">
@@ -656,9 +758,47 @@
             <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.groupHint') }}</div>
           </div>
           <div class="form-group">
-            <label class="form-label">{{ t('jobs.autoreg.labelCodePrefix') }} <span style="color:#e63946">*</span></label>
+            <label class="form-label">{{ t('jobs.autoreg.labelCodePrefix') }} <span v-if="!autoregCfg.codeRegex" style="color:#e63946">*</span></label>
             <input v-model.trim="autoregCfg.codePrefix" class="form-input" placeholder="ABC-*-XYZ_" />
             <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.codePrefixHint') }}</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t('jobs.autoreg.labelCodeRegex') }} <span v-if="!autoregCfg.codePrefix" style="color:#e63946">*</span></label>
+            <input v-model.trim="autoregCfg.codeRegex" class="form-input" :placeholder="t('jobs.autoreg.codeRegexPlaceholder')" />
+            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.codeRegexHint') }}</div>
+            <div style="font-size:11px;color:#777;margin-top:3px">{{ t('jobs.autoreg.eitherPrefixOrRegex') }}</div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-check">
+                <input v-model="autoregCfg.stripChinese" type="checkbox" />
+                <span>{{ t('jobs.autoreg.labelStripChinese') }}</span>
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.stripChineseHint') }}</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.autoreg.labelStripChars') }}</label>
+              <input v-model.trim="autoregCfg.stripChars" class="form-input" :placeholder="t('jobs.autoreg.stripCharsPlaceholder')" />
+              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.stripCharsHint') }}</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-check">
+              <input v-model="autoregCfg.aiModifyCode" type="checkbox" />
+              <span>{{ t('jobs.autoreg.labelAiModifyCode') }}</span>
+            </label>
+            <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.aiModifyCodeHint') }}</div>
+          </div>
+          <div v-if="autoregCfg.aiModifyCode" class="form-row">
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.autoreg.labelAiModifyCodeHint') }}</label>
+              <input v-model.trim="autoregCfg.aiModifyCodeHint" class="form-input" :placeholder="t('jobs.autoreg.aiModifyCodeHintPlaceholder')" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.autoreg.labelAiContextCount') }}</label>
+              <input v-model.number="autoregCfg.aiContextCount" class="form-input" type="number" min="0" max="50" />
+              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.aiContextCountHint') }}</div>
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label">{{ t('jobs.autoreg.labelEntryMode') }}</label>
@@ -685,9 +825,41 @@
             </div>
           </div>
           <div class="form-group">
+            <label class="form-label">{{ t('jobs.autoreg.labelCodeReady') }}</label>
+            <input v-model.trim="autoregCfg.codeReadyContains" class="form-input" :placeholder="t('jobs.autoreg.codeReadyPlaceholder')" />
+            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.codeReadyHint') }}</div>
+          </div>
+          <!-- Some bots vet the code first, then offer a button/link that opens registration -->
+          <div class="form-group">
+            <label class="form-check">
+              <input v-model="autoregCfg.clickAfterCode" type="checkbox" />
+              <span>{{ t('jobs.autoreg.labelClickAfterCode') }}</span>
+            </label>
+            <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.clickAfterCodeHint') }}</div>
+          </div>
+          <div v-if="autoregCfg.clickAfterCode" class="form-row">
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.autoreg.labelAfterCodeButton') }}</label>
+              <input v-model.trim="autoregCfg.afterCodeButton" class="form-input" :placeholder="t('jobs.autoreg.afterCodeButtonPlaceholder')" />
+              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.afterCodeButtonHint') }}</div>
+            </div>
+            <div class="form-group">
+              <label class="form-check">
+                <input v-model="autoregCfg.afterCodeRequired" type="checkbox" />
+                <span>{{ t('jobs.autoreg.labelAfterCodeRequired') }}</span>
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.afterCodeRequiredHint') }}</div>
+            </div>
+          </div>
+          <div class="form-group">
             <label class="form-label">{{ t('jobs.autoreg.labelSignupUsername') }} <span style="color:#e63946">*</span></label>
             <input v-model.trim="autoregCfg.signupUsername" class="form-input" placeholder="myname{num:3}" />
             <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.signupUsernameHint') }}</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t('jobs.autoreg.labelUsernameReady') }}</label>
+            <input v-model.trim="autoregCfg.usernameReadyContains" class="form-input" :placeholder="t('jobs.autoreg.usernameReadyPlaceholder')" />
+            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.usernameReadyHint') }}</div>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -784,6 +956,14 @@
             <label class="form-label">{{ t('jobs.labelFailContains') }}</label>
             <input v-model.trim="checkinFailContains" class="form-input" :placeholder="t('jobs.failContainsPlaceholder')" />
             <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.failContainsHint') }}</div>
+          </div>
+          <div class="form-group">
+            <label class="form-checkbox-label">
+              <input type="checkbox" v-model="checkinCfChallenge" :disabled="!!form.templateId || cfBrowserMissing" />
+              {{ t('jobs.custom.labelCfChallenge') }}
+            </label>
+            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+            <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
           </div>
         </template>
 
@@ -947,15 +1127,20 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
-import { jobsApi, accountsApi, statusApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type ScheduleStatus, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig } from '../api/client';
+import { jobsApi, accountsApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig, type CheckinConfig } from '../api/client';
 import { t, locale } from '../i18n';
+import { regexValid } from '../utils/regexCheck';
 import { usePersistedRef } from '../composables/usePersistedRef';
 import { formatAccountLabel, loadAccountDisplaySetting } from '../composables/accountDisplay';
+import { loadSchedulePageSetting, scheduleSeparatePage } from '../composables/schedulePage';
+import ScheduleList from '../components/ScheduleList.vue';
 import { debounce } from '../composables/useDebounce';
 import PaginationBar from '../components/PaginationBar.vue';
+import WebStepsEditor from '../components/WebStepsEditor.vue';
+import { webStepsFromConfig, webStepsToConfig, type WebStepForm } from '../composables/webSteps';
 
 type CustomActionForm = {
-  type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'enter_captcha' | 'join_group' | 'subscribe_channel';
+  type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'enter_captcha' | 'join_group' | 'subscribe_channel' | 'open_mini_app' | 'open_mini_app_url' | 'open_bot_menu_app' | 'open_url';
   content: string;
   contentDropdown: string;
   contentCustom: string;
@@ -971,46 +1156,34 @@ type CustomActionForm = {
   captchaLength: string;
   successContains: string;
   failContains: string;
+  cfChallenge: boolean;
   contact: string;
   groupId: string;
   checkMembership: boolean;
   verifyButton: string;
   verifyWaitMs: number;
   channelId: string;
+  appButton: string;
+  /** open_mini_app: browser budget, 0 = default */
+  miniAppMaxWaitMs: number;
+  /** open_mini_app: pinned browser proxy id, 'direct', or '' for the job proxy */
+  miniAppProxyId: string;
+  miniAppTryAllProxies: boolean;
+  /** open_url: the page to open */
+  url: string;
+  /** open_url: sub-steps run on the page once it is up */
+  webSteps: WebStepForm[];
 };
 
 const jobs = ref<Job[]>([]);
 const accounts = ref<Account[]>([]);
 const templates = ref<JobTemplate[]>([]);
-const scheduleStatus = ref<ScheduleStatus[]>([]);
-const sortedScheduleStatus = computed(() =>
-  [...scheduleStatus.value].sort((a, b) => a.nextRun.localeCompare(b.nextRun))
-);
-const schedOpen = usePersistedRef<boolean>('bemby:jobs:schedOpen', true);
-const schedSearch = ref('');
-const nextJobId = computed(() => sortedScheduleStatus.value[0]?.jobId ?? null);
-// Upcoming runs grouped by local calendar day, filtered by the in-panel search.
-const scheduleByDay = computed(() => {
-  const q = schedSearch.value.toLowerCase();
-  const filtered = q
-    ? sortedScheduleStatus.value.filter((s) => s.jobName.toLowerCase().includes(q))
-    : sortedScheduleStatus.value;
-  const groups = new Map<string, { key: string; label: string; items: ScheduleStatus[] }>();
-  for (const s of filtered) {
-    const d = new Date(s.nextRun);
-    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-    let g = groups.get(key);
-    if (!g) {
-      g = { key, label: fmtDayLabel(d), items: [] };
-      groups.set(key, g);
-    }
-    g.items.push(s);
-  }
-  return [...groups.values()];
-});
 const settings = ref<Settings | null>(null);
 const uaPresets = computed<UAPreset[]>(() => {
   try { return JSON.parse(settings.value?.ua_presets ?? '[]'); } catch { return []; }
+});
+const proxiesList = computed<Array<{ id: string; name: string }>>(() => {
+  try { return JSON.parse(settings.value?.proxies ?? '[]'); } catch { return []; }
 });
 const running = ref(new Set<number>());
 
@@ -1037,6 +1210,7 @@ const botUrlTplOptions = computed(() => {
   return [...botVals, ...tplVals];
 });
 
+const showLastSuccess = usePersistedRef<boolean>('bemby:jobs:showLastSuccess', false);
 const sortKey = usePersistedRef<string>('bemby:jobs:sortKey', '');
 const sortDir = usePersistedRef<'asc' | 'desc'>('bemby:jobs:sortDir', 'asc');
 const actionMenuJob = ref<Job | null>(null);
@@ -1165,8 +1339,19 @@ const embyServer = reactive<{ protocol: 'https' | 'http'; host: string; port: nu
 type AutoregCfgForm = {
   groupId: string;
   codePrefix: string;
+  codeRegex: string;
+  stripChinese: boolean;
+  stripChars: string;
+  aiModifyCode: boolean;
+  aiModifyCodeHint: string;
+  aiContextCount: number;
+  codeReadyContains: string;
+  usernameReadyContains: string;
   entryMode: 'button' | 'command';
   registerButton: string;
+  clickAfterCode: boolean;
+  afterCodeButton: string;
+  afterCodeRequired: boolean;
   signupUsername: string;
   listenMinutes: number;
   scanHistoryCount: number;
@@ -1177,8 +1362,19 @@ function defaultAutoregCfg(): AutoregCfgForm {
   return {
     groupId: '',
     codePrefix: '',
+    codeRegex: '',
+    stripChinese: false,
+    stripChars: '',
+    aiModifyCode: false,
+    aiModifyCodeHint: '',
+    aiContextCount: 6,
+    codeReadyContains: '',
+    usernameReadyContains: '',
     entryMode: 'button',
     registerButton: '',
+    clickAfterCode: false,
+    afterCodeButton: '',
+    afterCodeRequired: false,
     signupUsername: '',
     listenMinutes: 30,
     scanHistoryCount: 0,
@@ -1190,6 +1386,17 @@ const autoregCfg = reactive<AutoregCfgForm>(defaultAutoregCfg());
 const formError = ref('');
 const saving = ref(false);
 const aiKeyMissing = computed(() => settings.value?.ai_key_configured !== 'true');
+// Anything that opens a page needs the solver's browser and its fonts in the data dir;
+// neither ships in the image, so those options stay off until both are downloaded.
+// Only ever true once the settings have actually arrived. Null means they have not (the
+// load is fire-and-forget and swallows its errors), and reading that as "no browser" greys
+// the actions out with a label saying something untrue about the machine.
+const cfBrowserMissing = computed(
+  () =>
+    !!settings.value &&
+    (settings.value.cf_chromium_installed !== 'true' ||
+      settings.value.cf_fonts_installed !== 'true'),
+);
 
 const CMD_PRESETS = new Set(['', '/start', '/checkin'])
 const ACTION_CMD_PRESETS = new Set(['/start', '/checkin'])
@@ -1202,6 +1409,7 @@ const btnCustom = ref('')
 const btnAiHint = ref('')
 const checkinSuccessContains = ref('')
 const checkinFailContains = ref('')
+const checkinCfChallenge = ref(false)
 
 function setCmdState(val: string) {
   if (CMD_PRESETS.has(val)) { cmdDropdown.value = val; cmdCustom.value = ''; }
@@ -1247,11 +1455,12 @@ function onJobTypeChange() {
   btnAiHint.value = '';
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
+  checkinCfChallenge.value = false;
   setCmdState(''); setBtnState('');
 }
 
 function defaultAction(): CustomActionForm {
-  return { type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '', contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到', buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0, captchaLength: '', successContains: '', failContains: '', contact: '', groupId: '', checkMembership: false, verifyButton: '', verifyWaitMs: 30000, channelId: '' };
+  return { type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '', contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到', buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0, captchaLength: '', successContains: '', failContains: '', cfChallenge: false, contact: '', groupId: '', checkMembership: false, verifyButton: '', verifyWaitMs: 30000, channelId: '', appButton: '', miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppTryAllProxies: true, url: '', webSteps: [] };
 }
 
 function addAction() {
@@ -1276,6 +1485,7 @@ function moveDown(i: number) {
 
 onMounted(async () => {
   loadAccountDisplaySetting();
+  loadSchedulePageSetting();
   await Promise.all([loadJobs(), loadAccounts(), loadStatus(), loadSettings(), loadTemplates()]);
 });
 
@@ -1339,13 +1549,17 @@ function applyTemplate(tpl: JobTemplate) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha' as const, maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group' as const, groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000 };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel' as const, channelId: a.channelId, checkMembership: a.checkMembership ?? false };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
+          if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
             let buttonDropdown: string, buttonCustom = '', buttonAiHint = '';
             if (aiMatch) { buttonDropdown = '{aiBtn}'; buttonAiHint = aiMatch[1]?.trim() ?? ''; }
             else if (ACTION_BTN_PRESETS.has(a.button)) { buttonDropdown = a.button; }
             else { buttonDropdown = 'custom'; buttonCustom = a.button; }
-            return { ...base, type: 'click_button' as const, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
+            return { ...base, type: 'click_button' as const, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0, cfChallenge: a.cfChallenge ?? false };
           }
           if (a.type === 'click_message_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
@@ -1353,7 +1567,7 @@ function applyTemplate(tpl: JobTemplate) {
             if (aiMatch) { buttonDropdown = '{aiBtn}'; buttonAiHint = aiMatch[1]?.trim() ?? ''; }
             else if (ACTION_BTN_PRESETS.has(a.button)) { buttonDropdown = a.button; }
             else { buttonDropdown = 'custom'; buttonCustom = a.button; }
-            return { ...base, type: 'click_message_button' as const, contact: a.contact, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
+            return { ...base, type: 'click_message_button' as const, contact: a.contact, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0, cfChallenge: a.cfChallenge ?? false };
           }
           return base;
         });
@@ -1371,7 +1585,18 @@ function applyTemplate(tpl: JobTemplate) {
         Object.assign(autoregCfg, {
           groupId: c.groupId ?? '',
           codePrefix: c.codePrefix ?? '',
+          codeRegex: c.codeRegex ?? '',
+          stripChinese: c.stripChinese === true,
+          stripChars: c.stripChars ?? '',
+          aiModifyCode: c.aiModifyCode === true,
+          aiModifyCodeHint: c.aiModifyCodeHint ?? '',
+          aiContextCount: c.aiContextCount ?? 6,
+          codeReadyContains: c.codeReadyContains ?? '',
+          usernameReadyContains: c.usernameReadyContains ?? '',
           registerButton: c.registerButton ?? '',
+          clickAfterCode: c.clickAfterCode === true,
+          afterCodeButton: c.afterCodeButton ?? '',
+          afterCodeRequired: c.afterCodeRequired === true,
           signupUsername: c.signupUsername ?? '',
           listenMinutes: c.listenMinutes ?? 30,
           scanHistoryCount: c.scanHistoryCount ?? 0,
@@ -1423,8 +1648,11 @@ async function loadAccounts() {
   accounts.value = await accountsApi.list();
 }
 
+const scheduleListRef = ref<{ reload: () => Promise<void> } | null>(null);
+
+// The panel owns its own data; job changes here just ask it to look again
 async function loadStatus() {
-  try { scheduleStatus.value = await statusApi.get(); } catch { /* ignore */ }
+  await scheduleListRef.value?.reload();
 }
 
 function fmtWindow(start: number, end: number) {
@@ -1432,31 +1660,63 @@ function fmtWindow(start: number, end: number) {
   return `${fmt(start)} – ${fmt(end)}`;
 }
 
-function fmtDateTime(iso: string) {
+// Absolute timestamp including the year, for the last-success tooltip where the
+// relative label alone can be years old.
+function fmtDateTimeFull(iso: string) {
   const localeMap: Record<string, string> = { en: 'en-AU', zh: 'zh-CN' };
-  return new Date(iso).toLocaleString(localeMap[locale.value] ?? 'en-AU', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleString(localeMap[locale.value] ?? 'en-AU', {
+    year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
 }
 
-function fmtTime(iso: string) {
-  const localeMap: Record<string, string> = { en: 'en-AU', zh: 'zh-CN' };
-  return new Date(iso).toLocaleTimeString(localeMap[locale.value] ?? 'en-AU', { hour: '2-digit', minute: '2-digit' });
-}
+// Elapsed time as at most two units: "3 days ago", "2 weeks 3 days ago",
+// "1 month 5 days ago". Months and years are calendar-aware, not 30/365-day
+// approximations, so "1 month ago" lands on the same day of the month.
+function fmtSince(iso: string) {
+  const then = new Date(iso);
+  const now = new Date();
+  const secs = Math.floor((now.getTime() - then.getTime()) / 1000);
+  if (!Number.isFinite(secs) || secs < 60) return t('jobs.since.justNow');
 
-// Day header: "Today"/"Tomorrow" for the next two days, otherwise weekday + date.
-function fmtDayLabel(d: Date) {
-  const localeMap: Record<string, string> = { en: 'en-AU', zh: 'zh-CN' };
-  const loc = localeMap[locale.value] ?? 'en-AU';
-  const today = new Date();
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const dayMs = 86_400_000;
-  const diff = Math.round((startOf(d) - startOf(today)) / dayMs);
-  const dateStr = d.toLocaleDateString(loc, { weekday: 'short', month: 'short', day: '2-digit' });
-  if (diff === 0) return `${t('jobs.today')} · ${dateStr}`;
-  if (diff === 1) return `${t('jobs.tomorrow')} · ${dateStr}`;
-  return dateStr;
+  const unit = (n: number, key: string) =>
+    t(`jobs.since.${key}${n === 1 ? '' : 's'}`).replace('{n}', String(n));
+  const ago = (...parts: string[]) => t('jobs.since.ago').replace('{v}', parts.join(' '));
+
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return ago(unit(mins, 'minute'));
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return ago(unit(hours, 'hour'));
+  const days = Math.floor(hours / 24);
+  if (days < 7) return ago(unit(days, 'day'));
+
+  // Calendar months elapsed, clamped so the anchor never overshoots now
+  let months = (now.getFullYear() - then.getFullYear()) * 12 + now.getMonth() - then.getMonth();
+  const anchor = new Date(then);
+  anchor.setMonth(anchor.getMonth() + months);
+  if (anchor.getTime() > now.getTime()) {
+    months -= 1;
+    anchor.setMonth(anchor.getMonth() - 1);
+  }
+
+  if (months < 1) {
+    const weeks = Math.floor(days / 7);
+    const remDays = days % 7;
+    return remDays ? ago(unit(weeks, 'week'), unit(remDays, 'day')) : ago(unit(weeks, 'week'));
+  }
+
+  const remDays = Math.floor((now.getTime() - anchor.getTime()) / 86_400_000);
+  if (months < 12) {
+    return remDays ? ago(unit(months, 'month'), unit(remDays, 'day')) : ago(unit(months, 'month'));
+  }
+  const years = Math.floor(months / 12);
+  const remMonths = months % 12;
+  return remMonths ? ago(unit(years, 'year'), unit(remMonths, 'month')) : ago(unit(years, 'year'));
 }
 
 function openAdd() {
+  // Re-read on the way in: the browser and its fonts are installed from the settings page,
+  // and the copy taken when this view mounted would still say they are not there
+  void loadSettings();
   editTarget.value = null;
   Object.assign(form, {
     name: '', accountId: accounts.value[0]?.id ?? null,
@@ -1478,12 +1738,14 @@ function openAdd() {
   Object.assign(autoregCfg, defaultAutoregCfg());
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
+  checkinCfChallenge.value = false;
   setCmdState(''); setBtnState('');
   formError.value = '';
   showForm.value = true;
 }
 
 function openEdit(j: Job) {
+  void loadSettings();
   editTarget.value = j;
   Object.assign(form, {
     name: j.name, accountId: j.accountId, jobType: j.jobType,
@@ -1499,12 +1761,14 @@ function openEdit(j: Job) {
   setBtnState(j.checkinButton === '签到' ? '' : (j.checkinButton ?? ''));
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
+  checkinCfChallenge.value = false;
   if (j.jobType === 'checkin' && j.config) {
     try {
       let cfg = JSON.parse(j.config);
       if (typeof cfg === 'string') cfg = JSON.parse(cfg);
       checkinSuccessContains.value = cfg.successContains ?? '';
       checkinFailContains.value = cfg.failContains ?? '';
+      checkinCfChallenge.value = cfg.cfChallenge ?? false;
     } catch { /* ignore */ }
   }
   if (j.jobType === 'embywatch') {
@@ -1570,6 +1834,10 @@ function openEdit(j: Job) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha', maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group', groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000 };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel', channelId: a.channelId, checkMembership: a.checkMembership ?? false };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app', contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url', url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
+          if (a.type === 'open_url') return { ...base, type: 'open_url', url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
             let buttonDropdown: string, buttonCustom = '', buttonAiHint = '';
@@ -1613,7 +1881,18 @@ function openEdit(j: Job) {
         Object.assign(autoregCfg, {
           groupId: c.groupId ?? '',
           codePrefix: c.codePrefix ?? '',
+          codeRegex: c.codeRegex ?? '',
+          stripChinese: c.stripChinese === true,
+          stripChars: c.stripChars ?? '',
+          aiModifyCode: c.aiModifyCode === true,
+          aiModifyCodeHint: c.aiModifyCodeHint ?? '',
+          aiContextCount: c.aiContextCount ?? 6,
+          codeReadyContains: c.codeReadyContains ?? '',
+          usernameReadyContains: c.usernameReadyContains ?? '',
           registerButton: c.registerButton ?? '',
+          clickAfterCode: c.clickAfterCode === true,
+          afterCodeButton: c.afterCodeButton ?? '',
+          afterCodeRequired: c.afterCodeRequired === true,
           signupUsername: c.signupUsername ?? '',
           listenMinutes: c.listenMinutes ?? 30,
           scanHistoryCount: c.scanHistoryCount ?? 0,
@@ -1653,7 +1932,7 @@ function handleEmbyHostPaste(event: ClipboardEvent) {
   if (portStr) embyServer.port = Number(portStr);
 }
 
-function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Record<string, string> | null {
+function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | CheckinConfig | null {
   if (form.jobType === 'autoreg') {
     // Template-linked jobs take their whole config from the template
     if (form.templateId) return null;
@@ -1666,6 +1945,21 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Record<
     else if (autoregCfg.registerButton.trim()) cfg.registerButton = autoregCfg.registerButton.trim();
     if (autoregCfg.listenMinutes > 0 && autoregCfg.listenMinutes !== 30) cfg.listenMinutes = autoregCfg.listenMinutes;
     if (autoregCfg.scanHistoryCount > 0) cfg.scanHistoryCount = autoregCfg.scanHistoryCount;
+    if (autoregCfg.codeRegex.trim()) cfg.codeRegex = autoregCfg.codeRegex.trim();
+    if (autoregCfg.stripChinese) cfg.stripChinese = true;
+    if (autoregCfg.stripChars.trim()) cfg.stripChars = autoregCfg.stripChars.trim();
+    if (autoregCfg.aiModifyCode) {
+      cfg.aiModifyCode = true;
+      if (autoregCfg.aiModifyCodeHint.trim()) cfg.aiModifyCodeHint = autoregCfg.aiModifyCodeHint.trim();
+      if (autoregCfg.aiContextCount >= 0 && autoregCfg.aiContextCount !== 6) cfg.aiContextCount = autoregCfg.aiContextCount;
+    }
+    if (autoregCfg.codeReadyContains.trim()) cfg.codeReadyContains = autoregCfg.codeReadyContains.trim();
+    if (autoregCfg.clickAfterCode) {
+      cfg.clickAfterCode = true;
+      if (autoregCfg.afterCodeButton.trim()) cfg.afterCodeButton = autoregCfg.afterCodeButton.trim();
+      if (autoregCfg.afterCodeRequired) cfg.afterCodeRequired = true;
+    }
+    if (autoregCfg.usernameReadyContains.trim()) cfg.usernameReadyContains = autoregCfg.usernameReadyContains.trim();
     if (autoregCfg.successContains.trim()) cfg.successContains = autoregCfg.successContains.trim();
     if (autoregCfg.failContains.trim()) cfg.failContains = autoregCfg.failContains.trim();
     return cfg;
@@ -1728,6 +2022,52 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Record<
           ...(a.verifyButton.trim() ? { verifyButton: a.verifyButton.trim(), verifyWaitMs: a.verifyWaitMs } : {}),
         };
         if (a.type === 'subscribe_channel') return { type: 'subscribe_channel' as const, channelId: a.channelId, ...(a.checkMembership ? { checkMembership: true } : {}) };
+        if (a.type === 'open_mini_app') return {
+          type: 'open_mini_app' as const,
+          ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
+          ...(a.button.trim() ? { button: a.button.trim() } : {}),
+          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+          ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
+          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+        };
+        if (a.type === 'open_mini_app_url') return {
+          type: 'open_mini_app_url' as const,
+          url: a.url.trim(),
+          ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
+          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+          ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
+          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+        };
+        if (a.type === 'open_bot_menu_app') return {
+          type: 'open_bot_menu_app' as const,
+          ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
+          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+          ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
+          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+        };
+        if (a.type === 'open_url') return {
+          type: 'open_url' as const,
+          url: a.url.trim(),
+          ...(a.webSteps.length ? { steps: webStepsToConfig(a.webSteps) } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+          ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
+          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+        };
         let button: string;
         if (a.buttonDropdown === 'custom') button = a.buttonCustom;
         else if (a.buttonDropdown === '{aiBtn}') button = a.buttonAiHint.trim() ? `{aiBtn:${a.buttonAiHint.trim()}}` : '{aiBtn}';
@@ -1741,6 +2081,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Record<
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.scope ? { scope: a.scope } : {}),
+          ...(a.cfChallenge ? { cfChallenge: true } : {}),
         };
         return {
           type: 'click_button' as const,
@@ -1750,6 +2091,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Record<
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.scope ? { scope: a.scope } : {}),
+          ...(a.cfChallenge ? { cfChallenge: true } : {}),
         };
       }),
     };
@@ -1759,7 +2101,9 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Record<
   if (form.jobType === 'checkin') {
     const s = checkinSuccessContains.value.trim();
     const f = checkinFailContains.value.trim();
-    if (s || f) return { ...(s ? { successContains: s } : {}), ...(f ? { failContains: f } : {}) };
+    const cf = checkinCfChallenge.value;
+    if (s || f || cf)
+      return { ...(s ? { successContains: s } : {}), ...(f ? { failContains: f } : {}), ...(cf ? { cfChallenge: true } : {}) };
   }
   return null;
 }
@@ -1769,13 +2113,15 @@ async function saveJob() {
   if (!form.name) { formError.value = t('jobs.errors.nameRequired'); return; }
   if ((form.jobType === 'checkin' || form.jobType === 'custom' || form.jobType === 'autoreg') && !form.accountId) { formError.value = t('jobs.errors.accountRequired'); return; }
   if (form.jobType === 'custom') {
-    if (!form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
+    // No target bot needed: an action can name its own contact, or drive a page that
+    // never touches Telegram. The ones that do need it say so when they run.
     if (customActions.value.length === 0) { formError.value = t('jobs.errors.customActionsRequired'); return; }
   }
   if (form.jobType === 'autoreg' && !form.templateId) {
     if (!form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
     if (!autoregCfg.groupId) { formError.value = t('jobs.errors.autoregGroupRequired'); return; }
-    if (!autoregCfg.codePrefix) { formError.value = t('jobs.errors.autoregPrefixRequired'); return; }
+    if (!autoregCfg.codePrefix && !autoregCfg.codeRegex) { formError.value = t('jobs.errors.autoregPrefixRequired'); return; }
+    if (autoregCfg.codeRegex && !regexValid(autoregCfg.codeRegex)) { formError.value = t('jobs.errors.autoregRegexInvalid'); return; }
     if (!autoregCfg.signupUsername) { formError.value = t('jobs.errors.autoregUsernameRequired'); return; }
   }
   if (form.jobType === 'embywatch') {
@@ -1784,7 +2130,7 @@ async function saveJob() {
     // Strip any accidental protocol prefix the user may have typed into the host field
     form.botUsername = `${embyServer.protocol}://${embyServer.host.replace(/^https?:\/\//, '')}${portPart}`;
   }
-  if (!form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
+  if (form.jobType !== 'custom' && !form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
   if (form.jobType === 'checkin' || form.jobType === 'autoreg') form.botUsername = form.botUsername.replace(/^@+/, '');
   if (form.jobType === 'embywatch' && (!embyCfg.username || !embyCfg.password)) {
     formError.value = t('jobs.errors.embyCredRequired');
@@ -2226,143 +2572,14 @@ tbody tr:nth-child(even):not(.row-selected) td {
   font-weight: 500;
 }
 
-.sched-card {
-  margin-bottom: 16px;
-  padding: 0;
-  overflow: hidden;
-}
-.sched-head {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 18px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-}
-.sched-head:hover {
-  background: #f7f8fa;
-}
-.sched-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #888;
-  flex-shrink: 0;
-}
-.sched-title .fa-solid {
-  font-size: 11px;
-  color: #aaa;
-}
-.sched-count {
-  font-size: 11px;
-  font-weight: 600;
+.last-success {
+  font-size: 13px;
   color: #555;
-  background: #eef0f4;
-  border-radius: 10px;
-  padding: 1px 8px;
-  letter-spacing: 0;
-}
-.sched-summary {
-  font-size: 13px;
-  color: #888;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-.sched-summary strong {
-  color: #333;
-}
-.sched-body {
-  padding: 0 18px 14px;
-}
-.sched-search {
-  width: 100%;
-  height: 32px;
-  font-size: 13px;
-  padding: 0 10px;
-  margin-bottom: 12px;
-}
-.sched-scroll {
-  max-height: 340px;
-  overflow-y: auto;
-}
-.sched-day {
-  margin-bottom: 12px;
-}
-.sched-day-head {
-  position: sticky;
-  top: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0 6px;
-  margin-bottom: 6px;
-  background: #fff;
-  border-bottom: 1px solid #eef0f4;
-  z-index: 1;
-}
-.sched-day-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: #444;
-}
-.sched-day-count {
-  font-size: 11px;
-  color: #999;
-  background: #f2f3f6;
-  border-radius: 10px;
-  padding: 0 7px;
-}
-.sched-day-items {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.sched-chip {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  max-width: 240px;
-  font-size: 12.5px;
-  padding: 3px 9px;
-  border-radius: 6px;
-  background: #f5f6f8;
-  border: 1px solid transparent;
-}
-.sched-time {
-  font-weight: 600;
-  color: #4361ee;
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-}
-.sched-name {
-  color: #444;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sched-chip-next {
-  background: #eef1ff;
-  border-color: #c7d0ff;
-}
-.sched-chip-next .sched-name {
-  color: #2c3a99;
-  font-weight: 600;
-}
-.sched-empty {
+.last-success-never {
   font-size: 13px;
-  color: #999;
-  text-align: center;
-  padding: 16px 0;
+  color: #aaa;
 }
 
 .bulk-bar {

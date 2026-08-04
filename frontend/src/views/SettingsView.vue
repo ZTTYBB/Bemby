@@ -69,18 +69,97 @@
             {{ t("settings.notifyHint") }}
           </p>
 
+          <!-- With no token the deprecated account sender is what still runs, so say so
+               here rather than only inside the collapsed section below -->
+          <p
+            v-if="!notifyBot.configured"
+            style="font-size: 12px; margin: -6px 0 12px; color: #c47f17"
+          >
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            {{ t("settings.notifyNoBotWarning") }}
+          </p>
+
           <div v-if="notifyMsg" class="success-msg">{{ notifyMsg }}</div>
           <div v-if="notifyError" class="error-msg">{{ notifyError }}</div>
 
           <div class="form-group">
             <label class="form-label">{{
-              t("settings.labelNotifyUsername")
+              t("settings.labelNotifyBotToken")
             }}</label>
             <input
-              v-model.trim="notifyForm.username"
+              v-model.trim="notifyForm.botToken"
               class="form-input"
-              :placeholder="t('settings.notifyUsernamePlaceholder')"
+              autocomplete="off"
+              :placeholder="
+                notifyBotTokenMasked || t('settings.notifyBotTokenPlaceholder')
+              "
             />
+            <p style="font-size: 12px; color: #888; margin: 4px 0 0">
+              {{ t("settings.notifyBotTokenHint") }}
+            </p>
+            <p
+              v-if="notifyBot.configured"
+              style="font-size: 12px; margin: 4px 0 0"
+              :style="{ color: notifyBot.ok ? '#2e9e5b' : '#c0392b' }"
+            >
+              <i
+                :class="
+                  notifyBot.ok
+                    ? 'fa-solid fa-circle-check'
+                    : 'fa-solid fa-circle-exclamation'
+                "
+              ></i>
+              {{
+                notifyBot.ok
+                  ? `${t("settings.notifyBotOk")}: @${notifyBot.username}`
+                  : notifyBot.error || t("settings.notifyBotBad")
+              }}
+            </p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">{{
+              t("settings.labelNotifyBotTarget")
+            }}</label>
+            <input
+              v-model.trim="notifyForm.botTarget"
+              class="form-input"
+              :placeholder="t('settings.notifyBotTargetPlaceholder')"
+            />
+            <p style="font-size: 12px; color: #888; margin: 4px 0 0">
+              {{ t("settings.notifyBotTargetHint") }}
+            </p>
+            <button
+              class="btn btn-ghost btn-sm"
+              style="margin-top: 6px"
+              :disabled="notifyChatsLoading"
+              @click="loadNotifyChats"
+            >
+              <i class="fa-solid fa-magnifying-glass"></i>
+              {{
+                notifyChatsLoading
+                  ? t("settings.notifyChatsLoading")
+                  : t("settings.notifyFindChatsBtn")
+              }}
+            </button>
+            <p
+              v-if="notifyChatsHint"
+              style="font-size: 12px; color: #888; margin: 6px 0 0"
+            >
+              {{ notifyChatsHint }}
+            </p>
+            <div v-if="notifyChats.length" style="margin-top: 6px">
+              <button
+                v-for="c in notifyChats"
+                :key="c.id"
+                class="btn btn-ghost btn-sm"
+                style="display: block; width: 100%; text-align: left"
+                @click="notifyForm.botTarget = String(c.id)"
+              >
+                {{ c.title }}
+                <span style="color: #888">— {{ c.id }} ({{ c.type }})</span>
+              </button>
+            </div>
           </div>
 
           <div class="form-group">
@@ -104,14 +183,366 @@
             </div>
           </div>
 
-          <button
-            class="btn btn-primary"
-            :disabled="notifySaving"
-            @click="saveNotify"
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button
+              class="btn btn-primary"
+              :disabled="notifySaving"
+              @click="saveNotify"
+            >
+              <i class="fa-solid fa-floppy-disk"></i>
+              {{ notifySaving ? t("common.saving") : t("settings.saveBtn") }}
+            </button>
+            <button
+              class="btn btn-ghost"
+              :disabled="notifyTesting || notifySaving"
+              @click="testNotifyBot"
+            >
+              <i class="fa-solid fa-paper-plane"></i>
+              {{
+                notifyTesting
+                  ? t("settings.notifyTesting")
+                  : t("settings.notifyTestBtn")
+              }}
+            </button>
+          </div>
+
+          <!-- Pre-bot sender: deprecated and slated for removal. Only used while no token
+               is set, and only for jobs whose account is authenticated. -->
+          <div
+            style="
+              border-top: 1px solid var(--border, #333);
+              margin-top: 16px;
+              padding-top: 12px;
+            "
           >
-            <i class="fa-solid fa-floppy-disk"></i>
-            {{ notifySaving ? t("common.saving") : t("settings.saveBtn") }}
-          </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              @click="notifyLegacyOpen = !notifyLegacyOpen"
+            >
+              <i
+                :class="
+                  notifyLegacyOpen
+                    ? 'fa-solid fa-chevron-down'
+                    : 'fa-solid fa-chevron-right'
+                "
+              ></i>
+              {{ t("settings.notifyLegacyTitle") }}
+              <span style="color: #c47f17; font-weight: 400">
+                ({{ t("settings.notifyDeprecatedTag") }})
+              </span>
+            </button>
+            <div v-if="notifyLegacyOpen" style="margin-top: 10px">
+              <p style="font-size: 12px; margin: 0 0 8px; color: #c47f17">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                {{ t("settings.notifyLegacyDeprecated") }}
+              </p>
+              <p style="font-size: 12px; color: #888; margin: 0 0 8px">
+                {{ t("settings.notifyLegacyHint") }}
+              </p>
+              <label class="form-label">{{
+                t("settings.labelNotifyUsername")
+              }}</label>
+              <input
+                v-model.trim="notifyForm.username"
+                class="form-input"
+                :placeholder="t('settings.notifyUsernamePlaceholder')"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cloudflare solver -->
+      <div class="card s-col-4">
+        <div class="card-body">
+          <div class="card-section-title">{{ t("settings.cfSolver.title") }}</div>
+          <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+            {{ t("settings.cfSolver.hint") }}
+          </p>
+          <div v-if="cfInstallMsg" class="success-msg">{{ cfInstallMsg }}</div>
+          <div v-if="cfInstallError" class="error-msg">{{ cfInstallError }}</div>
+          <p style="font-size: 12px; margin: 0 0 8px">
+            {{ t("settings.cfSolver.status") }}:
+            <strong :style="{ color: cfChromiumInstalled ? '#2e9e5b' : '#c47f17' }">
+              {{ cfChromiumInstalled ? t("settings.cfSolver.stateInstalled") : t("settings.cfSolver.stateNotInstalled") }}
+            </strong>
+            <!-- Only when the build list is unavailable (an older backend): otherwise every
+                 build is listed below, and repeating the preferred one here reads as a
+                 contradiction of the second entry -->
+            <template v-if="!cfBuilds.length">
+              <span v-if="cfChromiumVersion" style="color: #888"> — {{ cfChromiumVersion }}</span>
+              <span v-if="cfChromiumTier" style="color: #888">
+                ({{ cfChromiumTier === "keyed" ? t("settings.cfSolver.tierKeyed") : t("settings.cfSolver.tierFree") }})
+              </span>
+            </template>
+          </p>
+          <p
+            v-if="!cfBuilds.length && cfChromiumPath"
+            style="font-size: 11px; color: #888; margin: -6px 0 12px; word-break: break-all"
+          >
+            {{ cfChromiumPath }}
+          </p>
+          <!-- Both tiers can be installed at once and a job may run on either, so each is
+               listed with which one it is and when it gets used -->
+          <div v-if="cfBuilds.length" style="margin: 0 0 12px">
+            <div v-for="b in cfBuilds" :key="b.path" style="margin-bottom: 6px">
+              <span style="font-size: 12px">
+                <strong>{{
+                  b.tier === "keyed"
+                    ? t("settings.cfSolver.tierKeyed")
+                    : t("settings.cfSolver.tierFree")
+                }}</strong>
+                <span style="color: #888"> — CloakBrowser {{ b.version }}</span>
+                <span
+                  :style="`margin-left:6px;font-size:11px;color:${b.preferred ? '#2e9e5b' : '#888'}`"
+                >
+                  {{
+                    b.preferred
+                      ? t("settings.cfSolver.buildDefault")
+                      : t("settings.cfSolver.buildFallback")
+                  }}
+                </span>
+              </span>
+              <div style="font-size: 11px; color: #aaa; word-break: break-all">{{ b.path }}</div>
+            </div>
+          </div>
+          <p
+            v-if="cfChromiumTier === 'keyed' && !cfFreeInstalled"
+            style="font-size: 12px; margin: -6px 0 12px; color: #c47f17"
+          >
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            {{ t("settings.cfSolver.noFreeFallback") }}
+          </p>
+          <p v-if="cfKeyedPending" style="font-size: 12px; margin: -6px 0 12px; color: #c47f17">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            {{ t("settings.cfSolver.keyedPending") }}
+          </p>
+          <p v-if="cfChromiumInstalled && !cfFontsInstalled" style="font-size: 12px; margin: -6px 0 12px; color: #c47f17">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            {{ t("settings.cfSolver.fontsMissing") }}<span v-if="cfFontsMissing"> ({{ cfFontsMissing }})</span>
+          </p>
+          <div class="form-group" style="margin: 0 0 12px; max-width: 320px">
+            <label class="form-label">{{ t("settings.cfSolver.langLabel") }}</label>
+            <select v-model="cfBrowserLang" class="form-select" @change="saveCfBrowserLang">
+              <option value="">{{ t("settings.cfSolver.langFollowExit") }}</option>
+              <option v-for="l in CF_LOCALES" :key="l.id" :value="l.id">
+                {{ l.name }} ({{ l.id }})
+              </option>
+            </select>
+            <div style="font-size: 11px; color: #888; margin-top: 3px">
+              {{ t("settings.cfSolver.langHint") }}
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button
+              class="btn btn-primary"
+              :disabled="cfInstalling || cfTesting || cfSolverComplete"
+              @click="installCfSolver(false)"
+            >
+              <i class="fa-solid fa-download"></i>
+              {{ cfInstalling ? t("settings.cfSolver.installing") : t(cfInstallLabelKey) }}
+            </button>
+            <button
+              v-if="cfChromiumInstalled"
+              class="btn btn-ghost"
+              :disabled="cfInstalling || cfTesting"
+              @click="installCfSolver(true)"
+            >
+              <i class="fa-solid fa-rotate"></i>
+              {{ cfInstalling ? t("settings.cfSolver.installing") : t("settings.cfSolver.reinstallBtn") }}
+            </button>
+            <button
+              v-if="!cfFreeInstalled"
+              class="btn btn-ghost"
+              :disabled="cfInstalling || cfTesting"
+              @click="installCfSolver(false, 'free')"
+            >
+              <i class="fa-solid fa-download"></i>
+              {{ cfInstalling ? t("settings.cfSolver.installing") : t("settings.cfSolver.installFreeBtn") }}
+            </button>
+            <button
+              v-if="cfChromiumInstalled"
+              class="btn btn-ghost"
+              :disabled="cfInstalling || cfTesting"
+              @click="testCfSolver"
+            >
+              <i class="fa-solid fa-flask"></i>
+              {{ cfTesting ? t("settings.cfSolver.testing") : t("settings.cfSolver.testBtn") }}
+            </button>
+          </div>
+          <div v-if="cfChromiumInstalled" style="font-size: 11px; color: #888; margin-top: 6px">
+            {{ t("settings.cfSolver.reinstallHint") }}
+          </div>
+          <div v-if="!cfFreeInstalled" style="font-size: 11px; color: #888; margin-top: 6px">
+            {{ t("settings.cfSolver.installFreeHint") }}
+          </div>
+          <!-- Kept off the row above and styled quietly: it throws away a 200MB download
+               that everything else here depends on, so it should not read as a next step -->
+          <div
+            v-if="cfChromiumInstalled"
+            style="margin-top: 12px; padding-top: 10px; border-top: 1px solid #eee"
+          >
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+              <button
+                class="btn btn-ghost btn-sm cf-uninstall-btn"
+                :disabled="cfInstalling || cfTesting || cfUninstalling || cfStopping || cfClearingProfiles"
+                @click="stopCfBrowsers"
+              >
+                <i class="fa-solid fa-hand"></i>
+                {{ cfStopping ? t("settings.cfSolver.stopping") : t("settings.cfSolver.stopBtn") }}
+                <template v-if="cfBrowsersRunning > 0"> ({{ cfBrowsersRunning }})</template>
+              </button>
+              <button
+                class="btn btn-ghost btn-sm cf-uninstall-btn"
+                :disabled="cfInstalling || cfTesting || cfUninstalling || cfStopping || cfClearingProfiles"
+                @click="clearCfProfiles"
+              >
+                <i class="fa-solid fa-eraser"></i>
+                {{ cfClearingProfiles ? t("settings.cfSolver.clearingProfiles") : t("settings.cfSolver.clearProfilesBtn") }}
+                <template v-if="cfProfileCount > 0"> ({{ cfProfileCount }})</template>
+              </button>
+              <button
+                class="btn btn-ghost btn-sm cf-uninstall-btn"
+                :disabled="cfInstalling || cfTesting || cfUninstalling || cfStopping"
+                @click="confirmUninstallCf = true"
+              >
+                <i class="fa-solid fa-trash"></i>
+                {{ cfUninstalling ? t("settings.cfSolver.uninstalling") : t("settings.cfSolver.uninstallBtn") }}
+              </button>
+            </div>
+            <div style="font-size: 11px; color: #888; margin-top: 6px">
+              {{ t("settings.cfSolver.stopHint") }}
+              {{ t("settings.cfSolver.clearProfilesHint") }}
+              {{ t("settings.cfSolver.uninstallHint") }}
+            </div>
+          </div>
+          <div v-if="cfTestWarnings.length" class="error-msg" style="margin-top: 8px">
+            <div v-for="w in cfTestWarnings" :key="w">• {{ w }}</div>
+          </div>
+          <div
+            v-if="cfTestNotes.length"
+            style="font-size: 11px; color: #888; margin-top: 8px"
+          >
+            <div v-for="n in cfTestNotes" :key="n">• {{ n }}</div>
+          </div>
+          <pre
+            v-if="cfTestReport"
+            style="font-size: 11px; margin-top: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap"
+            >{{ cfTestReport }}</pre
+          >
+
+          <!-- CloakBrowser licence keys: one free key per GitHub account, one browser each -->
+          <div style="border-top: 1px solid var(--border, #333); margin-top: 16px; padding-top: 12px">
+            <button class="btn btn-ghost btn-sm" @click="cfKeysOpen = !cfKeysOpen">
+              <i :class="cfKeysOpen ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"></i>
+              {{ t("settings.cfKeys.title") }}
+              <span style="color: #888; font-weight: 400">({{ cfKeys.length }})</span>
+            </button>
+            <div v-if="cfKeysOpen" style="margin-top: 10px">
+              <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+                {{ t("settings.cfKeys.hint") }}
+              </p>
+              <div v-if="cfKeysMsg" class="success-msg">{{ cfKeysMsg }}</div>
+              <div v-if="cfKeysError" class="error-msg">{{ cfKeysError }}</div>
+              <p v-if="cfKeys.length" style="font-size: 11px; color: #888; margin: 0 0 8px">
+                {{ t("settings.cfKeys.inUse") }}: {{ cfKeysInUse }} / {{ cfKeys.length }}
+              </p>
+              <div
+                v-for="(k, i) in cfKeys"
+                :key="i"
+                style="display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px"
+              >
+                <input
+                  v-model="k.label"
+                  class="form-input"
+                  style="flex: 0 0 32%"
+                  :placeholder="t('settings.cfKeys.labelPlaceholder')"
+                />
+                <div style="flex: 1">
+                  <input
+                    v-model="k.key"
+                    class="form-input"
+                    :placeholder="t('settings.cfKeys.keyPlaceholder')"
+                  />
+                  <div v-if="cfKeyChecks[k.label]" style="font-size: 11px; margin-top: 3px"
+                    :style="{ color: cfKeyChecks[k.label].valid ? '#2e9e5b' : '#c0392b' }">
+                    {{ cfKeyChecks[k.label].valid
+                      ? `${t("settings.cfKeys.checkValid")} — ${cfKeyChecks[k.label].plan || "free"}`
+                      : cfKeyChecks[k.label].error || t("settings.cfKeys.checkInvalid") }}
+                  </div>
+                </div>
+                <button class="btn btn-ghost btn-sm" @click="cfKeys.splice(i, 1)">
+                  <i class="fa-solid fa-trash"></i>
+                </button>
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap">
+                <button class="btn btn-ghost" @click="cfKeys.push({ label: '', key: '' })">
+                  <i class="fa-solid fa-plus"></i>
+                  {{ t("settings.cfKeys.addBtn") }}
+                </button>
+                <button class="btn btn-primary" :disabled="cfKeysSaving" @click="saveCfKeys">
+                  <i class="fa-solid fa-floppy-disk"></i>
+                  {{ cfKeysSaving ? t("common.saving") : t("common.save") }}
+                </button>
+                <button
+                  v-if="cfKeys.length"
+                  class="btn btn-ghost"
+                  :disabled="cfKeysSaving || cfKeysChecking"
+                  @click="checkCfKeys"
+                >
+                  <i class="fa-solid fa-circle-check"></i>
+                  {{ cfKeysChecking ? t("settings.cfKeys.checking") : t("settings.cfKeys.checkBtn") }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Browser timings and limits: defaults are what the solver ships with -->
+          <div style="border-top: 1px solid var(--border, #333); margin-top: 16px; padding-top: 12px">
+            <button class="btn btn-ghost btn-sm" @click="cfTuningOpen = !cfTuningOpen">
+              <i :class="cfTuningOpen ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"></i>
+              {{ t("settings.cfTuning.title") }}
+            </button>
+            <div v-if="cfTuningOpen" style="margin-top: 10px">
+              <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+                {{ t("settings.cfTuning.hint") }}
+              </p>
+              <div v-if="cfTuningMsg" class="success-msg">{{ cfTuningMsg }}</div>
+              <div v-if="cfTuningError" class="error-msg">{{ cfTuningError }}</div>
+              <div v-for="f in cfTuningFields" :key="f" class="form-group">
+                <label class="form-label">
+                  {{ t(`settings.cfTuning.fields.${f}.label`) }}
+                  <span style="font-weight: 400; color: #888">
+                    ({{ t("settings.cfTuning.default") }}: {{ cfTuningDefaults[f] }})
+                  </span>
+                </label>
+                <input
+                  v-model.number="cfTuningForm[f]"
+                  class="form-input"
+                  type="number"
+                  :min="cfTuningLimits[f]?.min"
+                  :max="cfTuningLimits[f]?.max"
+                  :placeholder="String(cfTuningDefaults[f])"
+                />
+                <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+                  {{ t(`settings.cfTuning.fields.${f}.hint`) }}
+                  <span v-if="cfTuningLimits[f]">
+                    {{ t("settings.cfTuning.range") }}: {{ cfTuningLimits[f].min }}–{{ cfTuningLimits[f].max }}
+                  </span>
+                </div>
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 12px">
+                <button class="btn btn-primary" :disabled="cfTuningSaving" @click="saveCfTuning">
+                  <i class="fa-solid fa-floppy-disk"></i>
+                  {{ cfTuningSaving ? t("common.saving") : t("common.save") }}
+                </button>
+                <button class="btn btn-ghost" :disabled="cfTuningSaving" @click="resetCfTuning">
+                  <i class="fa-solid fa-rotate-left"></i>
+                  {{ t("settings.cfTuning.resetBtn") }}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -170,6 +601,21 @@
           >
             <i class="fa-solid fa-shield-halved"></i>
             {{ credSaving ? t("common.saving") : t("settings.updateBtn") }}
+          </button>
+
+          <div class="settings-subsection" style="margin-top: 22px">
+            {{ t("settings.sessionsSection") }}
+          </div>
+          <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+            {{ t("settings.sessionsHint") }}
+          </p>
+          <button
+            class="btn btn-secondary"
+            :disabled="revoking"
+            @click="signOutEverywhere"
+          >
+            <i class="fa-solid fa-right-from-bracket"></i>
+            {{ revoking ? t("common.saving") : t("settings.revokeSessionsBtn") }}
           </button>
         </div>
       </div>
@@ -258,6 +704,24 @@
                   : t("settings.defaultTgApiClear")
               }}
             </button>
+          </div>
+
+          <!-- Schedule list placement -->
+          <div class="settings-subsection" style="margin-top: 28px">
+            {{ t("settings.schedulePageSection") }}
+          </div>
+          <div class="form-group">
+            <label class="form-check">
+              <input
+                type="checkbox"
+                v-model="scheduleSeparatePageSetting"
+                @change="saveSchedulePage"
+              />
+              <span>{{ t("settings.schedulePageToggle") }}</span>
+            </label>
+            <p style="font-size: 12px; color: #888; margin: 4px 0 0 24px">
+              {{ t("settings.schedulePageHint") }}
+            </p>
           </div>
 
           <!-- TG account display -->
@@ -498,6 +962,109 @@
           <p style="font-size: 11px; color: #888; margin: 4px 0 0">
             {{ t("settings.proxyUrlHint") }}
           </p>
+
+          <!-- Import from a proxy provider -->
+          <div class="proxy-edit-panel" style="margin-top: 12px">
+            <div class="card-section-title" style="font-size: 12px">
+              {{ t("settings.providersSection") }}
+            </div>
+            <p style="font-size: 11px; color: #888; margin: 0 0 8px">
+              {{ t("settings.providersHint") }}
+            </p>
+
+            <div
+              v-for="(prov, i) in providers"
+              :key="prov.id"
+              style="border-top: 1px solid #eee; padding-top: 8px; margin-top: 8px"
+            >
+              <div class="proxy-row">
+                <input
+                  v-model.trim="prov.name"
+                  class="form-input"
+                  style="flex: 0 0 140px"
+                  :placeholder="t('settings.providerName')"
+                />
+                <select v-model="prov.type" class="form-input" style="flex: 0 0 130px">
+                  <option value="webshare">Webshare</option>
+                  <option value="list">{{ t("settings.providerTypeList") }}</option>
+                </select>
+                <label class="form-checkbox-label" style="flex: 0 0 auto">
+                  <input type="checkbox" v-model="prov.enabled" />
+                  {{ t("settings.providerEnabled") }}
+                </label>
+                <button
+                  class="btn btn-ghost btn-sm btn-icon"
+                  :disabled="providersSyncing"
+                  :title="t('settings.providerSyncOne')"
+                  @click="syncProviders(prov.id)"
+                >
+                  <i class="fa-solid fa-rotate"></i>
+                </button>
+                <button
+                  class="btn btn-danger btn-sm btn-icon"
+                  :title="t('settings.providerDelete')"
+                  @click="providers.splice(i, 1)"
+                >
+                  <i class="fa-solid fa-trash"></i>
+                </button>
+              </div>
+              <div class="proxy-row" style="margin-top: 6px">
+                <input
+                  v-if="prov.type === 'list'"
+                  v-model.trim="prov.url"
+                  class="form-input"
+                  :placeholder="t('settings.providerUrlPlaceholder')"
+                />
+                <select
+                  v-if="prov.type === 'list'"
+                  v-model="prov.scheme"
+                  class="form-input"
+                  style="flex: 0 0 110px"
+                >
+                  <option value="http">http</option>
+                  <option value="socks5">socks5</option>
+                </select>
+                <input
+                  v-model.trim="prov.apiKey"
+                  class="form-input"
+                  type="password"
+                  autocomplete="off"
+                  :placeholder="
+                    prov.hasKey
+                      ? t('settings.providerKeyStored')
+                      : prov.type === 'webshare'
+                        ? t('settings.providerKeyPlaceholder')
+                        : t('settings.providerKeyOptional')
+                  "
+                />
+              </div>
+            </div>
+
+            <div class="proxy-row" style="margin-top: 10px">
+              <button class="btn btn-ghost btn-sm" @click="addProvider">
+                <i class="fa-solid fa-plus"></i> {{ t("settings.providerAdd") }}
+              </button>
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="providersSaving || !providers.length"
+                @click="saveProviders"
+              >
+                <i class="fa-solid fa-floppy-disk"></i>
+                {{ providersSaving ? t("common.saving") : t("settings.providerSave") }}
+              </button>
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="providersSyncing || !providers.length"
+                @click="syncProviders()"
+              >
+                <i class="fa-solid fa-rotate"></i>
+                {{ providersSyncing ? t("settings.providerSyncing") : t("settings.providerSyncAll") }}
+              </button>
+            </div>
+
+            <div v-if="providersMsg" class="success-msg" style="margin-top: 8px">{{ providersMsg }}</div>
+            <div v-if="providersErrorMsg" class="error-msg" style="margin-top: 8px">{{ providersErrorMsg }}</div>
+          </div>
 
           <button
             class="btn btn-primary"
@@ -1360,23 +1927,56 @@
         </div>
       </div>
     </div>
+
+    <!-- Removing every downloaded build: ~200MB each comes back only by downloading again -->
+    <div v-if="confirmUninstallCf" class="modal-backdrop">
+      <div class="modal" style="width: 420px">
+        <h3 class="modal-title">{{ t("settings.cfSolver.uninstallBtn") }}</h3>
+        <div class="modal-body">
+          <p>{{ t("settings.cfSolver.uninstallConfirm") }}</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" @click="confirmUninstallCf = false">
+            <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+          </button>
+          <button class="btn btn-danger" @click="uninstallCfSolver">
+            <i class="fa-solid fa-trash"></i> {{ t("settings.cfSolver.uninstallBtn") }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from "vue";
-import { settingsApi, authApi, dataApi, aiSuppliersApi, statusApi } from "../api/client";
+import { ref, reactive, computed, onMounted, onUnmounted } from "vue";
+import {
+  settingsApi,
+  authApi,
+  dataApi,
+  aiSuppliersApi,
+  statusApi,
+  type CfBrowserTest,
+  type CfBrowserTestRun,
+} from "../api/client";
 import type {
   MemoryReport,
   ExportPayload,
   EncryptedEnvelope,
+  Settings,
   UAPreset,
   AiSupplier,
   Proxy,
+  ProxyProvider,
   TgAppClient,
+  CfKeyView,
+  CfKeyCheck,
+  NotifyBotInfo,
+  NotifyBotChat,
 } from "../api/client";
 import { t } from "../i18n";
 import { setAccountDisplayWithTgName } from "../composables/accountDisplay";
+import { setSchedulePageSeparate } from "../composables/schedulePage";
 
 const timezones = [
   "Australia/Sydney",
@@ -1440,10 +2040,468 @@ const supplierSaving = ref(false);
 const supplierError = ref("");
 const newModelInputs = ref<Record<number, string>>({});
 
-const notifyForm = reactive({ username: "", events: ["failed"] as string[] });
+const notifyForm = reactive({
+  botToken: "",
+  botTarget: "",
+  username: "",
+  events: ["failed"] as string[],
+});
 const notifySaving = ref(false);
 const notifyMsg = ref("");
 const notifyError = ref("");
+const notifyTesting = ref(false);
+// The stored token is never sent back in full; the mask stands in as the placeholder, and
+// leaving the field blank keeps whatever is stored.
+const notifyBotTokenMasked = ref("");
+const notifyBot = ref<NotifyBotInfo>({ configured: false });
+const notifyChats = ref<NotifyBotChat[]>([]);
+const notifyChatsLoading = ref(false);
+const notifyChatsHint = ref("");
+const notifyLegacyOpen = ref(false);
+
+// Cloudflare "I am not a bot" solver: an optional headless browser installed on
+// demand into the data dir (keeps the image small).
+const cfChromiumInstalled = ref(false);
+const cfChromiumVersion = ref("");
+// Which build is on disk ("keyed" or "free"), and whether a stored licence key unlocks one
+// that has not been downloaded yet -- downloads are deliberate, never automatic.
+const cfChromiumTier = ref("");
+const cfChromiumPath = ref("");
+const cfKeyedPending = ref(false);
+// Whether the unlicensed build is on disk as well: it is what a launch with no licence
+// seat falls back to, and the keyed build cannot start without one.
+const cfFreeInstalled = ref(false);
+const cfFontsInstalled = ref(false);
+const cfFontsMissing = ref("");
+// The fonts live in the data dir, not the image, so a browser installed by an older
+// version can be complete while they are still missing. Both have to be there before
+// the solver is fully set up.
+const cfSolverComplete = computed(
+  () => cfChromiumInstalled.value && cfFontsInstalled.value && !cfKeyedPending.value,
+);
+// The one install button fetches whatever is missing, and the server skips a browser that
+// is already there. Saying "install browser" when only the fonts are outstanding leaves no
+// button that looks like it installs fonts, so the label follows what will actually download.
+const cfInstallLabelKey = computed(() => {
+  if (cfKeyedPending.value) return "settings.cfSolver.installKeyedBtn";
+  if (cfChromiumInstalled.value && !cfFontsInstalled.value)
+    return "settings.cfSolver.installFontsBtn";
+  return "settings.cfSolver.installBtn";
+});
+const cfInstalling = ref(false);
+const cfInstallMsg = ref("");
+const cfInstallError = ref("");
+const cfTesting = ref(false);
+const cfTestReport = ref("");
+const cfTestWarnings = ref<string[]>([]);
+const cfTestNotes = ref<string[]>([]);
+
+// CloakBrowser licence keys. The server only ever sends them masked; a masked value sent
+// back unchanged means "keep the stored key", so a label can be edited without pasting the
+// key again.
+const cfKeysOpen = ref(false);
+const cfKeys = ref<Array<{ label: string; key: string }>>([]);
+const cfKeysInUse = ref(0);
+const cfKeysSaving = ref(false);
+const cfKeysChecking = ref(false);
+const cfKeysMsg = ref("");
+const cfKeysError = ref("");
+const cfKeyChecks = ref<Record<string, CfKeyCheck>>({});
+
+function loadCfKeys(s: Settings) {
+  try {
+    const parsed = JSON.parse(s.cf_cloak_keys_masked ?? "[]") as CfKeyView[];
+    cfKeys.value = parsed.map((k) => ({ label: k.label, key: k.masked }));
+  } catch {
+    cfKeys.value = [];
+  }
+  cfKeysInUse.value = Number(s.cf_cloak_keys_in_use ?? 0) || 0;
+}
+
+async function saveCfKeys() {
+  cfKeysSaving.value = true;
+  cfKeysMsg.value = "";
+  cfKeysError.value = "";
+  try {
+    const res = await settingsApi.saveCfKeys(cfKeys.value.filter((k) => k.key.trim()));
+    cfKeys.value = res.keys.map((k) => ({ label: k.label, key: k.masked }));
+    cfKeysInUse.value = res.inUse;
+    cfKeyChecks.value = {};
+    // Adding the first key means the build it unlocks is now outstanding, so the install
+    // panel above has to start offering it
+    await refreshCfBuildState();
+    cfKeysMsg.value = t("settings.saved");
+  } catch (e: any) {
+    cfKeysError.value = e?.response?.data?.error ?? e?.message ?? t("settings.cfKeys.saveFailed");
+  } finally {
+    cfKeysSaving.value = false;
+  }
+}
+
+/** Re-reads which build is installed and whether a key has one outstanding. */
+async function refreshCfBuildState() {
+  try {
+    const fresh = await settingsApi.get();
+    cfChromiumTier.value = fresh.cf_chromium_tier ?? "";
+    cfChromiumPath.value = fresh.cf_chromium_path ?? "";
+    cfKeyedPending.value = fresh.cf_chromium_keyed_pending === "true";
+    cfFreeInstalled.value = fresh.cf_chromium_free_installed === "true";
+    cfBrowsersRunning.value = Number(fresh.cf_browsers_running ?? 0);
+    cfBuilds.value = parseCfBuilds(fresh.cf_chromium_builds);
+    cfProfileCount.value = Number(fresh.cf_profile_count ?? 0);
+    cfChromiumVersion.value = fresh.cf_chromium_version ?? "";
+  } catch {
+    /* the panel keeps what it has */
+  }
+}
+
+async function checkCfKeys() {
+  cfKeysChecking.value = true;
+  cfKeysMsg.value = "";
+  cfKeysError.value = "";
+  try {
+    const results = await settingsApi.checkCfKeys();
+    cfKeyChecks.value = Object.fromEntries(results.map((r) => [r.label, r]));
+  } catch (e: any) {
+    cfKeysError.value = e?.response?.data?.error ?? e?.message ?? t("settings.cfKeys.checkFailed");
+  } finally {
+    cfKeysChecking.value = false;
+  }
+}
+
+// Browser timings. The server sends the values in force, the shipped defaults and the
+// range each is held to, so this form needs no copy of any of them.
+type CfLimit = { min: number; max: number };
+const cfTuningOpen = ref(false);
+const cfTuningSaving = ref(false);
+const cfTuningMsg = ref("");
+const cfTuningError = ref("");
+const cfTuningForm = ref<Record<string, number>>({});
+const cfTuningDefaults = ref<Record<string, number>>({});
+const cfTuningLimits = ref<Record<string, CfLimit>>({});
+const cfTuningFields = computed(() => Object.keys(cfTuningDefaults.value));
+
+function loadCfTuning(s: Settings) {
+  const parse = <T,>(raw: string | undefined, fallback: T): T => {
+    try {
+      return raw ? (JSON.parse(raw) as T) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+  cfTuningDefaults.value = parse(s.cf_tuning_defaults, {} as Record<string, number>);
+  cfTuningLimits.value = parse(s.cf_tuning_limits, {} as Record<string, CfLimit>);
+  cfTuningForm.value = { ...cfTuningDefaults.value, ...parse(s.cf_tuning, {} as Record<string, number>) };
+}
+
+async function saveCfTuning() {
+  cfTuningMsg.value = "";
+  cfTuningError.value = "";
+  cfTuningSaving.value = true;
+  try {
+    // The server clamps and stores what it will actually use, then hands it back
+    const saved = await settingsApi.update({ cf_tuning: JSON.stringify(cfTuningForm.value) });
+    loadCfTuning(saved);
+    cfTuningMsg.value = t("settings.cfTuning.saved");
+  } catch (e: any) {
+    cfTuningError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
+  } finally {
+    cfTuningSaving.value = false;
+  }
+}
+
+function resetCfTuning() {
+  cfTuningForm.value = { ...cfTuningDefaults.value };
+  cfTuningMsg.value = t("settings.cfTuning.resetHint");
+}
+
+/**
+ * Locales offered for the browser. Not a full list: these are the languages Mini Apps in
+ * this space actually render in, and a name a step can be written against.
+ */
+const CF_LOCALES = [
+  { id: "zh-CN", name: "简体中文" },
+  { id: "zh-TW", name: "繁體中文" },
+  { id: "en-US", name: "English (US)" },
+  { id: "en-GB", name: "English (UK)" },
+  { id: "en-AU", name: "English (AU)" },
+  { id: "ru-RU", name: "Русский" },
+  { id: "ja-JP", name: "日本語" },
+  { id: "ko-KR", name: "한국어" },
+  { id: "vi-VN", name: "Tiếng Việt" },
+  { id: "th-TH", name: "ไทย" },
+  { id: "id-ID", name: "Bahasa Indonesia" },
+  { id: "pt-BR", name: "Português (BR)" },
+  { id: "es-ES", name: "Español" },
+  { id: "de-DE", name: "Deutsch" },
+  { id: "fr-FR", name: "Français" },
+  { id: "tr-TR", name: "Türkçe" },
+];
+
+const cfBrowserLang = ref("");
+
+/** Saved as it is chosen: one select is not worth its own save button. */
+async function saveCfBrowserLang() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  try {
+    await settingsApi.update({ cf_browser_lang: cfBrowserLang.value });
+    cfInstallMsg.value = t("settings.saved");
+  } catch (e: any) {
+    cfInstallError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
+  }
+}
+
+const cfUninstalling = ref(false);
+const cfStopping = ref(false);
+const cfClearingProfiles = ref(false);
+let cfTestPollTimer: ReturnType<typeof setTimeout> | null = null;
+const cfProfileCount = ref(0);
+const cfBrowsersRunning = ref(0);
+type CfBuild = { tier: "keyed" | "free"; version: string; path: string; preferred: boolean };
+const cfBuilds = ref<CfBuild[]>([]);
+
+/** The installed-build list arrives as JSON; a malformed or absent one just means none. */
+function parseCfBuilds(raw?: string): CfBuild[] {
+  try {
+    const parsed = JSON.parse(raw ?? "[]");
+    return Array.isArray(parsed) ? (parsed as CfBuild[]) : [];
+  } catch {
+    return [];
+  }
+}
+const confirmUninstallCf = ref(false);
+
+/** Closes every open browser. Whatever job was using one fails, which is the point. */
+async function stopCfBrowsers() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfStopping.value = true;
+  try {
+    const res = await settingsApi.stopCfBrowsers();
+    cfInstallMsg.value = t("settings.cfSolver.stopped").replace("{n}", String(res.stopped));
+    await refreshCfBuildState();
+  } catch (e: any) {
+    cfInstallError.value =
+      e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.stopFailed");
+  } finally {
+    cfStopping.value = false;
+  }
+}
+
+/**
+ * Deletes the per-exit profiles. Cookies and cache go; the browser identity does not, since
+ * the fingerprint comes from the exit rather than the profile.
+ */
+async function clearCfProfiles() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfClearingProfiles.value = true;
+  try {
+    const res = await settingsApi.clearCfProfiles();
+    if (res.ok) {
+      cfInstallMsg.value = t("settings.cfSolver.profilesCleared").replace(
+        "{n}",
+        String(res.removed ?? 0),
+      );
+      await refreshCfBuildState();
+    } else {
+      cfInstallError.value = res.message ?? t("settings.cfSolver.clearProfilesFailed");
+    }
+  } catch (e: any) {
+    cfInstallError.value =
+      e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.clearProfilesFailed");
+  } finally {
+    cfClearingProfiles.value = false;
+  }
+}
+
+/** Deletes every downloaded build. The solver has nothing to launch until one is back. */
+async function uninstallCfSolver() {
+  confirmUninstallCf.value = false;
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfUninstalling.value = true;
+  try {
+    const res = await settingsApi.uninstallCfSolver();
+    if (res.ok) {
+      cfChromiumInstalled.value = false;
+      cfChromiumVersion.value = "";
+      cfChromiumTier.value = "";
+      cfChromiumPath.value = "";
+      cfFreeInstalled.value = false;
+      cfBuilds.value = [];
+      cfTestReport.value = "";
+      cfTestWarnings.value = [];
+      cfTestNotes.value = [];
+      await refreshCfBuildState();
+      cfInstallMsg.value = res.removed?.length
+        ? `${t("settings.cfSolver.uninstalled")} — ${res.removed.join(", ")}`
+        : t("settings.cfSolver.uninstalled");
+    } else {
+      cfInstallError.value = res.message ?? t("settings.cfSolver.uninstallFailed");
+    }
+  } catch (e: any) {
+    cfInstallError.value =
+      e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.uninstallFailed");
+  } finally {
+    cfUninstalling.value = false;
+  }
+}
+
+/**
+ * `force` downloads the browser again over an existing one, updating it. `tier: "free"`
+ * fetches the unlicensed build specifically -- a separate download that sits beside the
+ * keyed one, so a launch that cannot take a licence seat still has something to run.
+ */
+async function installCfSolver(force = false, tier?: "free") {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfInstalling.value = true;
+  try {
+    const res = await settingsApi.installCfSolver(force, tier);
+    if (res.ok) {
+      cfChromiumInstalled.value = true;
+      cfChromiumVersion.value = res.version ?? "";
+      cfFontsInstalled.value = res.fontsInstalled === true;
+      if (res.fontsInstalled) cfFontsMissing.value = "";
+      await refreshCfBuildState();
+      cfInstallMsg.value = res.version
+        ? `${t("settings.cfSolver.installed")} — ${res.version}`
+        : t("settings.cfSolver.installed");
+      // The browser is usable without them, so a font failure is a warning beside the
+      // success rather than an error in place of it.
+      if (!res.fontsInstalled) cfInstallError.value = t("settings.cfSolver.fontsFailed");
+    } else {
+      cfInstallError.value = res.message || res.output || t("settings.cfSolver.failed");
+    }
+  } catch (e: any) {
+    cfInstallError.value = e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.failed");
+  } finally {
+    cfInstalling.value = false;
+  }
+}
+
+// Launches the browser and reports what the page sees of itself, so one install can be
+// compared against another when a challenge passes in one place and not the other.
+/** Renders whatever the run has produced so far, so results appear build by build. */
+function showCfTestRun(run: CfBrowserTestRun) {
+  const builds = run.builds ?? [];
+  const name = (b: CfBrowserTest) =>
+    b.tier === "free"
+      ? t("settings.cfSolver.tierFree")
+      : b.tier === "keyed"
+        ? t("settings.cfSolver.tierKeyed")
+        : t("settings.cfSolver.testBtn");
+  const label = (b: CfBrowserTest, text: string) =>
+    builds.length > 1 ? `[${name(b)}] ${text}` : text;
+
+  cfTestWarnings.value = builds.flatMap((b) => (b.warnings ?? []).map((w) => label(b, w)));
+  cfTestNotes.value = builds.flatMap((b) => (b.notes ?? []).map((n) => label(b, n)));
+  cfTestReport.value = builds
+    .map((b) =>
+      JSON.stringify(
+        {
+          build: name(b),
+          ok: b.ok,
+          version: b.version,
+          executable: b.executable,
+          exitCountry: b.exitCountry,
+          ...(b.error ? { error: b.error } : {}),
+          ...b.env,
+        },
+        null,
+        2,
+      ),
+    )
+    .join("\n\n");
+
+  // Nothing conclusive to say until the last build is in
+  if (run.running) return;
+
+  if (run.error && !builds.length) {
+    cfInstallError.value = run.error;
+    return;
+  }
+  const failed = builds.filter((b) => !b.ok);
+  const passed = builds.filter((b) => b.ok);
+  if (failed.length) {
+    cfInstallError.value = failed
+      .map((b) =>
+        builds.length > 1
+          ? `${name(b)}: ${b.error || t("settings.cfSolver.testFailed")}`
+          : b.error || t("settings.cfSolver.testFailed"),
+      )
+      .join(" | ");
+    // A build that passed is still worth saying so, when another did not
+    if (passed.length) {
+      cfInstallMsg.value = `${t("settings.cfSolver.testPassed")} — ${passed.map(name).join(", ")}`;
+    }
+  } else if (builds.length) {
+    cfInstallMsg.value =
+      builds.length > 1
+        ? `${t("settings.cfSolver.testPassed")} — ${builds.map(name).join(", ")}`
+        : t("settings.cfSolver.testPassed");
+  }
+}
+
+// Leaving the page should not leave a timer behind polling for a test nobody is watching
+onUnmounted(() => stopCfTestPoll());
+
+function stopCfTestPoll() {
+  if (cfTestPollTimer) {
+    clearTimeout(cfTestPollTimer);
+    cfTestPollTimer = null;
+  }
+}
+
+async function pollCfTest() {
+  stopCfTestPoll();
+  try {
+    const run = await settingsApi.cfSolverTestStatus();
+    showCfTestRun(run);
+    if (run.running) {
+      cfTestPollTimer = setTimeout(pollCfTest, 2000);
+    } else {
+      cfTesting.value = false;
+    }
+  } catch {
+    // A blip on the way to the panel is not the test failing; keep watching, slower
+    cfTestPollTimer = setTimeout(pollCfTest, 4000);
+  }
+}
+
+/**
+ * Starts the test and follows it. Each build means launching a browser and loading a real
+ * page, which together outlast what a proxy will hold a request open for, so the run
+ * happens server-side and this polls for it.
+ */
+async function testCfSolver() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfTestReport.value = "";
+  cfTestWarnings.value = [];
+  cfTestNotes.value = [];
+  cfTesting.value = true;
+  try {
+    const run = await settingsApi.testCfSolver();
+    showCfTestRun(run);
+    if (run.running) {
+      cfTestPollTimer = setTimeout(pollCfTest, 2000);
+    } else {
+      cfTesting.value = false;
+    }
+  } catch (e: any) {
+    // A test already running is not an error: follow that one instead
+    if (e?.response?.status === 409) {
+      cfTestPollTimer = setTimeout(pollCfTest, 500);
+      return;
+    }
+    cfInstallError.value =
+      e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.testFailed");
+    cfTesting.value = false;
+  }
+}
 
 const uaPresets = ref<UAPreset[]>([]);
 const newPresetName = ref("");
@@ -1456,6 +2514,11 @@ const editingProxyId = ref<string | null>(null);
 const proxyEditTesting = ref(false);
 const proxiesMsg = ref("");
 const proxiesError = ref("");
+const providers = ref<ProxyProvider[]>([]);
+const providersSaving = ref(false);
+const providersSyncing = ref(false);
+const providersMsg = ref("");
+const providersErrorMsg = ref("");
 
 type ProxyForm = {
   protocol: "socks5" | "socks4";
@@ -1645,6 +2708,7 @@ const defaultTgApiError = ref("");
 
 // ── TG account display ─────────────────────────────────────────────────────────
 const accountDisplayWithTgName = ref(false);
+const scheduleSeparatePageSetting = ref(false);
 
 async function saveDefaultTgApi() {
   defaultTgApiMsg.value = "";
@@ -1704,6 +2768,7 @@ function toggleNotifyEvent(value: string) {
 
 const cred = reactive({ username: "", newPassword: "", currentPassword: "" });
 const credSaving = ref(false);
+const revoking = ref(false);
 const credMsg = ref("");
 const credError = ref("");
 
@@ -1738,6 +2803,7 @@ async function loadMemory() {
 
 onMounted(async () => {
   loadMemory();
+  await loadProviders();
   try {
     const s = await settingsApi.get();
     form.default_timezone = s.default_timezone;
@@ -1770,18 +2836,36 @@ onMounted(async () => {
     defaultTgApiId.value = Number(s.default_tg_api_id) || 0;
     defaultTgApiHashMasked.value = s.default_tg_api_hash ?? "";
     accountDisplayWithTgName.value = s.account_display_with_tg_name === "true";
+    scheduleSeparatePageSetting.value = s.schedule_separate_page === "true";
     form.default_play_duration = Number(s.default_play_duration ?? 300);
     form.default_device_name = s.default_device_name ?? "Mac";
     form.ai_model = s.ai_model ?? "";
     form.ai_default_model_id = s.ai_default_model_id ?? "";
     form.ai_fallback_enabled = s.ai_fallback_enabled !== "false";
+    cfChromiumInstalled.value = s.cf_chromium_installed === "true";
+    cfChromiumVersion.value = s.cf_chromium_version ?? "";
+    cfChromiumTier.value = s.cf_chromium_tier ?? "";
+    cfFreeInstalled.value = s.cf_chromium_free_installed === "true";
+    cfBrowsersRunning.value = Number(s.cf_browsers_running ?? 0);
+    cfBuilds.value = parseCfBuilds(s.cf_chromium_builds);
+    cfProfileCount.value = Number(s.cf_profile_count ?? 0);
+    cfBrowserLang.value = s.cf_browser_lang ?? "";
+    cfChromiumPath.value = s.cf_chromium_path ?? "";
+    cfKeyedPending.value = s.cf_chromium_keyed_pending === "true";
+    cfFontsInstalled.value = s.cf_fonts_installed === "true";
+    cfFontsMissing.value = s.cf_fonts_missing ?? "";
+    loadCfKeys(s);
+    loadCfTuning(s);
     notifyForm.username = s.notify_tg_username ?? "";
+    notifyForm.botTarget = s.notify_bot_target ?? "";
+    notifyBotTokenMasked.value = s.notify_bot_token_masked ?? "";
     try {
       if (s.notify_tg_events)
         notifyForm.events = JSON.parse(s.notify_tg_events);
     } catch {
       /* ignore */
     }
+    void loadNotifyBot(s.notify_bot_configured === "true");
   } catch {
     /* ignore */
   }
@@ -1941,6 +3025,77 @@ async function saveProxies() {
   }
 }
 
+// Proxy providers: configured sellers whose current list can be pulled in. Keys are
+// never sent back by the server, so a blank key field means "leave it as it is".
+function addProvider() {
+  providers.value.push({
+    // Timestamp-based so a new row is stable before the first save
+    id: `p${Date.now().toString(36)}`,
+    name: "Webshare",
+    type: "webshare",
+    scheme: "http",
+    enabled: true,
+    apiKey: "",
+  });
+}
+
+async function loadProviders() {
+  try {
+    providers.value = await settingsApi.getProxyProviders();
+  } catch {
+    providers.value = [];
+  }
+}
+
+async function saveProviders() {
+  providersMsg.value = "";
+  providersErrorMsg.value = "";
+  providersSaving.value = true;
+  try {
+    providers.value = await settingsApi.saveProxyProviders(providers.value);
+    providersMsg.value = t("settings.saved");
+  } catch (err: any) {
+    providersErrorMsg.value = err.response?.data?.error ?? t("settings.saveFailed");
+  } finally {
+    providersSaving.value = false;
+  }
+}
+
+async function syncProviders(providerId?: string) {
+  providersMsg.value = "";
+  providersErrorMsg.value = "";
+  providersSyncing.value = true;
+  try {
+    // Save first, so a key or URL just typed in is the one used
+    providers.value = await settingsApi.saveProxyProviders(providers.value);
+    const res = await settingsApi.syncProxyProviders(providerId);
+    if (!res.ok) {
+      providersErrorMsg.value = res.error ?? t("settings.providerSyncFailed");
+      return;
+    }
+    providersMsg.value = t("settings.providerSynced")
+      .replace("{added}", String(res.added ?? 0))
+      .replace("{removed}", String(res.removed ?? 0))
+      .replace("{total}", String(res.total ?? 0));
+    const failed = (res.providers ?? []).filter((p) => !p.ok);
+    if (failed.length) {
+      providersErrorMsg.value = failed.map((p) => `${p.name}: ${p.error}`).join("; ");
+    }
+    // The server rewrote the proxy list, so refresh what is on screen
+    const fresh = await settingsApi.get();
+    try {
+      proxies.value = JSON.parse(fresh.proxies ?? "[]");
+    } catch {
+      /* keep what is on screen */
+    }
+    await loadProviders();
+  } catch (err: any) {
+    providersErrorMsg.value = err.response?.data?.error ?? t("settings.providerSyncFailed");
+  } finally {
+    providersSyncing.value = false;
+  }
+}
+
 async function saveEmby() {
   embyMsg.value = "";
   embyError.value = "";
@@ -2039,6 +3194,18 @@ async function saveAccountDisplay() {
   }
 }
 
+async function saveSchedulePage() {
+  try {
+    await settingsApi.update({
+      schedule_separate_page: String(scheduleSeparatePageSetting.value),
+    });
+    // Move the menu entry and the jobs-page panel at once
+    setSchedulePageSeparate(scheduleSeparatePageSetting.value);
+  } catch {
+    scheduleSeparatePageSetting.value = !scheduleSeparatePageSetting.value;
+  }
+}
+
 async function reloadSuppliers() {
   suppliers.value = await aiSuppliersApi.list();
 }
@@ -2121,15 +3288,73 @@ async function saveNotify() {
   notifyError.value = "";
   notifySaving.value = true;
   try {
-    await settingsApi.update({
+    const s = await settingsApi.update({
       notify_tg_username: notifyForm.username,
       notify_tg_events: JSON.stringify(notifyForm.events),
+      notify_bot_target: notifyForm.botTarget,
+      // Blank leaves the stored token alone, so an operator can edit the target
+      // without retyping the token
+      ...(notifyForm.botToken ? { notify_bot_token: notifyForm.botToken } : {}),
     });
+    notifyForm.botToken = "";
+    notifyBotTokenMasked.value = s.notify_bot_token_masked ?? "";
     notifyMsg.value = t("settings.saved");
+    await loadNotifyBot(s.notify_bot_configured === "true");
   } catch (err: any) {
     notifyError.value = err.response?.data?.error ?? t("settings.saveFailed");
   } finally {
     notifySaving.value = false;
+  }
+}
+
+/** Confirms the stored token with getMe, so a revoked or mistyped one is visible here. */
+async function loadNotifyBot(configured: boolean) {
+  if (!configured) {
+    notifyBot.value = { configured: false };
+    return;
+  }
+  try {
+    notifyBot.value = await settingsApi.getNotifyBot();
+  } catch {
+    notifyBot.value = { configured: true, ok: false };
+  }
+}
+
+// A bot cannot start a conversation, so the numeric chat id it should notify only exists
+// once someone has messaged it. This reads those chats back off getUpdates.
+async function loadNotifyChats() {
+  notifyChatsHint.value = "";
+  notifyChats.value = [];
+  notifyChatsLoading.value = true;
+  try {
+    const res = await settingsApi.getNotifyBotChats();
+    notifyChats.value = res.chats ?? [];
+    if (!notifyChats.value.length) notifyChatsHint.value = t("settings.notifyNoChats");
+  } catch (err: any) {
+    notifyChatsHint.value =
+      err.response?.data?.error ?? t("settings.notifyChatsFailed");
+  } finally {
+    notifyChatsLoading.value = false;
+  }
+}
+
+/** Sends a real message now: the only check that covers token, network and target. */
+async function testNotifyBot() {
+  notifyMsg.value = "";
+  notifyError.value = "";
+  notifyTesting.value = true;
+  try {
+    // Whatever is in the fields right now, saved or not, so a token can be tried first
+    await settingsApi.testNotifyBot(
+      notifyForm.botTarget || undefined,
+      notifyForm.botToken || undefined,
+    );
+    notifyMsg.value = t("settings.notifyTestSent");
+  } catch (err: any) {
+    notifyError.value =
+      err.response?.data?.error ?? t("settings.notifyTestFailed");
+  } finally {
+    notifyTesting.value = false;
   }
 }
 
@@ -2255,17 +3480,35 @@ async function saveCredentials() {
   }
   credSaving.value = true;
   try {
-    await authApi.changeCredentials(
+    const { token } = await authApi.changeCredentials(
       cred.currentPassword,
       cred.username || undefined,
       cred.newPassword || undefined,
     );
+    // A credential change retires every token issued before it, this tab's included. The
+    // reply carries its replacement, so it has to be stored or the next request is a 401.
+    if (token) localStorage.setItem("token", token);
     credMsg.value = t("settings.credSaved");
     Object.assign(cred, { username: "", newPassword: "", currentPassword: "" });
   } catch (err: any) {
     credError.value = err.response?.data?.error ?? t("settings.credFailed");
   } finally {
     credSaving.value = false;
+  }
+}
+
+async function signOutEverywhere() {
+  credMsg.value = "";
+  credError.value = "";
+  revoking.value = true;
+  try {
+    const { token } = await authApi.revokeSessions();
+    if (token) localStorage.setItem("token", token);
+    credMsg.value = t("settings.sessionsRevoked");
+  } catch (err: any) {
+    credError.value = err.response?.data?.error ?? t("settings.credFailed");
+  } finally {
+    revoking.value = false;
   }
 }
 </script>
@@ -2568,10 +3811,16 @@ async function saveCredentials() {
   font-size: 12px;
   height: auto;
 }
-.btn-danger {
+/*
+ * Red lettering for a destructive action sitting on a light button. Kept to the ghost
+ * pairing deliberately: as a bare `.btn-danger` this also hit the solid red variant, whose
+ * own colour is white -- red text on a red fill, which is why the provider delete icon and
+ * the uninstall button came out as blank red blocks.
+ */
+.btn-ghost.btn-danger {
   color: #ef4444;
 }
-.btn-danger:hover {
+.btn-ghost.btn-danger:hover {
   color: #dc2626;
 }
 
@@ -2617,5 +3866,19 @@ async function saveCredentials() {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+/* Destructive, but not a call to action: red lettering rather than a red slab, so it
+   reads as available without competing with the download and test buttons above it. */
+.cf-uninstall-btn {
+  color: #c0392b;
+  background: transparent;
+  border: 1px solid #f0d0cd;
+}
+
+.cf-uninstall-btn:not(:disabled):hover {
+  background: #fdf1f0;
+  border-color: #e0a9a4;
+  opacity: 1;
 }
 </style>

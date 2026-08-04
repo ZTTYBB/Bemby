@@ -58,6 +58,8 @@ export type Job = {
   /** Upper bound of the run-every-days range; null means a fixed interval. */
   runEveryDaysMax?: number | null;
   retired?: string | null;
+  /** ISO timestamp of the last successful run; persisted so log purges don't lose it. */
+  lastSuccessAt?: string | null;
 };
 
 export type JobTemplate = {
@@ -110,6 +112,8 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
+      /** Open a Cloudflare-gated URL button/answer (e.g. "我不是机器人") in a headless browser to pass the "I am not a bot" check. */
+      cfChallenge?: boolean;
     }
   | {
       // Click a button on the latest message from a specific contact (bot/group/user),
@@ -123,6 +127,8 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
+      /** Open a Cloudflare-gated URL button/answer (e.g. "我不是机器人") in a headless browser to pass the "I am not a bot" check. */
+      cfChallenge?: boolean;
     }
   | {
       // AI selects and clicks multiple buttons in order. The AI returns a JSON array of
@@ -153,7 +159,203 @@ export type CustomAction =
       verifyButton?: string;
       verifyWaitMs?: number;
     }
+  | {
+      // Open a Mini App button's page in the installed browser (passing Cloudflare on
+      // the way) and press a control inside the app, which is where such bots put the
+      // actual checkin. `contact` empty/undefined targets the job's bot chat.
+      type: "open_mini_app";
+      contact?: string;
+      /** Inline button that opens the Mini App; blank takes the most recent one. */
+      button?: string;
+      /**
+       * Steps to run inside the app, in order: a control's visible text, `css:<selector>`,
+       * `delay(2500)`, `scroll(x, y)` to reach something below the fold, or an `{aiBtn}` /
+       * `{input}` / `{aiInput}` placeholder. Blank auto-detects a checkin-worded control.
+       */
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      /**
+       * Budget for the browser part of this action, across every proxy tried.
+       * Blank/0 uses the built-in default (5 minutes).
+       */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy list id, or "direct" for none. Blank uses the job's proxy. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
+      tryAllProxies?: boolean;
+    }
+  | {
+      // Same as `open_mini_app`, but the address is given rather than hunted from a button
+      // in the chat. Telegram still signs it for the job's own account, so the app sees
+      // that user -- which is what makes one template usable across many accounts.
+      type: "open_mini_app_url";
+      /** Mini App address, or a t.me/<bot>/<app> link, which names its own bot. */
+      url: string;
+      /** Bot that owns the app, used to sign the URL. Blank uses the job's bot. */
+      contact?: string;
+      /**
+       * Steps to run inside the app, in order, same vocabulary as `open_mini_app`
+       * (control text, `css:`, `delay()`, `scroll()`, `{aiBtn}`, `{input}`, `{aiInput}`).
+       * Blank auto-detects a checkin control.
+       */
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      /** Budget for the browser part of this action. Blank/0 uses the default. */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy list id, or "direct". Blank uses the job's. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
+      tryAllProxies?: boolean;
+    }
+  | {
+      // Open the Mini App a bot pins beside the composer -- the button at the bottom left
+      // of its chat, next to the attachment clip. It belongs to the bot rather than to any
+      // message, so nothing in the chat history points at it and no address needs typing:
+      // the bot is asked what its button is, and Telegram signs it for this account.
+      type: "open_bot_menu_app";
+      /** Bot whose menu button to open. Blank uses the job's bot. */
+      contact?: string;
+      /**
+       * Steps to run inside the app, in order, same vocabulary as `open_mini_app`
+       * (control text, `css:`, `delay()`, `scroll()`, `{aiBtn}`, `{input}`, `{aiInput}`).
+       * Blank auto-detects a checkin control.
+       */
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      /** Budget for the browser part of this action. Blank/0 uses the default. */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy list id, or "direct". Blank uses the job's. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
+      tryAllProxies?: boolean;
+    }
+  | {
+      // Open a plain web page in the installed browser, passing any Cloudflare challenge,
+      // and drive it with the sub-steps below. Nothing about this action goes through
+      // Telegram: the URL is opened directly.
+      type: "open_url";
+      url: string;
+      /** Sub-steps run on the page once it is up, in order. */
+      steps?: WebStep[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      /**
+       * Budget for the browser part of this action, across every proxy tried.
+       * Blank/0 uses the built-in default (5 minutes).
+       */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy list id, or "direct" for none. Blank uses the job's proxy. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
+      tryAllProxies?: boolean;
+    }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
+
+/**
+ * One sub-step of `open_url`, run against the loaded page.
+ *
+ * The `ai_*` variants hand a screenshot to the vision model rather than naming an element.
+ * `ai_web_button` and `ai_web_input` number the interactive elements on the shot first, so
+ * what comes back is a marker to press rather than a raw pixel guess, and the click lands
+ * on a real element. `ai_web_click_xy` asks for a position instead, for what that cannot
+ * reach: a control inside a cross-origin iframe or a closed shadow root (a Turnstile
+ * checkbox), or one painted on a canvas, none of which any selector can number.
+ */
+export type WebStep =
+  | {
+      /** Type text into a field named by a CSS selector. */
+      type: "web_input";
+      selector: string;
+      text: string;
+    }
+  | {
+      /** Press a control named by a CSS selector. */
+      type: "web_button";
+      selector: string;
+    }
+  | {
+      /** Sit still for a while, for a page that needs a moment between steps. */
+      type: "web_delay";
+      waitMs: number;
+    }
+  | {
+      /**
+       * Scroll the page by pixels, to bring something below the fold within reach of the
+       * steps after it. Either figure may be negative to scroll back, and one past the end
+       * of the page simply lands at the end.
+       */
+      type: "web_scroll";
+      /** Horizontal move in pixels. Blank/0 leaves the column alone. */
+      x?: number;
+      /** Vertical move in pixels. Blank/0 leaves the row alone. */
+      y?: number;
+    }
+  | {
+      /**
+       * Hold until a CSS selector is on the page and has a box, so the next step is not run
+       * against a page that has not finished rendering what it needs.
+       */
+      type: "web_wait_element";
+      selector: string;
+      /** How long to wait before giving up. Blank/0 waits 30s. */
+      waitMs?: number;
+    }
+  | {
+      /** AI reads a screenshot and decides which control to press. */
+      type: "ai_web_button";
+      /** Optional steer, e.g. "the login button". Blank lets the AI judge on its own. */
+      hint?: string;
+    }
+  | {
+      /**
+       * Press a Cloudflare Turnstile checkbox on the page ("Verify you are human"), wherever
+       * it sits. No AI: the widget is found through the browser's own protocol, which reaches
+       * inside the cross-origin frame it draws in, and the checkbox is clicked at its known
+       * place in the widget. Prefer this to `ai_web_click_xy` for a Turnstile.
+       */
+      type: "web_turnstile";
+    }
+  | {
+      /**
+       * AI reads a screenshot and gives back a pixel position, which is clicked exactly.
+       * The page is ruled with a labelled grid before the shot so the figure is read off
+       * the picture rather than estimated.
+       */
+      type: "ai_web_click_xy";
+      /** Optional steer, e.g. "the verify-you-are-human checkbox". Blank lets the AI judge. */
+      hint?: string;
+    }
+  | {
+      /** AI reads a screenshot and decides which field to type into. */
+      type: "ai_web_input";
+      /** Optional steer, e.g. "the password box". Blank lets the AI judge on its own. */
+      hint?: string;
+      /** Text to type. Blank lets the AI decide from the page (e.g. a captcha it can read). */
+      text?: string;
+    };
+
+/** What one `open_url` sub-step did, with the page as it looked afterwards. */
+export type WebStepLog = {
+  type: WebStep["type"];
+  /** What was attempted, e.g. `web_button css: #login`. */
+  label: string;
+  /** What happened, e.g. the element pressed or the text typed. */
+  outcome?: string;
+  error?: string;
+  /** data: URI of the page right after the step. */
+  screenshot?: string;
+  /** Prompt sent to the vision model (`ai_*` steps only). */
+  aiPrompt?: string;
+  /** What the model replied (`ai_*` steps only). */
+  aiResponse?: string;
+};
 
 export type CustomConfig = {
   actions: CustomAction[];
@@ -165,6 +367,8 @@ export type CheckinConfig = {
   successContains?: string;
   failContains?: string;
   proxyId?: string;
+  /** Open a Cloudflare-gated checkin URL (e.g. "我不是机器人") in a headless browser to pass the "I am not a bot" check. */
+  cfChallenge?: boolean;
 };
 
 export type AutoregConfig = {
@@ -172,8 +376,42 @@ export type AutoregConfig = {
   groupId: string;
   /** Line prefix identifying a registration code, e.g. ABC-30-Register_ */
   codePrefix: string;
+  /**
+   * Regular expression identifying a code, for groups whose codes carry no stable prefix.
+   * Capture group 1 is the code when present, else the whole match. Takes the place of
+   * `codePrefix` when set.
+   */
+  codeRegex?: string;
+  /** Strip Chinese characters and punctuation out of a code before sending it. */
+  stripChinese?: boolean;
+  /** Characters to strip out of a code before sending, e.g. `~*·`. */
+  stripChars?: string;
+  /** Have the AI adjust each code before it is sent, going on the surrounding chat. */
+  aiModifyCode?: boolean;
+  /** What the AI should watch for, when the group's convention needs saying. */
+  aiModifyCodeHint?: string;
+  /** Group messages around the code shown to the AI as context. Default 6. */
+  aiContextCount?: number;
+  /** Bot text that means it is ready for a code; waited for after the register button. */
+  codeReadyContains?: string;
+  /** Bot text that means it is ready for the username; waited for after a code is accepted. */
+  usernameReadyContains?: string;
   /** Button on the bot's start reply that opens registration (partial match). Blank clicks the sole button. */
   registerButton?: string;
+  /**
+   * Some bots vet the code first and only then offer a button (or a t.me link) that actually
+   * opens registration. On, that click happens between the code being accepted and the
+   * username being sent.
+   */
+  clickAfterCode?: boolean;
+  /** Button or link text to click once a code is accepted (partial match). Blank takes the sole/first one. */
+  afterCodeButton?: string;
+  /**
+   * Whether that button has to be there. On, a code whose reply never offers one is treated
+   * as spent and the next code is tried; off, the run carries on to the username -- which is
+   * what a bot that only sometimes asks for the extra click needs.
+   */
+  afterCodeRequired?: boolean;
   /** Username sent to finish signup; supports {word:N} {num:N} {alpha:N} {uuid} placeholders */
   signupUsername: string;
   /** How long to keep listening for codes before giving up, in minutes. Default 30. */
@@ -226,6 +464,38 @@ export type CustomStepLog = {
   jobAttempt?: number;
   /** Which action-level attempt this is, 1-based (only set when action maxRetries > 0) */
   actionAttempt?: number;
+  /** Host of the Cloudflare-gated URL opened for this click (full URL is sensitive). */
+  cfHost?: string;
+  /** A Cloudflare "I am not a bot" challenge was encountered. */
+  cfChallenged?: boolean;
+  /** The challenge was cleared (or the page loaded with none). */
+  cfPassed?: boolean;
+  /** The page was opened as a Telegram Mini App (WebView button). */
+  cfMiniApp?: boolean;
+  /** Telegram returned a signed Mini App URL (the app loads logged in). */
+  cfMiniAppSigned?: boolean;
+  /** Label of the checkin control pressed inside the Mini App page. */
+  cfMiniAppAction?: string;
+  /** Proxy whose exit IP the challenge was cleared through. */
+  cfProxy?: string;
+  /**
+   * Which browser build ran this step: "keyed" is the licensed build, "free" the
+   * unlicensed fallback used when no licence seat was available. The free build is older
+   * and passes fewer challenges, so a run that quietly fell back is worth seeing.
+   */
+  cfBuild?: "keyed" | "free";
+  /** How many exits were tried before the page loaded. */
+  cfAttempts?: number;
+  /** Title of the page the browser ended up on. */
+  cfPageTitle?: string;
+  /** Navigation or renderer trouble seen while loading (crashed tab, failed request). */
+  cfNavError?: string;
+  /** One line per exit tried: outcome, page title, text length, in-app steps. */
+  cfTrace?: string[];
+  /** Screenshot of the final page, so a server-only failure can be seen. */
+  cfScreenshot?: string;
+  /** For open_url: one entry per sub-step run on the page, in order. */
+  webSteps?: WebStepLog[];
 };
 
 export type EmbywatchConfig = {
@@ -310,12 +580,3 @@ export type TgProxy = {
   password?: string;
 };
 
-export type JobLog = {
-  id: number;
-  jobId: number;
-  jobName: string | null;
-  accountName: string | null;
-  ranAt: string;
-  status: LogStatus;
-  message: string | null;
-};

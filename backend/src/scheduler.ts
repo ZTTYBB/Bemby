@@ -4,12 +4,12 @@ import {
   getDefaultTimezone,
   FALLBACK_TIMEZONE,
 } from "./db/database";
+import { decryptSecret } from "./db/secretColumns";
 import { runJob, type JobDetailLog } from "./jobs/runner";
 import {
-  sendTgNotify,
+  notifyJobEvent,
   buildFailureMessage,
   buildSuccessMessage,
-  getNotifyConfig,
 } from "./jobs/notify";
 import type { Job, TgAccount } from "./types";
 import { DateTime, IANAZone } from "luxon";
@@ -237,9 +237,10 @@ export function loadEligibleJobs(): Array<{
       row.account_id != null
         ? (() => {
             // Credentials resolve as a pair: the account's own if complete, else global defaults
+            const ownApiHash = decryptSecret(row.api_hash as string | null);
             const ownCredentials =
-              row.api_id && row.api_hash
-                ? { apiId: row.api_id, apiHash: row.api_hash }
+              row.api_id && ownApiHash
+                ? { apiId: row.api_id, apiHash: ownApiHash }
                 : null;
             const credentials =
               ownCredentials ?? getDefaultTgApiCredentials();
@@ -249,7 +250,7 @@ export function loadEligibleJobs(): Array<{
               phoneNumber: row.phone_number,
               apiId: credentials?.apiId ?? null,
               apiHash: credentials?.apiHash ?? null,
-              sessionString: row.session_string,
+              sessionString: decryptSecret(row.session_string),
               authStatus: row.auth_status,
               proxyId: row.account_proxy_id ?? null,
               disabled: Boolean(row.account_disabled),
@@ -312,7 +313,7 @@ export async function executeJob(
         .prepare("SELECT session_string FROM tg_accounts WHERE id = ?")
         .get(account.id) as any;
       if (fresh?.session_string)
-        account = { ...account, sessionString: fresh.session_string };
+        account = { ...account, sessionString: decryptSecret(fresh.session_string) };
     }
 
     await runJob(job, account, detailLogs, signal);
@@ -324,17 +325,23 @@ export async function executeJob(
       "UPDATE job_logs SET status = 'success', message = ?, detail = ? WHERE id = ?",
     ).run(completedMessage(warnings), detail, logId);
     if (warnings.length) console.warn(`[scheduler] "${job.name}" completed with warnings: ${warnings.join('; ')}`);
-    console.log(`[scheduler] "${job.name}" completed`);
-    if (account?.sessionString) {
-      const cfg = getNotifyConfig();
-      if (cfg.events.includes("success") && (cfg.username || false)) {
-        sendTgNotify(
-          account,
-          buildSuccessMessage(job.name, job.jobType),
-          cfg.username!,
-        ).catch((e) => console.warn("[notify] TG notification failed:", e));
-      }
+    // Durable stamp; job_logs is pruned by log_retention_days. Only moves
+    // forward so a slow run finishing after a later one can't rewind it.
+    // Isolated: a failure here must not demote an otherwise successful run.
+    try {
+      db.prepare(
+        `UPDATE jobs SET last_success_at = ?
+         WHERE id = ? AND (last_success_at IS NULL OR last_success_at < ?)`,
+      ).run(ranAt, job.id, ranAt);
+    } catch (e) {
+      console.warn(`[scheduler] "${job.name}" last_success_at stamp failed:`, e);
     }
+    console.log(`[scheduler] "${job.name}" completed`);
+    void notifyJobEvent(
+      "success",
+      buildSuccessMessage(job.name, job.jobType),
+      account,
+    );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     const isCancelled = message === "Job cancelled";
@@ -345,16 +352,12 @@ export async function executeJob(
       ).run(isCancelled ? "Cancelled" : message, detail, logId);
     }
     console.error(`[scheduler] "${job.name}" failed:`, message);
-    if (!isCancelled && account?.sessionString) {
-      const cfg = getNotifyConfig();
-      if (cfg.events.includes("failed")) {
-        const target = cfg.username ?? "me";
-        sendTgNotify(
-          account,
-          buildFailureMessage(job.name, job.jobType, message),
-          target,
-        ).catch((e) => console.warn("[notify] TG notification failed:", e));
-      }
+    if (!isCancelled) {
+      void notifyJobEvent(
+        "failed",
+        buildFailureMessage(job.name, job.jobType, message),
+        account,
+      );
     }
   } finally {
     releaseRunSlot();
@@ -519,11 +522,46 @@ export function startScheduler(): void {
 export function getSchedulerStatus(): Array<{
   jobId: number;
   jobName: string;
+  jobType: string;
   nextRun: string;
 }> {
   return Array.from(schedule.values()).map(({ job, nextRun }) => ({
     jobId: job.id,
     jobName: job.name,
+    jobType: job.jobType,
     nextRun: nextRun.toISOString(),
   }));
+}
+
+/**
+ * Drops a job's pending run and arms the one after it, which is how an operator calls off a
+ * run they can see coming without disabling the job. The job keeps its schedule; only this
+ * occurrence is given up, so the list shows it again on its next eligible day.
+ */
+export function skipNextRun(jobId: number): { ok: boolean; nextRun?: string } {
+  const entry = schedule.get(jobId);
+  if (!entry) return { ok: false };
+
+  // Counted from the pending run's own day, not from today: that run may already be days out
+  // (its window has passed today), and a day counted from today would land on or before it --
+  // rescheduling the very run being called off, sometimes to an earlier minute.
+  const pendingDay = DateTime.fromJSDate(entry.nextRun)
+    .setZone(entry.timezone)
+    .startOf("day");
+  const today = DateTime.now().setZone(entry.timezone).startOf("day");
+  const daysUntilPending = Math.max(0, Math.round(pendingDay.diff(today, "days").days));
+
+  // Past that day, the next opportunity is one interval on -- one day for a daily job
+  const interval = checkDailyRunEnabled()
+    ? Math.max(
+        1,
+        resolveRunEveryDays(jobId, entry.job.runEveryDays ?? 1, entry.job.runEveryDaysMax),
+      )
+    : 1;
+  const daysAhead = daysUntilPending + interval;
+
+  scheduleOne(entry.job, entry.account, daysAhead);
+  const nextRun = schedule.get(jobId)?.nextRun.toISOString();
+  console.log(`[scheduler] "${entry.job.name}" run skipped by operator; next run: ${nextRun}`);
+  return { ok: true, nextRun };
 }

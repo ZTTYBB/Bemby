@@ -244,6 +244,51 @@ router.post('/', (req, res) => {
   res.status(201).json(rowToTemplate(row));
 });
 
+/**
+ * `<name> (copy)`, or `(copy 2)` and up when that is taken. Templates are picked from a
+ * list by name, so a duplicate reading exactly like its source is of little use.
+ */
+function copyName(name: string): string {
+  const taken = new Set(
+    (db.prepare('SELECT name FROM job_templates').all() as { name: string }[]).map(r => r.name),
+  );
+  let candidate = `${name} (copy)`;
+  for (let n = 2; taken.has(candidate); n++) candidate = `${name} (copy ${n})`;
+  return candidate;
+}
+
+router.post('/:id/duplicate', (req, res) => {
+  const source = db.prepare('SELECT * FROM job_templates WHERE id = ?').get(req.params.id) as TemplateRow | undefined;
+  if (!source) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+
+  // Everything the source configures, nothing about its identity: the copy starts with no
+  // linked jobs, which stay with the original.
+  const result = db.prepare(`
+    INSERT INTO job_templates
+      (name, job_type, bot_username, timezone, reply_timeout_ms, retry_max, enabled, config, start_command, checkin_button, run_every_days, run_every_days_max)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    copyName(source.name),
+    source.job_type,
+    source.bot_username,
+    source.timezone,
+    source.reply_timeout_ms,
+    source.retry_max,
+    source.enabled,
+    source.config,
+    source.start_command,
+    source.checkin_button,
+    source.run_every_days,
+    source.run_every_days_max,
+  );
+
+  const row = db.prepare('SELECT * FROM job_templates WHERE id = ?').get(result.lastInsertRowid) as TemplateRow;
+  res.status(201).json(rowToTemplate(row));
+});
+
 router.put('/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM job_templates WHERE id = ?').get(req.params.id) as TemplateRow | undefined;
   if (!existing) {

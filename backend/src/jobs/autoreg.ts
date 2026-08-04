@@ -5,7 +5,10 @@ import { NewMessage, NewMessageEvent } from "telegram/events";
 import { EditedMessage } from "telegram/events/EditedMessage";
 import type { TgProxy, AutoregConfig, CustomStepLog } from "../types";
 import type { TgDeviceParams } from "../auth/tgAuth";
-import { expandCommand, parseMessages, escapeHtml } from "./checkin";
+import { expandCommand, parseMessages, callAI } from "./checkin";
+import { escapeHtml } from "../tg/htmlEscape";
+import { resolvePeerTarget } from "../tg/peerTarget";
+import { parseBotStartLink, webButtonOf, type BotStartLink } from "../tg/miniApp";
 
 // Reuses the custom-job step log shape so LogsView renders the same timeline.
 export type AutoregJobLog = {
@@ -61,11 +64,54 @@ function prefixToRegex(prefix: string): RegExp {
   return new RegExp(pattern, "g");
 }
 
+/** Compiles the operator's code regex, adding the global flag the scan needs. */
+export function compileCodeRegex(pattern: string): RegExp {
+  const trimmed = pattern.trim();
+  // `/pattern/flags` as well as a bare pattern, since either is natural to type
+  const delimited = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
+  const source = delimited ? delimited[1] : trimmed;
+  const flags = delimited ? delimited[2] : "";
+  return new RegExp(source, flags.includes("g") ? flags : `${flags}g`);
+}
+
+/**
+ * Pulls codes out of a message with the operator's own pattern, for groups that post codes
+ * with no stable prefix to match on. Capture group 1 is the code where the pattern has one,
+ * so the surrounding wording can be matched without ending up in the code.
+ *
+ * A mask character straight after the match means the post is announcing a code as used
+ * rather than handing out a fresh one, the same as in prefix mode.
+ */
+function extractByRegex(text: string, re: RegExp): ExtractedCodes {
+  const codes: string[] = [];
+  const usedPartials: string[] = [];
+  const scan = new RegExp(re.source, re.flags);
+  scan.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = scan.exec(text)) !== null) {
+    const token = (m[1] ?? m[0]).trim();
+    const after = text.slice(m.index + m[0].length);
+    const next = after ? String.fromCodePoint(after.codePointAt(0)!) : "";
+    if (token) {
+      if (next && MASK_CHAR.test(next)) usedPartials.push(token);
+      else codes.push(token);
+    }
+    // Never stall on a zero-length match
+    scan.lastIndex = Math.max(scan.lastIndex, m.index + Math.max(1, m[0].length));
+  }
+  return { codes, usedPartials };
+}
+
 /** Pulls registration codes out of a message. Decoy symbols inside the run are
  *  stripped, and a mask character marks a used-code announcement rather than a
  *  fresh code. Suffixes shorter than MIN_CODE_SUFFIX are quoted fragments, not
- *  codes, and are discarded. */
-export function extractCodes(text: string, prefix: string): ExtractedCodes {
+ *  codes, and are discarded. A regex, when given, replaces the prefix walk. */
+export function extractCodes(
+  text: string,
+  prefix: string,
+  codeRegex?: RegExp,
+): ExtractedCodes {
+  if (codeRegex) return extractByRegex(text, codeRegex);
   const codes: string[] = [];
   const usedPartials: string[] = [];
   const wanted = prefix?.trim();
@@ -120,11 +166,128 @@ function messageSearchText(msg: Api.Message): string {
   return parts.join("\n");
 }
 
+/** Where a code was posted, which is what the AI reads for context. */
+export type CodeSource = { msgId?: number; text?: string };
+
+// Chinese characters and the punctuation that travels with them: ideographs and their
+// extensions, CJK punctuation (（）、。), and full-width forms. Groups wrap or interleave
+// codes with these, and the bot wants none of it.
+const CHINESE_CHAR =
+  /[　-〿㐀-䶿一-鿿豈-﫿＀-￯]|[\u{20000}-\u{2FA1F}]/gu;
+
+/**
+ * The fixed edits an operator can pick instead of paying for an AI call on every code:
+ * drop Chinese characters, drop a named set of characters. Both are what the AI would be
+ * asked to do most of the time, and they cost nothing.
+ *
+ * `stripChars` is read as a set of characters rather than a substring -- `~*` strips every
+ * `~` and every `*` -- and whitespace in it is ignored, since a code never contains any.
+ */
+export function applyCodeEdits(
+  code: string,
+  edits: { stripChinese?: boolean; stripChars?: string },
+): string {
+  let out = code;
+  if (edits.stripChinese) out = out.replace(CHINESE_CHAR, "");
+  for (const ch of new Set((edits.stripChars ?? "").replace(/\s+/g, ""))) {
+    out = out.split(ch).join("");
+  }
+  return out;
+}
+
+/** Group messages shown to the AI around the one carrying the code. */
+const DEFAULT_AI_CONTEXT = 6;
+
+export type CodeContext = {
+  /** The message the code was pulled out of */
+  message?: string;
+  /** Nearby group messages, oldest first -- an instruction may come after the code */
+  nearby: string[];
+  /** The bot's own last prompt, which sometimes states how the code must be typed */
+  botPrompt?: string;
+};
+
+/**
+ * The prompt for adjusting a captured code. Groups hand codes out with a decoy symbol to
+ * delete, a character to swap, or part of the code left in the wording around it, and the
+ * rule is often stated in a nearby message rather than beside the code.
+ */
+export function buildCodeFixPrompt(
+  code: string,
+  context: CodeContext,
+  hint?: string,
+): string {
+  const parts = [
+    `A Telegram group hands out registration codes for a bot. Groups often obfuscate them: ` +
+      `a decoy character to delete, a character to replace, a code split across lines, or ` +
+      `part of it stated in the wording around it. The rule may be in the same message, in ` +
+      `a message before or after it, or in the bot's own prompt.`,
+    ``,
+    `Code as captured: ${code}`,
+  ];
+  if (context.message) parts.push(``, `The message it came from:`, context.message);
+  if (context.nearby.length)
+    parts.push(``, `Other group messages, oldest first:`, context.nearby.join("\n---\n"));
+  if (context.botPrompt) parts.push(``, `The bot's last prompt:`, context.botPrompt);
+  if (hint) parts.push(``, `Operator note: ${hint}`);
+  parts.push(
+    ``,
+    `Reply with ONLY the exact code to send to the bot -- no quotes, no label, no ` +
+      `explanation. If nothing in the context calls for a change, reply with the code exactly ` +
+      `as captured.`,
+  );
+  return parts.join("\n");
+}
+
+/**
+ * Reads a code out of the AI's reply. Anything that does not look like a code -- empty, a
+ * sentence, absurdly long -- means the model explained itself instead of answering, and the
+ * captured code stands rather than sending prose to the bot.
+ */
+export function sanitizeAiCode(raw: string, fallback: string): string {
+  const line = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .find(Boolean);
+  if (!line) return fallback;
+  const bare = line.replace(/^["'`]+|["'`]+$/g, "").trim();
+  if (!bare || /\s/.test(bare) || bare.length > 128) return fallback;
+  return bare;
+}
+
+/** The group messages around a code, for the AI to read the group's convention off. */
+async function codeContext(
+  client: TelegramClient,
+  group: Api.TypeEntityLike,
+  source: CodeSource | undefined,
+  count: number,
+  botPrompt?: string,
+): Promise<CodeContext> {
+  const context: CodeContext = { message: source?.text, nearby: [], botPrompt };
+  if (count <= 0) return context;
+  try {
+    // Half the window sits after the code, since the instruction often follows it
+    const half = Math.max(1, Math.ceil(count / 2));
+    const msgs = (await client.getMessages(group, {
+      limit: count,
+      ...(source?.msgId ? { offsetId: source.msgId + half + 1 } : {}),
+    })) as Api.Message[];
+    context.nearby = [...msgs]
+      .reverse()
+      .map((m) => messageSearchText(m).trim())
+      .filter(Boolean);
+  } catch {
+    /* history unavailable -- the code's own message is context enough to try with */
+  }
+  return context;
+}
+
 // FIFO of codes with a single async consumer. Live listener pushes, the register
 // loop pulls; used-code announcements prune both queued and future codes.
 class CodeQueue {
   private queue: string[] = [];
   private seen = new Set<string>();
+  private sources = new Map<string, CodeSource>();
   private burnedPartials: string[] = [];
   private waiter: ((code: string | null) => void) | null = null;
   /** Debug trail: every unique code seen and what happened to it */
@@ -132,9 +295,10 @@ class CodeQueue {
   /** Used-code partials observed, for debug output */
   readonly partials: string[] = [];
 
-  add(code: string): boolean {
+  add(code: string, source?: CodeSource): boolean {
     if (this.seen.has(code)) return false;
     this.seen.add(code);
+    if (source) this.sources.set(code, source);
     if (this.burnedPartials.some((p) => code.startsWith(p))) {
       this.trail.set(code, "burned");
       return false;
@@ -149,6 +313,10 @@ class CodeQueue {
       this.queue.push(code);
     }
     return true;
+  }
+
+  sourceOf(code: string): CodeSource | undefined {
+    return this.sources.get(code);
   }
 
   /** Puts a code back at the front (e.g. bot never replied and we re-arm) */
@@ -286,6 +454,63 @@ function waitForVerdict(
   });
 }
 
+export type TextWait = {
+  /** Resolves true once the wording appeared, false once the wait ran out */
+  result: Promise<boolean>;
+  cancel: () => void;
+};
+
+/**
+ * Waits for the bot to say it is ready -- "对我发送注册码" and the like. Arm it BEFORE the
+ * action that prompts the bot, or the message can land before anyone is listening.
+ *
+ * Edits count: a bot that keeps one message and rewrites it is announcing readiness the same
+ * way as one that sends a new line.
+ */
+export function beginTextWait(
+  client: TelegramClient,
+  botPeerId: string,
+  keywords: string,
+  maxMs: number,
+  signal?: AbortSignal,
+  seed: Api.Message[] = [],
+): TextWait {
+  let settle: ((found: boolean) => void) | null = null;
+  const result = new Promise<boolean>((resolve) => {
+    const finish = (found: boolean) => {
+      if (!settle) return;
+      settle = null;
+      clearTimeout(timer);
+      client.removeEventHandler(handler, new NewMessage({}));
+      client.removeEventHandler(handler, new EditedMessage({}));
+      signal?.removeEventListener("abort", onAbort);
+      resolve(found);
+    };
+    settle = finish;
+    const timer = setTimeout(() => finish(false), maxMs);
+    const onAbort = () => finish(false);
+    const handler = async (event: NewMessageEvent) => {
+      if (containsAny((event.message as Api.Message).message ?? "", keywords)) finish(true);
+    };
+    if (signal?.aborted) {
+      finish(false);
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    client.addEventHandler(
+      handler,
+      new NewMessage({ fromUsers: [botPeerId], chats: [botPeerId] }),
+    );
+    client.addEventHandler(
+      handler,
+      new EditedMessage({ fromUsers: [botPeerId], chats: [botPeerId] }),
+    );
+    // Messages already in hand may carry it, in which case there is nothing to wait for
+    if (seed.some((m) => containsAny(m.message ?? "", keywords))) finish(true);
+  });
+  return { result, cancel: () => settle?.(false) };
+}
+
 function hasInlineButtons(msg: Api.Message): boolean {
   return (msg as any).replyMarkup instanceof Api.ReplyInlineMarkup;
 }
@@ -409,6 +634,189 @@ async function beginButtonWait(
   return { result };
 }
 
+/**
+ * What a bot offers after vetting a code: a callback button, a `?start=` deep link (as a URL
+ * button or a link in the text), or a plain web link, which needs a browser and so cannot be
+ * followed from here.
+ */
+export type AfterCodeTarget =
+  | { kind: "callback"; text: string; button: Api.KeyboardButtonCallback; msg: Api.Message }
+  | { kind: "startLink"; text: string; botUsername: string; startParam: string; msg: Api.Message }
+  | { kind: "url"; text: string; url: string; msg: Api.Message };
+
+/** `?start=` deep links in the message body, both plain URLs and text links. */
+function startLinksInText(msg: Api.Message): Array<{ text: string; link: BotStartLink }> {
+  const found: Array<{ text: string; link: BotStartLink }> = [];
+  const body = msg.message ?? "";
+  for (const e of (msg.entities ?? []) as Array<{
+    offset?: number;
+    length?: number;
+    url?: string;
+  }>) {
+    // A text link carries its target on the entity; a bare URL is the slice it covers
+    const href =
+      e?.url ??
+      (typeof e?.offset === "number" && typeof e?.length === "number"
+        ? body.slice(e.offset, e.offset + e.length)
+        : "");
+    const link = href ? parseBotStartLink(href) : null;
+    if (!link) continue;
+    const label =
+      typeof e?.offset === "number" && typeof e?.length === "number"
+        ? body.slice(e.offset, e.offset + e.length)
+        : href;
+    found.push({ text: label, link });
+  }
+  return found;
+}
+
+/**
+ * The thing to click on one message, preferring a callback button over a link. `match` is a
+ * partial text match against the button/link label; blank takes the first of each kind.
+ */
+export function findAfterCodeTarget(
+  msg: Api.Message,
+  match: string,
+): AfterCodeTarget | null {
+  const wanted = match.trim();
+  const hits = (text: string) => !wanted || text.includes(wanted);
+
+  const markup = (msg as any).replyMarkup as Api.ReplyInlineMarkup | undefined;
+  const buttons = markup?.rows?.flatMap((r) => r.buttons) ?? [];
+
+  for (const b of buttons) {
+    if (b instanceof Api.KeyboardButtonCallback && hits(b.text ?? "")) {
+      return { kind: "callback", text: b.text ?? "", button: b, msg };
+    }
+  }
+  for (const b of buttons) {
+    const web = webButtonOf(b);
+    if (!web || !hits(web.text)) continue;
+    if (web.startLink) {
+      return {
+        kind: "startLink",
+        text: web.text,
+        botUsername: web.startLink.botUsername,
+        startParam: web.startLink.startParam,
+        msg,
+      };
+    }
+    return { kind: "url", text: web.text, url: web.url, msg };
+  }
+  for (const { text, link } of startLinksInText(msg)) {
+    if (!hits(text)) continue;
+    return {
+      kind: "startLink",
+      text,
+      botUsername: link.botUsername,
+      startParam: link.startParam,
+      msg,
+    };
+  }
+  return null;
+}
+
+export type AfterCodeWait = {
+  result: Promise<AfterCodeTarget | null>;
+  cancel: () => void;
+};
+
+/**
+ * Waits for the bot to offer the post-code button. Armed BEFORE the code is sent, since the
+ * offer often rides in the very reply that accepts it. Edits count: a bot that rewrites its
+ * own message to add the button is making the same offer as one that sends a new one.
+ */
+export function beginAfterCodeWait(
+  client: TelegramClient,
+  botPeerId: string,
+  match: string,
+  maxMs: number,
+  signal?: AbortSignal,
+  seed: Api.Message[] = [],
+): AfterCodeWait {
+  let settle: ((found: AfterCodeTarget | null) => void) | null = null;
+  const result = new Promise<AfterCodeTarget | null>((resolve) => {
+    const finish = (found: AfterCodeTarget | null) => {
+      if (!settle) return;
+      settle = null;
+      clearTimeout(timer);
+      client.removeEventHandler(handler, new NewMessage({}));
+      client.removeEventHandler(handler, new EditedMessage({}));
+      signal?.removeEventListener("abort", onAbort);
+      resolve(found);
+    };
+    settle = finish;
+    const timer = setTimeout(() => finish(null), maxMs);
+    const onAbort = () => finish(null);
+    const handler = async (event: NewMessageEvent) => {
+      const target = findAfterCodeTarget(event.message as Api.Message, match);
+      if (target) finish(target);
+    };
+    if (signal?.aborted) {
+      finish(null);
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    client.addEventHandler(
+      handler,
+      new NewMessage({ fromUsers: [botPeerId], chats: [botPeerId] }),
+    );
+    client.addEventHandler(
+      handler,
+      new EditedMessage({ fromUsers: [botPeerId], chats: [botPeerId] }),
+    );
+    for (const m of seed) {
+      const target = findAfterCodeTarget(m, match);
+      if (target) {
+        finish(target);
+        return;
+      }
+    }
+  });
+  return { result, cancel: () => settle?.(null) };
+}
+
+/**
+ * Performs the post-code click, recording on the step what it did. A callback button is
+ * pressed; a `?start=` link is followed the way a real client does, by sending its payload
+ * as a command. A plain web link needs a browser, so it throws rather than pretend.
+ */
+async function clickAfterCodeTarget(
+  client: TelegramClient,
+  target: AfterCodeTarget,
+  step: CustomStepLog,
+  botUsername: string,
+): Promise<void> {
+  if (target.kind === "callback") {
+    const peer = await client.getInputEntity(botUsername);
+    try {
+      const answer = (await client.invoke(
+        new Api.messages.GetBotCallbackAnswer({
+          peer,
+          msgId: target.msg.id,
+          data: target.button.data,
+        }),
+      )) as Api.messages.BotCallbackAnswer;
+      if (answer.message) step.callbackAnswer = answer.message;
+    } catch (err: any) {
+      // The click landed even when the bot never answered the callback
+      if (!err?.message?.includes("BOT_RESPONSE_TIMEOUT")) throw err;
+    }
+    step.result = `Clicked "${target.text}"`;
+    return;
+  }
+  if (target.kind === "startLink") {
+    await client.sendMessage(target.botUsername, {
+      message: `/start ${target.startParam}`,
+    });
+    step.result = `Followed link "${target.text}": /start ${target.startParam} to @${target.botUsername}`;
+    return;
+  }
+  throw new Error(
+    `"${target.text}" opens a web page (${target.url}), which cannot be clicked from here -- registration that finishes on a website needs a custom job's "Open URL" action`,
+  );
+}
+
 function findButton(
   msg: Api.Message,
   match: string,
@@ -453,10 +861,32 @@ export async function runAutoreg(
   const codePrefix = config.codePrefix?.trim();
   const signupUsername = config.signupUsername?.trim();
   if (!groupId) throw new AutoregJobError("Group is required", log);
-  if (!codePrefix) throw new AutoregJobError("Code prefix is required", log);
+  if (!codePrefix && !config.codeRegex?.trim())
+    throw new AutoregJobError("A code prefix or a code regex is required", log);
   if (!signupUsername)
     throw new AutoregJobError("Signup username is required", log);
 
+  // Compiled once: a bad pattern must fail the job now, not on every message scanned
+  let codeRegex: RegExp | undefined;
+  if (config.codeRegex?.trim()) {
+    try {
+      codeRegex = compileCodeRegex(config.codeRegex);
+    } catch (err: any) {
+      throw new AutoregJobError(
+        `Code regex is not valid: ${err?.message ?? String(err)}`,
+        log,
+      );
+    }
+  }
+
+  const hasFixedEdits = Boolean(
+    config.stripChinese || config.stripChars?.replace(/\s+/g, ""),
+  );
+  const codeReady = config.codeReadyContains?.trim();
+  const usernameReady = config.usernameReadyContains?.trim();
+  const clickAfterCode = config.clickAfterCode === true;
+  const afterCodeButton = config.afterCodeButton?.trim() ?? "";
+  const afterCodeRequired = config.afterCodeRequired === true;
   const listenMs =
     Math.max(1, config.listenMinutes ?? DEFAULT_LISTEN_MINUTES) * 60_000;
   const entryMode = config.entryMode === "command" ? "command" : "button";
@@ -504,17 +934,23 @@ export async function runAutoreg(
             }
           }
         } else {
-          const entity = await client.getEntity(groupId.replace(/^@/, ""));
-          try {
-            await client.invoke(
-              new Api.channels.JoinChannel({ channel: entity as any }),
-            );
-            step.result = "Joined";
-          } catch (err: any) {
-            if (err?.message?.includes("ALREADY_PARTICIPANT")) {
-              step.result = "Already a member";
-            } else {
-              throw err;
+          const entity = await resolvePeerTarget(client, groupId);
+          if (entity instanceof Api.Chat) {
+            // A basic group is reachable only from the chat list, so resolving it at all
+            // means the account is in it
+            step.result = "Already a member";
+          } else {
+            try {
+              await client.invoke(
+                new Api.channels.JoinChannel({ channel: entity as any }),
+              );
+              step.result = "Joined";
+            } catch (err: any) {
+              if (err?.message?.includes("ALREADY_PARTICIPANT")) {
+                step.result = "Already a member";
+              } else {
+                throw err;
+              }
             }
           }
         }
@@ -523,9 +959,7 @@ export async function runAutoreg(
       }
     }
 
-    const groupEntity = await client.getEntity(
-      groupId.match(/t\.me/) ? groupId : groupId.replace(/^@/, ""),
-    );
+    const groupEntity = await resolvePeerTarget(client, groupId);
     // Event filters need pre-resolved numeric IDs: gramjs stringifies whatever
     // is passed (an entity object becomes "[object Object]") and resolves it
     // during update dispatch, where a failed lookup crashes the update loop
@@ -544,10 +978,11 @@ export async function runAutoreg(
       return `${s.seen} code(s) seen · ${s.pending} pending · ${s.burned} burned as used · ${s.tried} tried`;
     };
     const onGroupMessage = async (event: NewMessageEvent) => {
-      const text = messageSearchText(event.message as Api.Message);
-      const { codes, usedPartials } = extractCodes(text, codePrefix);
+      const msg = event.message as Api.Message;
+      const text = messageSearchText(msg);
+      const { codes, usedPartials } = extractCodes(text, codePrefix, codeRegex);
       for (const p of usedPartials) queue.markUsed(p);
-      for (const c of codes) queue.add(c);
+      for (const c of codes) queue.add(c, { msgId: msg.id, text });
       listenStep.result = queueSummary();
     };
     client.addEventHandler(
@@ -569,11 +1004,9 @@ export async function runAutoreg(
           limit: scanCount,
         })) as Api.Message[];
         for (const m of [...recent].reverse()) {
-          const { codes, usedPartials } = extractCodes(
-            messageSearchText(m),
-            codePrefix,
-          );
-          for (const c of codes) queue.add(c);
+          const text = messageSearchText(m);
+          const { codes, usedPartials } = extractCodes(text, codePrefix, codeRegex);
+          for (const c of codes) queue.add(c, { msgId: m.id, text });
           for (const p of usedPartials) queue.markUsed(p);
         }
         scanStep.durationMs = Date.now() - s0;
@@ -600,6 +1033,9 @@ export async function runAutoreg(
       // register button, leaving the bot waiting for a code.
       let armed = false;
       let armedAt = 0;
+      // The bot's own prompt, which may state how a code has to be typed
+      let lastBotPrompt = "";
+      let readyReached = false;
       const arm = async (refresh = false) => {
         checkCancelled();
         armed = false;
@@ -633,6 +1069,7 @@ export async function runAutoreg(
               `No new, edited, or existing message with buttons found within ${replyTimeoutMs}ms`,
             );
           const buttonsMsg = found.message;
+          lastBotPrompt = buttonsMsg.message || lastBotPrompt;
           const parsed = await parseMessages([buttonsMsg], client, signal);
           if (parsed.html) clickStep.preClickHtml = parsed.html;
           if (parsed.buttons.length) clickStep.preClickButtons = parsed.buttons;
@@ -642,6 +1079,10 @@ export async function runAutoreg(
               `Register button ${config.registerButton ? `"${config.registerButton}" ` : ""}not found`,
             );
           const peer = await client.getInputEntity(botUsername);
+          // Armed before the click: the bot's "send me the code" often lands at once
+          const readyWait = codeReady
+            ? beginTextWait(client, botPeerId, codeReady, replyTimeoutMs, signal, [buttonsMsg])
+            : null;
           try {
             const answer = (await client.invoke(
               new Api.messages.GetBotCallbackAnswer({
@@ -653,7 +1094,16 @@ export async function runAutoreg(
             if (answer.message) clickStep.callbackAnswer = answer.message;
           } catch (err: any) {
             // Click was delivered even if the bot never answered the callback
-            if (!err?.message?.includes("BOT_RESPONSE_TIMEOUT")) throw err;
+            if (!err?.message?.includes("BOT_RESPONSE_TIMEOUT")) {
+              readyWait?.cancel();
+              throw err;
+            }
+          }
+          // The bot has to be waiting for a code before one is worth spending. Sent too
+          // early it is simply ignored, and the code is gone.
+          if (readyWait) {
+            readyReached = await readyWait.result;
+            checkCancelled();
           }
           clickStep.clickedButton = target.text;
           const viaNote =
@@ -662,7 +1112,12 @@ export async function runAutoreg(
               : found.via === "existing"
                 ? " (existing prompt)"
                 : "";
-          clickStep.result = `Clicked "${target.text}"${viaNote}`;
+          const readyNote = !codeReady
+            ? ""
+            : readyReached
+              ? ` · bot ready ("${codeReady}")`
+              : ` · bot never said "${codeReady}" within ${replyTimeoutMs}ms, sending anyway`;
+          clickStep.result = `Clicked "${target.text}"${viaNote}${readyNote}`;
           armed = true;
           armedAt = Date.now();
         } finally {
@@ -699,10 +1154,48 @@ export async function runAutoreg(
           await arm(armed);
         }
 
+        // A posted code is not always the code to send: the group may have said to drop a
+        // character, swap one, or read part of it out of the wording around it
+        let toSend = code;
+        if (hasFixedEdits) {
+          const editStep = beginStep("edit_code", `Clean up code: "${code}"`);
+          toSend = applyCodeEdits(code, config);
+          editStep.result =
+            toSend === code ? "Nothing to strip" : `Stripped to "${toSend}"`;
+        }
+        if (config.aiModifyCode) {
+          const aiStep = beginStep("ai_modify_code", `AI check code: "${toSend}"`);
+          const a0 = Date.now();
+          try {
+            const context = await codeContext(
+              client,
+              groupEntity,
+              queue.sourceOf(code),
+              config.aiContextCount ?? DEFAULT_AI_CONTEXT,
+              lastBotPrompt || undefined,
+            );
+            const prompt = buildCodeFixPrompt(toSend, context, config.aiModifyCodeHint);
+            aiStep.aiPrompt = prompt;
+            const { response } = await callAI([], prompt, 200);
+            aiStep.aiResponse = response;
+            aiStep.aiDurationMs = Date.now() - a0;
+            const before = toSend;
+            toSend = sanitizeAiCode(response, before);
+            aiStep.result =
+              toSend === before ? "Unchanged" : `Adjusted to "${toSend}"`;
+          } catch (err: any) {
+            // A model that is down must not sink the run; the captured code still stands
+            aiStep.error = `AI unavailable, sending the code as captured: ${err?.message ?? String(err)}`;
+          } finally {
+            aiStep.durationMs = Date.now() - a0;
+          }
+          checkCancelled();
+        }
+
         // Command mode skips the button entirely: the code rides along with
         // the start command, e.g. /start ABC-30-Register_XYZ
         const payload =
-          entryMode === "command" ? `${startCommand} ${code}` : code;
+          entryMode === "command" ? `${startCommand} ${toSend}` : toSend;
         const codeStep = beginStep("send_command", `Send code: "${payload}"`);
         const t0 = Date.now();
         const verdictPromise = waitForVerdict(
@@ -714,6 +1207,25 @@ export async function runAutoreg(
           config.failContains,
           signal,
         );
+        // Armed before the code goes out: the bot's "now send the username" can arrive in
+        // the very reply that accepts the code. With a click in between, the prompt comes
+        // after it instead, so the wait is armed there -- on this side of the click its
+        // timeout would be spent waiting for the click to happen.
+        const usernameWait =
+          usernameReady && !clickAfterCode
+            ? beginTextWait(client, botPeerId, usernameReady, replyTimeoutMs, signal)
+            : null;
+        // Same reasoning: the button that opens registration often rides in the reply that
+        // accepts the code, so the wait for it predates the send
+        const afterCodeWait = clickAfterCode
+          ? beginAfterCodeWait(
+              client,
+              botPeerId,
+              afterCodeButton,
+              replyTimeoutMs,
+              signal,
+            )
+          : null;
         await client.sendMessage(botUsername, { message: payload });
         const { verdict, messages } = await verdictPromise;
         codeStep.durationMs = Date.now() - t0;
@@ -725,6 +1237,8 @@ export async function runAutoreg(
 
         if (verdict === "timeout") {
           // Bot went quiet: re-arm and give this code one more go
+          usernameWait?.cancel();
+          afterCodeWait?.cancel();
           codeStep.error = `No reply within ${replyTimeoutMs}ms`;
           armed = false;
           if (!retriedCodes.has(code)) {
@@ -734,12 +1248,141 @@ export async function runAutoreg(
           continue;
         }
         if (verdict === "fail") {
+          usernameWait?.cancel();
+          afterCodeWait?.cancel();
           codeStep.error = "Code rejected (likely already used)";
           // The bot re-prompts after a bad code, so stay armed and fire the next one
           armedAt = Date.now();
           continue;
         }
         codeStep.result = "Code accepted";
+
+        // 4b. Bots that vet the code first only open registration once the button on that
+        // reply is clicked (or its t.me link followed). Messages seen so far are seeded in,
+        // since the offer usually rides in the reply that just accepted the code.
+        if (afterCodeWait) {
+          const clickStep = beginStep(
+            "click_button",
+            `Click after code accepted${afterCodeButton ? ` "${afterCodeButton}"` : ""}`,
+          );
+          const c0 = Date.now();
+          // Set once a wait for the username prompt has run, so the paths that skip the
+          // click do not skip that wait with it
+          let readyNoted = false;
+          // The wait carries the timeout; what the verdict already collected is the
+          // fallback, for an offer that arrived as an edit the wait's handler missed
+          let target = await afterCodeWait.result;
+          checkCancelled();
+          if (!target) {
+            target =
+              messages
+                .map((m) => findAfterCodeTarget(m, afterCodeButton))
+                .find((t): t is AfterCodeTarget => t !== null) ?? null;
+          }
+
+          if (!target) {
+            const missing = `No ${afterCodeButton ? `"${afterCodeButton}" ` : ""}button or link on the bot's reply within ${replyTimeoutMs}ms`;
+            clickStep.durationMs = Date.now() - c0;
+            if (afterCodeRequired) {
+              clickStep.error = missing;
+              // The bot is mid-flow and will not take a username, so this code is spent
+              armed = false;
+              continue;
+            }
+            clickStep.result = `${missing} -- optional, carrying on`;
+          } else {
+            const parsed = await parseMessages([target.msg], client, signal);
+            if (parsed.html) clickStep.preClickHtml = parsed.html;
+            if (parsed.buttons.length) clickStep.preClickButtons = parsed.buttons;
+            // Both armed before the click: its answer, and the "now send the username"
+            // prompt that often rides in that answer
+            const clickReply = waitForVerdict(
+              client,
+              botUsername,
+              botPeerId,
+              replyTimeoutMs,
+              undefined,
+              config.failContains,
+              signal,
+            );
+            const readyWait = usernameReady
+              ? beginTextWait(client, botPeerId, usernameReady, replyTimeoutMs, signal)
+              : null;
+            let clickFailed: string | null = null;
+            try {
+              await clickAfterCodeTarget(client, target, clickStep, botUsername);
+              clickStep.clickedButton = target.text;
+            } catch (err: any) {
+              if (err?.message === "Job cancelled") throw err;
+              clickFailed = err?.message ?? String(err);
+            }
+
+            if (clickFailed) {
+              readyWait?.cancel();
+              // A click that would not go through spends the code either way; whether that
+              // ends this attempt is the operator's call
+              clickStep.error = clickFailed;
+              clickStep.durationMs = Date.now() - c0;
+              if (afterCodeRequired) {
+                armed = false;
+                continue;
+              }
+            } else {
+              const clicked = await clickReply;
+              checkCancelled();
+              clickStep.durationMs = Date.now() - c0;
+              if (clicked.messages.length) {
+                const after = await parseMessages(clicked.messages, client, signal);
+                clickStep.responseHtml = after.html || undefined;
+                clickStep.responseImage = after.images[0];
+              }
+              // A bot that only vets the code on the click says so here, not earlier
+              if (clicked.verdict === "fail") {
+                readyWait?.cancel();
+                clickStep.error = "Rejected after the click (likely already used)";
+                armedAt = Date.now();
+                continue;
+              }
+              if (readyWait) {
+                const reached = await readyWait.result;
+                checkCancelled();
+                readyNoted = true;
+                clickStep.result += reached
+                  ? ` · bot ready for the username ("${usernameReady}")`
+                  : ` · bot never said "${usernameReady}" within ${replyTimeoutMs}ms, sending anyway`;
+              }
+            }
+          }
+
+          // Carrying on past a click that did not happen still means waiting for the
+          // username prompt; the reply that accepted the code may already carry it
+          if (usernameReady && !readyNoted) {
+            const reached = await beginTextWait(
+              client,
+              botPeerId,
+              usernameReady,
+              replyTimeoutMs,
+              signal,
+              messages,
+            ).result;
+            checkCancelled();
+            clickStep.result = `${clickStep.result ?? ""}${
+              reached
+                ? ` · bot ready for the username ("${usernameReady}")`
+                : ` · bot never said "${usernameReady}" within ${replyTimeoutMs}ms, sending anyway`
+            }`;
+          }
+        }
+
+        // The bot asks for the username in its own time; sent before it is listening, the
+        // name is dropped and the accepted code is spent for nothing
+        if (usernameWait) {
+          const reached = await usernameWait.result;
+          checkCancelled();
+          codeStep.result += reached
+            ? ` · bot ready for the username ("${usernameReady}")`
+            : ` · bot never said "${usernameReady}" within ${replyTimeoutMs}ms, sending anyway`;
+        }
 
         // 5. Finish signup with the username
         const username = expandCommand(signupUsername);

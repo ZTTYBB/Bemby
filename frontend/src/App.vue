@@ -34,6 +34,7 @@
       <a class="nav-link" href="#" :class="{ active: currentView === 'accounts' }" @click.prevent="setView('accounts')"><i class="fa-solid fa-users"></i>{{ t('nav.accounts') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'messenger' }" @click.prevent="setView('messenger')"><i class="fa-brands fa-telegram"></i>{{ t('nav.messenger') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'jobs' }" @click.prevent="setView('jobs')"><i class="fa-solid fa-robot"></i>{{ t('nav.jobs') }}</a>
+      <a v-if="scheduleSeparatePage" class="nav-link" href="#" :class="{ active: currentView === 'schedule' }" @click.prevent="setView('schedule')"><i class="fa-solid fa-calendar-days"></i>{{ t('nav.schedule') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'templates' }" @click.prevent="setView('templates')"><i class="fa-solid fa-layer-group"></i>{{ t('nav.templates') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'logs' }" @click.prevent="setView('logs')"><i class="fa-solid fa-scroll"></i>{{ t('nav.logs') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'settings' }" @click.prevent="setView('settings')"><i class="fa-solid fa-gear"></i>{{ t('nav.settings') }}</a>
@@ -98,16 +99,22 @@ import LogsView from './views/LogsView.vue';
 import SettingsView from './views/SettingsView.vue';
 import HelpView from './views/HelpView.vue';
 import MessengerView from './views/MessengerView.vue';
+import ScheduleView from './views/ScheduleView.vue';
+import {
+  loadSchedulePageSetting,
+  scheduleSeparatePage,
+} from './composables/schedulePage';
 
-type ViewName = 'accounts' | 'messenger' | 'jobs' | 'templates' | 'settings' | 'logs' | 'help';
+type ViewName = 'accounts' | 'messenger' | 'jobs' | 'schedule' | 'templates' | 'settings' | 'logs' | 'help';
 
 const LAST_VIEW_KEY = 'bemby:lastView';
-const VALID_VIEWS: ViewName[] = ['accounts', 'messenger', 'jobs', 'templates', 'settings', 'logs', 'help'];
+const VALID_VIEWS: ViewName[] = ['accounts', 'messenger', 'jobs', 'schedule', 'templates', 'settings', 'logs', 'help'];
 
 const viewComponents: Record<ViewName, Component> = {
   accounts: AccountsView,
   messenger: MessengerView,
   jobs: JobsView,
+  schedule: ScheduleView,
   templates: TemplatesView,
   settings: SettingsView,
   logs: LogsView,
@@ -116,7 +123,12 @@ const viewComponents: Record<ViewName, Component> = {
 
 const savedView = localStorage.getItem(LAST_VIEW_KEY) as ViewName;
 const currentView = ref<ViewName>(VALID_VIEWS.includes(savedView) ? savedView : 'accounts');
-const currentComponent = computed(() => viewComponents[currentView.value]);
+const currentComponent = computed(() =>
+  viewComponents[
+    currentView.value === 'schedule' && !scheduleSeparatePage.value ? 'jobs' : currentView.value
+  ],
+);
+loadSchedulePageSetting();
 
 function setView(view: ViewName) {
   currentView.value = view;

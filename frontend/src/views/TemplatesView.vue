@@ -27,6 +27,13 @@
       </div>
     </div>
 
+    <div v-if="importNotice" class="success-msg" style="margin-bottom:12px">
+      {{ importNotice }}
+      <button class="btn btn-ghost btn-sm btn-icon" style="margin-left:8px" @click="importNotice = ''">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+
     <div class="card">
       <PaginationBar
         :page="page"
@@ -93,6 +100,12 @@
                   <button class="btn btn-sm btn-ghost btn-icon" :title="copiedTplId === tpl.id ? t('templates.shareCopied') : t('templates.shareBtn')" @click="shareTemplate(tpl)">
                     <i :class="copiedTplId === tpl.id ? 'fa-solid fa-check' : 'fa-solid fa-share-nodes'"></i>
                   </button>
+                  <button
+                    class="btn btn-sm btn-ghost btn-icon"
+                    :title="t('templates.duplicateBtn')"
+                    :disabled="duplicatingId !== null"
+                    @click="duplicateTemplate(tpl)"
+                  ><i class="fa-solid fa-clone"></i></button>
                   <button class="btn btn-sm btn-ghost btn-icon" :title="t('common.edit')" @click="openEdit(tpl)"><i class="fa-solid fa-pen"></i></button>
                   <button class="btn btn-sm btn-danger btn-icon" :title="t('common.delete')" @click="openDeleteTpl(tpl.id)"><i class="fa-solid fa-trash"></i></button>
                 </div>
@@ -228,7 +241,7 @@
           <!-- Custom: target bot + action chain -->
           <template v-if="form.jobType === 'custom'">
             <div class="form-group">
-              <label class="form-label">{{ t('jobs.custom.labelTarget') }} <span style="color:#e63946">*</span></label>
+              <label class="form-label">{{ t('jobs.custom.labelTarget') }}</label>
               <input v-model.trim="form.botUsername" class="form-input" placeholder="BotUsername" />
             </div>
 
@@ -255,6 +268,10 @@
                     <option value="enter_captcha" :disabled="aiKeyMissing">{{ t('jobs.custom.actionEnterCaptcha') }}{{ aiKeyMissing ? ' (' + t('jobs.noApiKey') + ')' : '' }}</option>
                     <option value="join_group">{{ t('jobs.custom.actionJoinGroup') }}</option>
                     <option value="subscribe_channel">{{ t('jobs.custom.actionSubscribeChannel') }}</option>
+                    <option value="open_mini_app" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenMiniApp') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
+                    <option value="open_mini_app_url" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenMiniAppUrl') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
+                    <option value="open_bot_menu_app" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenBotMenuApp') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
+                    <option value="open_url" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenUrl') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
                   </select>
                   <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === 0" @click="moveUp(i)"><i class="fa-solid fa-arrow-up"></i></button>
                   <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === customActions.length - 1" @click="moveDown(i)"><i class="fa-solid fa-arrow-down"></i></button>
@@ -396,6 +413,14 @@
                     <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
                   </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-checkbox-label">
+                      <input type="checkbox" v-model="action.cfChallenge" :disabled="cfBrowserMissing" />
+                      {{ t('jobs.custom.labelCfChallenge') }}
+                    </label>
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+                    <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
+                  </div>
                 </div>
 
                 <!-- click_message_button -->
@@ -491,6 +516,14 @@
                     <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
                   </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-checkbox-label">
+                      <input type="checkbox" v-model="action.cfChallenge" :disabled="cfBrowserMissing" />
+                      {{ t('jobs.custom.labelCfChallenge') }}
+                    </label>
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+                    <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
+                  </div>
                 </div>
 
                 <!-- enter_captcha -->
@@ -553,6 +586,116 @@
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.checkSubscriptionHint') }}</div>
                   </div>
                 </div>
+
+                <!-- open_mini_app / open_mini_app_url / open_bot_menu_app -->
+                <div v-if="action.type === 'open_mini_app' || action.type === 'open_mini_app_url' || action.type === 'open_bot_menu_app'" class="custom-action-params">
+                  <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">{{ action.type === 'open_mini_app' ? t('jobs.custom.labelContactOptional') : action.type === 'open_mini_app_url' ? t('jobs.custom.labelMiniAppOwner') : t('jobs.custom.labelMenuAppOwner') }}</label>
+                    <input v-model.trim="action.contact" class="form-input" :placeholder="t('jobs.custom.contactOptionalPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ action.type === 'open_mini_app' ? t('jobs.custom.contactOptionalHint') : action.type === 'open_mini_app_url' ? t('jobs.custom.miniAppOwnerHint') : t('jobs.custom.menuAppOwnerHint') }}</div>
+                  </div>
+                  <div v-if="action.type === 'open_mini_app_url'" class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.custom.labelMiniAppUrl') }}</label>
+                    <input v-model.trim="action.url" class="form-input" :placeholder="t('jobs.custom.miniAppUrlPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppUrlHint') }}</div>
+                  </div>
+                  <div v-if="action.type === 'open_mini_app'" class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.custom.labelMiniAppButton') }}</label>
+                    <input v-model.trim="action.button" class="form-input" :placeholder="t('jobs.custom.miniAppButtonPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppButtonHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.custom.labelInAppButton') }}</label>
+                    <input v-model.trim="action.appButton" class="form-input" :placeholder="t('jobs.custom.inAppButtonPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.inAppButtonHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.custom.labelSuccessContains') }}</label>
+                    <input v-model.trim="action.successContains" class="form-input" :placeholder="t('jobs.custom.successContainsPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.successContainsHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.custom.labelFailContains') }}</label>
+                    <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
+                  </div>
+                  <div class="form-row" style="margin-bottom:0;margin-top:8px">
+                    <div class="form-group">
+                      <label class="form-label">{{ t('jobs.custom.labelMaxRetries') }}</label>
+                      <input v-model.number="action.maxRetries" class="form-input" type="number" min="0" max="10" />
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">{{ t('jobs.custom.labelMiniAppMaxWait') }}</label>
+                      <input v-model.number="action.miniAppMaxWaitMs" class="form-input" type="number" min="0" step="10000" placeholder="300000" />
+                    </div>
+                  </div>
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppMaxWaitHint') }}</div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.custom.labelMiniAppProxy') }}</label>
+                    <select v-model="action.miniAppProxyId" class="form-select">
+                      <option value="">{{ t('jobs.custom.miniAppProxyJob') }}</option>
+                      <option value="direct">{{ t('jobs.custom.miniAppProxyDirect') }}</option>
+                      <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
+                    </select>
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppProxyHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-checkbox-label">
+                      <input type="checkbox" v-model="action.miniAppTryAllProxies" />
+                      {{ t('jobs.custom.labelMiniAppTryAll') }}
+                    </label>
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppTryAllHint') }}</div>
+                  </div>
+                </div>
+
+                <!-- open_url -->
+                <div v-if="action.type === 'open_url'" class="custom-action-params">
+                  <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">{{ t('jobs.web.labelUrl') }}</label>
+                    <input v-model.trim="action.url" class="form-input" :placeholder="t('jobs.web.urlPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.web.urlHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:10px">
+                    <WebStepsEditor :steps="action.webSteps" :ai-key-missing="aiKeyMissing" />
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.custom.labelSuccessContains') }}</label>
+                    <input v-model.trim="action.successContains" class="form-input" :placeholder="t('jobs.custom.successContainsPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.successContainsHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.custom.labelFailContains') }}</label>
+                    <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
+                  </div>
+                  <div class="form-row" style="margin-bottom:0;margin-top:8px">
+                    <div class="form-group">
+                      <label class="form-label">{{ t('jobs.custom.labelMaxRetries') }}</label>
+                      <input v-model.number="action.maxRetries" class="form-input" type="number" min="0" max="10" />
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">{{ t('jobs.custom.labelMiniAppMaxWait') }}</label>
+                      <input v-model.number="action.miniAppMaxWaitMs" class="form-input" type="number" min="0" step="10000" placeholder="300000" />
+                    </div>
+                  </div>
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppMaxWaitHint') }}</div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.custom.labelMiniAppProxy') }}</label>
+                    <select v-model="action.miniAppProxyId" class="form-select">
+                      <option value="">{{ t('jobs.custom.miniAppProxyJob') }}</option>
+                      <option value="direct">{{ t('jobs.custom.miniAppProxyDirect') }}</option>
+                      <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
+                    </select>
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppProxyHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-checkbox-label">
+                      <input type="checkbox" v-model="action.miniAppTryAllProxies" />
+                      {{ t('jobs.custom.labelMiniAppTryAll') }}
+                    </label>
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppTryAllHint') }}</div>
+                  </div>
+                </div>
               </div>
               <button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px" @click="addAction">
                 <i class="fa-solid fa-plus"></i> {{ t('jobs.custom.addAction') }}
@@ -572,9 +715,47 @@
               <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.groupHint') }}</div>
             </div>
             <div class="form-group">
-              <label class="form-label">{{ t('jobs.autoreg.labelCodePrefix') }} <span style="color:#e63946">*</span></label>
+              <label class="form-label">{{ t('jobs.autoreg.labelCodePrefix') }} <span v-if="!autoregCfg.codeRegex" style="color:#e63946">*</span></label>
               <input v-model.trim="autoregCfg.codePrefix" class="form-input" placeholder="ABC-*-XYZ_" />
               <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.codePrefixHint') }}</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.autoreg.labelCodeRegex') }} <span v-if="!autoregCfg.codePrefix" style="color:#e63946">*</span></label>
+              <input v-model.trim="autoregCfg.codeRegex" class="form-input" :placeholder="t('jobs.autoreg.codeRegexPlaceholder')" />
+              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.codeRegexHint') }}</div>
+              <div style="font-size:11px;color:#777;margin-top:3px">{{ t('jobs.autoreg.eitherPrefixOrRegex') }}</div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-check">
+                  <input v-model="autoregCfg.stripChinese" type="checkbox" />
+                  <span>{{ t('jobs.autoreg.labelStripChinese') }}</span>
+                </label>
+                <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.stripChineseHint') }}</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">{{ t('jobs.autoreg.labelStripChars') }}</label>
+                <input v-model.trim="autoregCfg.stripChars" class="form-input" :placeholder="t('jobs.autoreg.stripCharsPlaceholder')" />
+                <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.stripCharsHint') }}</div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-check">
+                <input v-model="autoregCfg.aiModifyCode" type="checkbox" />
+                <span>{{ t('jobs.autoreg.labelAiModifyCode') }}</span>
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.aiModifyCodeHint') }}</div>
+            </div>
+            <div v-if="autoregCfg.aiModifyCode" class="form-row">
+              <div class="form-group">
+                <label class="form-label">{{ t('jobs.autoreg.labelAiModifyCodeHint') }}</label>
+                <input v-model.trim="autoregCfg.aiModifyCodeHint" class="form-input" :placeholder="t('jobs.autoreg.aiModifyCodeHintPlaceholder')" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">{{ t('jobs.autoreg.labelAiContextCount') }}</label>
+                <input v-model.number="autoregCfg.aiContextCount" class="form-input" type="number" min="0" max="50" />
+                <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.aiContextCountHint') }}</div>
+              </div>
             </div>
             <div class="form-group">
               <label class="form-label">{{ t('jobs.autoreg.labelEntryMode') }}</label>
@@ -601,9 +782,41 @@
               </div>
             </div>
             <div class="form-group">
+              <label class="form-label">{{ t('jobs.autoreg.labelCodeReady') }}</label>
+              <input v-model.trim="autoregCfg.codeReadyContains" class="form-input" :placeholder="t('jobs.autoreg.codeReadyPlaceholder')" />
+              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.codeReadyHint') }}</div>
+            </div>
+            <!-- Some bots vet the code first, then offer a button/link that opens registration -->
+            <div class="form-group">
+              <label class="form-check">
+                <input v-model="autoregCfg.clickAfterCode" type="checkbox" />
+                <span>{{ t('jobs.autoreg.labelClickAfterCode') }}</span>
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.clickAfterCodeHint') }}</div>
+            </div>
+            <div v-if="autoregCfg.clickAfterCode" class="form-row">
+              <div class="form-group">
+                <label class="form-label">{{ t('jobs.autoreg.labelAfterCodeButton') }}</label>
+                <input v-model.trim="autoregCfg.afterCodeButton" class="form-input" :placeholder="t('jobs.autoreg.afterCodeButtonPlaceholder')" />
+                <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.afterCodeButtonHint') }}</div>
+              </div>
+              <div class="form-group">
+                <label class="form-check">
+                  <input v-model="autoregCfg.afterCodeRequired" type="checkbox" />
+                  <span>{{ t('jobs.autoreg.labelAfterCodeRequired') }}</span>
+                </label>
+                <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.autoreg.afterCodeRequiredHint') }}</div>
+              </div>
+            </div>
+            <div class="form-group">
               <label class="form-label">{{ t('jobs.autoreg.labelSignupUsername') }} <span style="color:#e63946">*</span></label>
               <input v-model.trim="autoregCfg.signupUsername" class="form-input" placeholder="myname{num:3}" />
               <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.signupUsernameHint') }}</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.autoreg.labelUsernameReady') }}</label>
+              <input v-model.trim="autoregCfg.usernameReadyContains" class="form-input" :placeholder="t('jobs.autoreg.usernameReadyPlaceholder')" />
+              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.autoreg.usernameReadyHint') }}</div>
             </div>
             <div class="form-row">
               <div class="form-group">
@@ -690,6 +903,14 @@
               <input v-model.trim="tplCheckinFailContains" class="form-input" :placeholder="t('jobs.failContainsPlaceholder')" />
               <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.failContainsHint') }}</div>
             </div>
+            <div class="form-group">
+              <label class="form-checkbox-label">
+                <input type="checkbox" v-model="tplCheckinCfChallenge" :disabled="cfBrowserMissing" />
+                {{ t('jobs.custom.labelCfChallenge') }}
+              </label>
+              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
+              <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
+            </div>
           </template>
 
           <div v-if="proxiesList.length" class="form-group">
@@ -698,6 +919,7 @@
               <option value="">{{ t('jobs.proxyNone') }}</option>
               <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
+            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.proxyBrowserOnlyHint') }}</div>
           </div>
 
         </div><!-- end modal-body -->
@@ -879,6 +1101,9 @@
         <button class="action-sheet-btn" @click="shareTemplate(actionMenuTpl!); actionMenuTpl = null">
           <i class="fa-solid fa-share-nodes"></i> {{ t('templates.shareBtn') }}
         </button>
+        <button class="action-sheet-btn" @click="duplicateTemplate(actionMenuTpl!); actionMenuTpl = null">
+          <i class="fa-solid fa-clone"></i> {{ t('templates.duplicateBtn') }}
+        </button>
         <button class="action-sheet-btn" @click="openEdit(actionMenuTpl!); actionMenuTpl = null">
           <i class="fa-solid fa-pen"></i> {{ t('common.edit') }}
         </button>
@@ -900,13 +1125,16 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { templatesApi, settingsApi, accountsApi, tgClientApi, jobsApi, type JobTemplate, type Settings, type UAPreset, type Proxy, type EmbywatchConfig, type CustomConfig, type CustomAction, type AutoregConfig, type AvailableAccount } from '../api/client';
 import { t } from '../i18n';
+import { regexValid } from '../utils/regexCheck';
 import { usePersistedRef } from '../composables/usePersistedRef';
 import { debounce } from '../composables/useDebounce';
 import { formatAccountLabel, loadAccountDisplaySetting } from '../composables/accountDisplay';
 import PaginationBar from '../components/PaginationBar.vue';
+import WebStepsEditor from '../components/WebStepsEditor.vue';
+import { webStepsFromConfig, webStepsToConfig, type WebStepForm } from '../composables/webSteps';
 
 type CustomActionForm = {
-  type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'ai_multiple_btn' | 'enter_captcha' | 'join_group' | 'subscribe_channel';
+  type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'ai_multiple_btn' | 'enter_captcha' | 'join_group' | 'subscribe_channel' | 'open_mini_app' | 'open_mini_app_url' | 'open_bot_menu_app' | 'open_url';
   content: string;
   contentDropdown: string;
   contentCustom: string;
@@ -923,12 +1151,23 @@ type CustomActionForm = {
   captchaLength: string;
   successContains: string;
   failContains: string;
+  cfChallenge: boolean;
   contact: string;
   groupId: string;
   checkMembership: boolean;
   verifyButton: string;
   verifyWaitMs: number;
   channelId: string;
+  appButton: string;
+  /** open_mini_app: browser budget, 0 = default */
+  miniAppMaxWaitMs: number;
+  /** open_mini_app: pinned browser proxy id, 'direct', or '' for the job proxy */
+  miniAppProxyId: string;
+  miniAppTryAllProxies: boolean;
+  /** open_url: the page to open */
+  url: string;
+  /** open_url: sub-steps run on the page once it is up */
+  webSteps: WebStepForm[];
 };
 
 const templates = ref<JobTemplate[]>([]);
@@ -940,6 +1179,15 @@ const proxiesList = computed<Proxy[]>(() => {
   try { return JSON.parse(settings.value?.proxies ?? '[]'); } catch { return []; }
 });
 const aiKeyMissing = computed(() => settings.value?.ai_key_configured !== 'true');
+// Anything that opens a page needs the solver's browser and its fonts in the data dir;
+// neither ships in the image, so those options stay off until both are downloaded.
+// See JobsView: not-yet-loaded settings must not read as a missing browser.
+const cfBrowserMissing = computed(
+  () =>
+    !!settings.value &&
+    (settings.value.cf_chromium_installed !== 'true' ||
+      settings.value.cf_fonts_installed !== 'true'),
+);
 
 const showForm = ref(false);
 const editTarget = ref<JobTemplate | null>(null);
@@ -950,6 +1198,7 @@ const actionMenuTpl = ref<JobTemplate | null>(null);
 const showImport = ref(false);
 const importJson = ref('');
 const importError = ref('');
+const importNotice = ref('');
 const importing = ref(false);
 const copiedTplId = ref<number | null>(null);
 
@@ -1083,8 +1332,19 @@ const runEveryDaysValid = computed(() => /^\s*\d+\s*(-\s*\d+\s*)?$/.test(runEver
 type AutoregCfgForm = {
   groupId: string;
   codePrefix: string;
+  codeRegex: string;
+  stripChinese: boolean;
+  stripChars: string;
+  aiModifyCode: boolean;
+  aiModifyCodeHint: string;
+  aiContextCount: number;
+  codeReadyContains: string;
+  usernameReadyContains: string;
   entryMode: 'button' | 'command';
   registerButton: string;
+  clickAfterCode: boolean;
+  afterCodeButton: string;
+  afterCodeRequired: boolean;
   signupUsername: string;
   listenMinutes: number;
   scanHistoryCount: number;
@@ -1095,8 +1355,19 @@ function defaultAutoregCfg(): AutoregCfgForm {
   return {
     groupId: '',
     codePrefix: '',
+    codeRegex: '',
+    stripChinese: false,
+    stripChars: '',
+    aiModifyCode: false,
+    aiModifyCodeHint: '',
+    aiContextCount: 6,
+    codeReadyContains: '',
+    usernameReadyContains: '',
     entryMode: 'button',
     registerButton: '',
+    clickAfterCode: false,
+    afterCodeButton: '',
+    afterCodeRequired: false,
     signupUsername: '',
     listenMinutes: 30,
     scanHistoryCount: 0,
@@ -1136,6 +1407,7 @@ const btnCustom = ref('');
 const btnAiHint = ref('');
 const tplCheckinSuccessContains = ref('');
 const tplCheckinFailContains = ref('');
+const tplCheckinCfChallenge = ref(false);
 
 function setCmdState(val: string) {
   if (CMD_PRESETS.has(val)) { cmdDropdown.value = val; cmdCustom.value = ''; }
@@ -1176,6 +1448,7 @@ function onJobTypeChange() {
   btnAiHint.value = '';
   tplCheckinSuccessContains.value = '';
   tplCheckinFailContains.value = '';
+  tplCheckinCfChallenge.value = false;
   Object.assign(autoregCfg, defaultAutoregCfg());
   setCmdState(''); setBtnState('');
 }
@@ -1185,8 +1458,10 @@ function defaultAction(): CustomActionForm {
     type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '',
     contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, gapMs: 1000, button: '签到',
     buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0,
-    captchaLength: '', successContains: '', failContains: '', contact: '', groupId: '', checkMembership: false,
-    verifyButton: '', verifyWaitMs: 30000, channelId: '',
+    captchaLength: '', successContains: '', failContains: '', cfChallenge: false, contact: '', groupId: '', checkMembership: false,
+    verifyButton: '', verifyWaitMs: 30000, channelId: '', appButton: '',
+    miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppTryAllProxies: true,
+    url: '', webSteps: [],
   };
 }
 
@@ -1237,6 +1512,21 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
     else if (autoregCfg.registerButton.trim()) cfg.registerButton = autoregCfg.registerButton.trim();
     if (autoregCfg.listenMinutes > 0 && autoregCfg.listenMinutes !== 30) cfg.listenMinutes = autoregCfg.listenMinutes;
     if (autoregCfg.scanHistoryCount > 0) cfg.scanHistoryCount = autoregCfg.scanHistoryCount;
+    if (autoregCfg.codeRegex.trim()) cfg.codeRegex = autoregCfg.codeRegex.trim();
+    if (autoregCfg.stripChinese) cfg.stripChinese = true;
+    if (autoregCfg.stripChars.trim()) cfg.stripChars = autoregCfg.stripChars.trim();
+    if (autoregCfg.aiModifyCode) {
+      cfg.aiModifyCode = true;
+      if (autoregCfg.aiModifyCodeHint.trim()) cfg.aiModifyCodeHint = autoregCfg.aiModifyCodeHint.trim();
+      if (autoregCfg.aiContextCount >= 0 && autoregCfg.aiContextCount !== 6) cfg.aiContextCount = autoregCfg.aiContextCount;
+    }
+    if (autoregCfg.codeReadyContains.trim()) cfg.codeReadyContains = autoregCfg.codeReadyContains.trim();
+    if (autoregCfg.clickAfterCode) {
+      cfg.clickAfterCode = true;
+      if (autoregCfg.afterCodeButton.trim()) cfg.afterCodeButton = autoregCfg.afterCodeButton.trim();
+      if (autoregCfg.afterCodeRequired) cfg.afterCodeRequired = true;
+    }
+    if (autoregCfg.usernameReadyContains.trim()) cfg.usernameReadyContains = autoregCfg.usernameReadyContains.trim();
     if (autoregCfg.successContains.trim()) cfg.successContains = autoregCfg.successContains.trim();
     if (autoregCfg.failContains.trim()) cfg.failContains = autoregCfg.failContains.trim();
     if (tplProxyId.value) cfg.proxyId = tplProxyId.value;
@@ -1298,6 +1588,52 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.verifyButton.trim() ? { verifyButton: a.verifyButton.trim(), verifyWaitMs: a.verifyWaitMs } : {}),
         };
         if (a.type === 'subscribe_channel') return { type: 'subscribe_channel' as const, channelId: a.channelId, ...(a.checkMembership ? { checkMembership: true } : {}) };
+        if (a.type === 'open_mini_app') return {
+          type: 'open_mini_app' as const,
+          ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
+          ...(a.button.trim() ? { button: a.button.trim() } : {}),
+          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+          ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
+          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+        };
+        if (a.type === 'open_mini_app_url') return {
+          type: 'open_mini_app_url' as const,
+          url: a.url.trim(),
+          ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
+          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+          ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
+          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+        };
+        if (a.type === 'open_bot_menu_app') return {
+          type: 'open_bot_menu_app' as const,
+          ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
+          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+          ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
+          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+        };
+        if (a.type === 'open_url') return {
+          type: 'open_url' as const,
+          url: a.url.trim(),
+          ...(a.webSteps.length ? { steps: webStepsToConfig(a.webSteps) } : {}),
+          ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
+          ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
+          ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
+          ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
+          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+        };
         if (a.type === 'ai_multiple_btn') return {
           type: 'ai_multiple_btn' as const,
           gapMs: a.gapMs,
@@ -1322,6 +1658,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.scope ? { scope: a.scope } : {}),
+          ...(a.cfChallenge ? { cfChallenge: true } : {}),
         };
         return {
           type: 'click_button' as const,
@@ -1331,6 +1668,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.scope ? { scope: a.scope } : {}),
+          ...(a.cfChallenge ? { cfChallenge: true } : {}),
         };
       }),
     };
@@ -1342,10 +1680,12 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
     const s = tplCheckinSuccessContains.value.trim();
     const f = tplCheckinFailContains.value.trim();
     const proxy = tplProxyId.value;
-    if (s || f || proxy) return {
+    const cf = tplCheckinCfChallenge.value;
+    if (s || f || proxy || cf) return {
       ...(s ? { successContains: s } : {}),
       ...(f ? { failContains: f } : {}),
       ...(proxy ? { proxyId: proxy } : {}),
+      ...(cf ? { cfChallenge: true } : {}),
     } as unknown as CustomConfig;
     return null;
   }
@@ -1385,6 +1725,8 @@ async function loadSettings() {
 }
 
 function openAdd() {
+  // See JobsView: the browser may have been installed since this view mounted
+  void loadSettings();
   editTarget.value = null;
   Object.assign(form, {
     name: '',
@@ -1405,6 +1747,7 @@ function openAdd() {
   customJobMaxRetries.value = 1;
   tplCheckinSuccessContains.value = '';
   tplCheckinFailContains.value = '';
+  tplCheckinCfChallenge.value = false;
   Object.assign(autoregCfg, defaultAutoregCfg());
   setCmdState(''); setBtnState('');
   formError.value = '';
@@ -1412,6 +1755,7 @@ function openAdd() {
 }
 
 function openEdit(tpl: JobTemplate) {
+  void loadSettings();
   editTarget.value = tpl;
   Object.assign(form, {
     name: tpl.name,
@@ -1491,6 +1835,10 @@ function openEdit(tpl: JobTemplate) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha' as const, maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group' as const, groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000 };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel' as const, channelId: a.channelId, checkMembership: a.checkMembership ?? false };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
+          if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
           if (a.type === 'ai_multiple_btn') return { ...base, type: 'ai_multiple_btn' as const, contact: a.contact ?? '', buttonAiHint: a.hint ?? '', gapMs: a.gapMs ?? 1000, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
@@ -1502,7 +1850,7 @@ function openEdit(tpl: JobTemplate) {
             } else {
               buttonDropdown = 'custom'; buttonCustom = a.button;
             }
-            return { ...base, type: 'click_button' as const, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
+            return { ...base, type: 'click_button' as const, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0, cfChallenge: a.cfChallenge ?? false };
           }
           if (a.type === 'click_message_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
@@ -1514,7 +1862,7 @@ function openEdit(tpl: JobTemplate) {
             } else {
               buttonDropdown = 'custom'; buttonCustom = a.button;
             }
-            return { ...base, type: 'click_message_button' as const, contact: a.contact, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
+            return { ...base, type: 'click_message_button' as const, contact: a.contact, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0, cfChallenge: a.cfChallenge ?? false };
           }
           return base;
         });
@@ -1536,7 +1884,18 @@ function openEdit(tpl: JobTemplate) {
         Object.assign(autoregCfg, {
           groupId: c.groupId ?? '',
           codePrefix: c.codePrefix ?? '',
+          codeRegex: c.codeRegex ?? '',
+          stripChinese: c.stripChinese === true,
+          stripChars: c.stripChars ?? '',
+          aiModifyCode: c.aiModifyCode === true,
+          aiModifyCodeHint: c.aiModifyCodeHint ?? '',
+          aiContextCount: c.aiContextCount ?? 6,
+          codeReadyContains: c.codeReadyContains ?? '',
+          usernameReadyContains: c.usernameReadyContains ?? '',
           registerButton: c.registerButton ?? '',
+          clickAfterCode: c.clickAfterCode === true,
+          afterCodeButton: c.afterCodeButton ?? '',
+          afterCodeRequired: c.afterCodeRequired === true,
           signupUsername: c.signupUsername ?? '',
           listenMinutes: c.listenMinutes ?? 30,
           scanHistoryCount: c.scanHistoryCount ?? 0,
@@ -1555,10 +1914,11 @@ function openEdit(tpl: JobTemplate) {
     tplCheckinFailContains.value = '';
     if (tpl.config) {
       try {
-        const cfg = JSON.parse(tpl.config) as { proxyId?: string; successContains?: string; failContains?: string };
+        const cfg = JSON.parse(tpl.config) as { proxyId?: string; successContains?: string; failContains?: string; cfChallenge?: boolean };
         tplProxyId.value = cfg.proxyId ?? '';
         tplCheckinSuccessContains.value = cfg.successContains ?? '';
         tplCheckinFailContains.value = cfg.failContains ?? '';
+        tplCheckinCfChallenge.value = cfg.cfChallenge ?? false;
       } catch { /* ignore */ }
     }
   }
@@ -1570,7 +1930,8 @@ async function saveTemplate() {
   formError.value = '';
   if (!form.name) { formError.value = t('jobs.errors.nameRequired'); return; }
   if (form.jobType === 'custom') {
-    if (!form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
+    // No target bot needed: an action can name its own contact, or drive a page that
+    // never touches Telegram. The ones that do need it say so when they run.
     if (customActions.value.length === 0) { formError.value = t('jobs.errors.customActionsRequired'); return; }
   }
   if (form.jobType === 'embywatch') {
@@ -1582,7 +1943,8 @@ async function saveTemplate() {
   if (form.jobType === 'autoreg') {
     if (!form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
     if (!autoregCfg.groupId) { formError.value = t('jobs.errors.autoregGroupRequired'); return; }
-    if (!autoregCfg.codePrefix) { formError.value = t('jobs.errors.autoregPrefixRequired'); return; }
+    if (!autoregCfg.codePrefix && !autoregCfg.codeRegex) { formError.value = t('jobs.errors.autoregPrefixRequired'); return; }
+    if (autoregCfg.codeRegex && !regexValid(autoregCfg.codeRegex)) { formError.value = t('jobs.errors.autoregRegexInvalid'); return; }
     if (!autoregCfg.signupUsername) { formError.value = t('jobs.errors.autoregUsernameRequired'); return; }
   }
   if (form.jobType === 'checkin' && !form.botUsername) {
@@ -1732,6 +2094,20 @@ async function executeDeleteTpl() {
   await loadTemplates();
 }
 
+async function duplicateTemplate(tpl: JobTemplate) {
+  if (duplicatingId.value) return;
+  duplicatingId.value = tpl.id;
+  try {
+    const copy = await templatesApi.duplicate(tpl.id);
+    await loadTemplates();
+    showToast(t('templates.duplicated').replace('{name}', copy.name));
+  } catch (err: any) {
+    showToast(err.response?.data?.error ?? t('common.saveFailed'));
+  } finally {
+    duplicatingId.value = null;
+  }
+}
+
 async function toggleTemplateEnabled(tpl: JobTemplate) {
   await templatesApi.update(tpl.id, { enabled: !tpl.enabled });
   await loadTemplates();
@@ -1759,7 +2135,15 @@ async function executeBulkDeleteTpls() {
 
 const muteToast = ref('');
 const isMutingBot = ref(false);
+const duplicatingId = ref<number | null>(null);
 let muteToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Brief message in the corner, shared by anything that finishes without a dialog. */
+function showToast(message: string) {
+  muteToast.value = message;
+  if (muteToastTimer) clearTimeout(muteToastTimer);
+  muteToastTimer = setTimeout(() => { muteToast.value = ''; }, 3000);
+}
 
 // ~15 calls/min -- safe for Telegram's account.UpdateNotifySettings
 const MUTE_RATE_MS = 4000;
@@ -1795,15 +2179,27 @@ async function bulkMuteBotForever() {
   }
 
   isMutingBot.value = false;
-  muteToast.value = t('templates.bulkMuteBotForeverDone');
-  muteToastTimer = setTimeout(() => { muteToast.value = ''; }, 3000);
+  showToast(t('templates.bulkMuteBotForeverDone'));
 }
 
-const SHARE_KEYS: (keyof JobTemplate)[] = ['name', 'jobType', 'botUsername', 'timezone', 'replyTimeoutMs', 'retryMax', 'config', 'startCommand', 'checkinButton'];
+const SHARE_KEYS: (keyof JobTemplate)[] = ['name', 'jobType', 'botUsername', 'timezone', 'replyTimeoutMs', 'retryMax', 'config'];
+
+// The start command and the button are stored on every template, defaulted, but only these
+// job types read them -- a custom or embywatch template shared with them in tow reads as if
+// it sends "/start" and looks for "签到", which it never does.
+const SHARE_KEYS_BY_TYPE: Partial<Record<JobTemplate['jobType'], (keyof JobTemplate)[]>> = {
+  checkin: ['startCommand', 'checkinButton'],
+  autoreg: ['startCommand'],
+};
+
+function shareShape(tpl: JobTemplate): Record<string, unknown> {
+  const keys = [...SHARE_KEYS, ...(SHARE_KEYS_BY_TYPE[tpl.jobType] ?? [])];
+  return Object.fromEntries(keys.map(k => [k, tpl[k]]));
+}
 
 async function shareSelected() {
   const selected = templates.value.filter(t => selectedIds.value.includes(t.id));
-  const text = JSON.stringify(selected.map(tpl => Object.fromEntries(SHARE_KEYS.map(k => [k, tpl[k]]))), null, 2);
+  const text = JSON.stringify(selected.map(shareShape), null, 2);
   await writeClipboard(text);
   sharedMulti.value = true;
   setTimeout(() => { sharedMulti.value = false; }, 1500);
@@ -1825,7 +2221,7 @@ async function writeClipboard(text: string) {
 }
 
 async function shareTemplate(tpl: JobTemplate) {
-  const text = JSON.stringify(Object.fromEntries(SHARE_KEYS.map(k => [k, tpl[k]])), null, 2);
+  const text = JSON.stringify(shareShape(tpl), null, 2);
   await writeClipboard(text);
   copiedTplId.value = tpl.id;
   setTimeout(() => { copiedTplId.value = null; }, 1500);
@@ -1834,14 +2230,25 @@ async function shareTemplate(tpl: JobTemplate) {
 function openImport() {
   importJson.value = '';
   importError.value = '';
+  importNotice.value = '';
   showImport.value = true;
 }
 
-function normaliseImportItem(item: Record<string, unknown>) {
+// A shared template carries `proxyId`, which only means something next to the proxy list
+// it came from. Keeping one this instance does not have would silently run the job with no
+// proxy at all, so it is dropped and reported.
+function normaliseImportItem(item: Record<string, unknown>): { item: Record<string, unknown>; droppedProxy: boolean } {
   if (typeof item.config === 'string') {
     try { item.config = JSON.parse(item.config); } catch { /* leave as-is */ }
   }
-  return item;
+  let droppedProxy = false;
+  const cfg = item.config as Record<string, unknown> | null | undefined;
+  const proxyId = cfg && typeof cfg === 'object' ? cfg.proxyId : undefined;
+  if (typeof proxyId === 'string' && proxyId && !proxiesList.value.some((p) => p.id === proxyId)) {
+    delete (cfg as Record<string, unknown>).proxyId;
+    droppedProxy = true;
+  }
+  return { item, droppedProxy };
 }
 
 async function doImport() {
@@ -1862,10 +2269,16 @@ async function doImport() {
 
   importing.value = true;
   try {
+    let droppedProxies = 0;
     for (const item of items) {
-      await templatesApi.create(normaliseImportItem(item) as Partial<JobTemplate>);
+      const { item: normalised, droppedProxy } = normaliseImportItem(item);
+      if (droppedProxy) droppedProxies++;
+      await templatesApi.create(normalised as Partial<JobTemplate>);
     }
     showImport.value = false;
+    if (droppedProxies) {
+      importNotice.value = t('templates.importProxyDropped').replace('{n}', String(droppedProxies));
+    }
     await loadTemplates();
   } catch (err: any) {
     importError.value = err.response?.data?.error ?? t('common.saveFailed');

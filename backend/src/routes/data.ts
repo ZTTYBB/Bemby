@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import crypto from 'crypto';
 import { db } from '../db/database';
+import { decryptPayload, encryptPayload, type EncryptedEnvelope } from '../db/exportCrypto';
+import { decryptAccountRow, encryptSecret } from '../db/secretColumns';
 import { refreshScheduler } from '../scheduler';
 import {
   verifyPassword,
@@ -30,8 +31,16 @@ export const EXPORT_EXCLUDED_SETTINGS = new Set([
   'ai_default_model_id',
 ]);
 
-// Settings whose presence forces the export to be encrypted.
-export const SENSITIVE_SETTING_KEYS = ['default_tg_api_hash', 'proxies'];
+// Settings whose presence forces the export to be encrypted. Proxy entries carry their
+// credentials in the URL, and a provider entry carries the seller's API token.
+export const SENSITIVE_SETTING_KEYS = [
+  'default_tg_api_hash',
+  'proxies',
+  'proxy_providers',
+  'webshare_api_key',
+  // Whoever holds the notification bot's token can act as that bot
+  'notify_bot_token',
+];
 
 // Config keys that carry a credential (e.g. Emby login) inside a job/template config blob.
 const SENSITIVE_CONFIG_KEYS = ['password', 'username'];
@@ -63,41 +72,6 @@ export function exportRequiresEncryption(
     (payload.jobs ?? []).some((j) => configHasSecret(j.config)) ||
     (payload.templates ?? []).some((t) => configHasSecret(t.config))
   );
-}
-
-type EncryptedEnvelope = {
-  encrypted: true;
-  version: '1';
-  salt: string;
-  iv: string;
-  tag: string;
-  data: string;
-};
-
-function encryptPayload(plaintext: string, secret: string): EncryptedEnvelope {
-  const salt = crypto.randomBytes(16);
-  const key = crypto.scryptSync(secret, salt, 32);
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  return {
-    encrypted: true,
-    version: '1',
-    salt: salt.toString('hex'),
-    iv: iv.toString('hex'),
-    tag: cipher.getAuthTag().toString('hex'),
-    data: encrypted.toString('base64'),
-  };
-}
-
-function decryptPayload(envelope: EncryptedEnvelope, secret: string): string {
-  const salt = Buffer.from(envelope.salt, 'hex');
-  const key = crypto.scryptSync(secret, salt, 32);
-  const iv = Buffer.from(envelope.iv, 'hex');
-  const tag = Buffer.from(envelope.tag, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-  decipher.setAuthTag(tag);
-  return decipher.update(Buffer.from(envelope.data, 'base64')) + decipher.final('utf8');
 }
 
 const router = Router();
@@ -223,10 +197,67 @@ export type ExportPayload = {
   settings: Record<string, string>;
 };
 
+/** Ids of the proxies currently configured, for validating references against. */
+function configuredProxyIds(): Set<string> {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'proxies'").get() as
+    | { value: string }
+    | undefined;
+  try {
+    const list = JSON.parse(row?.value ?? '[]') as Array<{ id?: string }>;
+    return new Set(list.map((p) => p.id).filter((id): id is string => !!id));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Drops proxy references that point at proxies this instance does not have: the account
+ * column, and the `proxyId` inside job and template configs. Returns how many were
+ * cleared. A dangling reference is worse than none, because it silently resolves to no
+ * proxy at all instead of the one the job was set up with.
+ */
+export function clearDanglingProxyRefs(): number {
+  const known = configuredProxyIds();
+  let cleared = 0;
+
+  const accounts = db
+    .prepare("SELECT id, proxy_id FROM tg_accounts WHERE proxy_id IS NOT NULL AND proxy_id != ''")
+    .all() as Array<{ id: number; proxy_id: string }>;
+  for (const a of accounts) {
+    if (known.has(a.proxy_id)) continue;
+    db.prepare('UPDATE tg_accounts SET proxy_id = NULL WHERE id = ?').run(a.id);
+    cleared++;
+  }
+
+  for (const table of ['jobs', 'job_templates'] as const) {
+    const rows = db
+      .prepare(`SELECT id, config FROM ${table} WHERE config IS NOT NULL AND config LIKE '%proxyId%'`)
+      .all() as Array<{ id: number; config: string }>;
+    for (const row of rows) {
+      let cfg: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(row.config);
+        cfg = typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
+      } catch {
+        continue;
+      }
+      const proxyId = cfg?.proxyId;
+      if (typeof proxyId !== 'string' || !proxyId || known.has(proxyId)) continue;
+      delete cfg.proxyId;
+      db.prepare(`UPDATE ${table} SET config = ? WHERE id = ?`).run(JSON.stringify(cfg), row.id);
+      cleared++;
+    }
+  }
+
+  return cleared;
+}
+
 router.post('/export', (req, res) => {
   const { secret } = req.body as { secret?: string };
 
-  const accounts = db.prepare('SELECT * FROM tg_accounts ORDER BY id').all() as AccountRow[];
+  const accounts = (db.prepare('SELECT * FROM tg_accounts ORDER BY id').all() as AccountRow[])
+    // The backup has its own encryption; the at-rest key must not be needed to restore it
+    .map(decryptAccountRow);
   const templates = db.prepare('SELECT * FROM job_templates ORDER BY id').all() as TemplateRow[];
   const jobs = db.prepare('SELECT * FROM jobs ORDER BY id').all() as JobRow[];
   const aiSuppliers = db.prepare('SELECT * FROM ai_suppliers ORDER BY id').all() as AiSupplierRow[];
@@ -351,16 +382,22 @@ router.post('/import', async (req, res) => {
       return;
     }
     const stored = getStoredCredentials();
+    // With no stored hash and no ADMIN_PASSWORD, the old fallback compared the input against
+    // the hash of the empty string, so an empty confirmPassword passed. Refuse outright
+    // instead: there is nothing to check against, and a wipe is not the place to fail open.
+    const envPassword = process.env.ADMIN_PASSWORD;
     const valid = stored.passwordHash
       ? await verifyPassword(confirmPassword, stored.passwordHash)
-      : timingSafeCompare(legacyHashPassword(confirmPassword), legacyHashPassword(process.env.ADMIN_PASSWORD ?? ''));
+      : envPassword
+        ? timingSafeCompare(legacyHashPassword(confirmPassword), legacyHashPassword(envPassword))
+        : false;
     if (!valid) {
       res.status(401).json({ error: 'Incorrect password', code: 'WRONG_PASSWORD' });
       return;
     }
   }
 
-  const results = { accountsImported: 0, accountsSkipped: 0, templatesImported: 0, jobsImported: 0, aiSuppliersImported: 0, aiModelsImported: 0, settingsUpdated: 0 };
+  const results = { accountsImported: 0, accountsSkipped: 0, templatesImported: 0, jobsImported: 0, aiSuppliersImported: 0, aiModelsImported: 0, settingsUpdated: 0, proxyRefsCleared: 0 };
 
   try {
     db.transaction(() => {
@@ -394,8 +431,8 @@ router.post('/import', async (req, res) => {
         `INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       ).run(
-        a.name, a.phoneNumber, a.apiId, a.apiHash,
-        forceReauth ? null : (a.sessionString ?? null),
+        a.name, a.phoneNumber, a.apiId, encryptSecret(a.apiHash),
+        encryptSecret(forceReauth ? null : (a.sessionString ?? null)),
         forceReauth ? 'unauthenticated' : (a.authStatus ?? 'unauthenticated'),
         a.proxyId ?? null,
       );
@@ -525,6 +562,12 @@ router.post('/import', async (req, res) => {
         if (typeof value === 'string') { stmt.run(key, value); results.settingsUpdated++; }
       }
     }
+
+    // A proxy reference is an id that only means something next to the proxy list it came
+    // from: a backup taken without proxies, or one imported into an instance with its own,
+    // leaves accounts and jobs pointing at nothing. That reads as "no proxy" at run time
+    // rather than as an error, so the dangling references are cleared here and counted.
+    results.proxyRefsCleared = clearDanglingProxyRefs();
     })();
   } catch (err) {
     // A malformed backup can throw inside the transaction (bad bind value,

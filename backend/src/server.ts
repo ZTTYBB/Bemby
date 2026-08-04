@@ -20,7 +20,10 @@ import dataRouter from "./routes/data";
 import debugRouter from "./routes/debug";
 import aiSuppliersRouter from "./routes/ai-suppliers";
 import templatesRouter from "./routes/templates";
-import tgClientRouter from "./routes/tgClient";
+import tgClientRouter, { mediaRouter as tgClientMediaRouter } from "./routes/tgClient";
+import webviewProxyRouter from "./routes/webviewProxy";
+import webviewSiteRouter from "./routes/webviewSite";
+import { isWebviewHost, webviewPublicOrigin } from "./tg/webviewTickets";
 import { requireAuth, getJwtSecret } from "./middleware/auth";
 import { startScheduler } from "./scheduler";
 import { attachWebSocket } from "./tg/wsHandler";
@@ -51,16 +54,77 @@ const corsOrigins = (process.env.CORS_ORIGIN ?? "")
 const allowedOrigins = corsOrigins.length
   ? corsOrigins
   : ["http://localhost:5173", "http://127.0.0.1:5173"];
+// A request naming the viewer origin is a framed page asking for itself, not a call on
+// Bemby: the whole host belongs to that page, from the root down, which is the only way its
+// router works. Mounted first so nothing else claims a path from it.
+const viewerOrigin = webviewPublicOrigin();
+if (viewerOrigin) {
+  console.log(`[webview] serving framed pages on ${viewerOrigin}`);
+  app.use((req, res, next) =>
+    isWebviewHost(req.headers.host, viewerOrigin) ? webviewSiteRouter(req, res, next) : next(),
+  );
+}
+
+// The messenger's page viewer, mounted ahead of everything else on purpose. It authenticates
+// with its own ticket rather than a session token (see routes/webviewProxy), answers its own
+// preflights -- the sandboxed page is an opaque origin, which the CORS whitelist below would
+// turn away -- and forwards request bodies untouched, which needs the raw bytes rather than
+// the JSON parser's object.
+app.use(
+  "/api/webview",
+  express.raw({ type: "*/*", limit: "10mb" }),
+  webviewProxyRouter,
+);
+
 app.use(cors({ origin: allowedOrigins }));
 app.use(express.json({ limit: "5mb" }));
 
 // Baseline security headers. Kept dependency-free and conservative so the SPA
 // and the mini-app iframe keep working; the mini-app proxy strips these itself.
+//
+// The policy is more than `frame-ancestors` on purpose. The panel renders bot- and
+// site-authored content through `v-html` in the logs and the messenger, and the session
+// token lives in this origin's localStorage, so one escaping slip would otherwise be worth
+// the whole API. `script-src 'self'` means injected markup cannot execute, whatever gets
+// past the escaping upstream.
+//
+// The two loosenings are load-bearing rather than habit:
+//   'unsafe-inline' in style-src -- the log and messenger renderers emit inline styles, and
+//     Vue's own scoped-style handling sets them too
+//   data: and blob: in img-src/media-src -- avatars, message photos and inline media are
+//     served to the page as data or object URLs rather than fetched by address
+const CSP = [
+  "default-src 'self'",
+  // Cloudflare injects its Web Analytics beacon into HTML it proxies, so an install sitting
+  // behind Cloudflare has a script on the page that the operator never put there. Allowed by
+  // name: without it every such install gets a console error on load for something it cannot
+  // turn off from here. Remove the origin if you do not front Bemby with Cloudflare.
+  "script-src 'self' https://static.cloudflareinsights.com",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "media-src 'self' data: blob:",
+  "font-src 'self' data:",
+  // The panel talks to its own API and its own WebSocket, and nothing else
+  "connect-src 'self' ws: wss:",
+  // Any http(s) origin, because framing third-party pages is the feature: a Mini App that
+  // allows framing is shown at its own address, and only one that refuses is served through
+  // the proxy on this origin. Narrowing this to 'self' broke every app of the first kind.
+  //
+  // This is not the loose end it looks like. A framed document gets its own origin and its
+  // own CSP, so nothing here is what keeps it away from the panel; `script-src 'self'`
+  // above is, and it is untouched by this.
+  "frame-src 'self' https: http:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  res.setHeader("Content-Security-Policy", CSP);
   if (process.env.NODE_ENV === "production") {
     res.setHeader(
       "Strict-Transport-Security",
@@ -88,6 +152,11 @@ app.use("/api/data", requireAuth, dataRouter);
 app.use("/api/debug", requireAuth, debugRouter);
 app.use("/api/ai-suppliers", requireAuth, aiSuppliersRouter);
 app.use("/api/templates", requireAuth, templatesRouter);
+// Inline chat media is loaded straight by the browser, which cannot set an Authorization
+// header, so it authenticates with a short-lived media ticket instead. Mounted ahead of
+// `requireAuth` because that guard would otherwise refuse the request before the ticket was
+// ever looked at; anything this router does not match falls through to the guarded one.
+app.use("/api/tg-client", tgClientMediaRouter);
 app.use("/api/tg-client", requireAuth, tgClientRouter);
 
 // Serve Vue SPA

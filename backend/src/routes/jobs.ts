@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { db, getDefaultTgApiCredentials } from "../db/database";
+import { decryptAccountRow } from "../db/secretColumns";
 import { runJob, type JobDetailLog } from "../jobs/runner";
 import { collectRunWarnings, completedMessage } from "../jobs/runWarnings";
 import {
-  sendTgNotify,
+  notifyJobEvent,
   buildFailureMessage,
   buildSuccessMessage,
-  getNotifyConfig,
 } from "../jobs/notify";
 import { refreshScheduler } from "../scheduler";
 import type { Job, TgAccount } from "../types";
@@ -36,6 +36,7 @@ type JobRow = {
   run_every_days: number;
   run_every_days_max: number | null;
   retired: string | null;
+  last_success_at: string | null;
   account_name?: string;
 };
 
@@ -106,6 +107,7 @@ function rowToJob(row: JobRow): Job & { accountName?: string } {
     runEveryDays: row.run_every_days ?? 1,
     runEveryDaysMax: row.run_every_days_max ?? null,
     retired: row.retired ?? null,
+    lastSuccessAt: row.last_success_at ?? null,
   };
 }
 
@@ -117,6 +119,8 @@ const JOB_SORTS: Record<string, string> = {
   window: "j.schedule_window_start",
   // asc shows enabled jobs first, matching the previous client-side sort
   enabled: "CASE WHEN j.enabled = 1 THEN 0 ELSE 1 END",
+  // asc puts never-succeeded jobs first, then oldest success
+  lastSuccess: "j.last_success_at",
 };
 
 router.get("/", (req, res) => {
@@ -277,9 +281,13 @@ router.post("/", (req, res) => {
     resolvedType === "checkin" ||
     resolvedType === "custom" ||
     resolvedType === "autoreg";
-  if (!name || (needsAccount && !accountId) || !botUsername) {
+  // A custom job need not target a bot at all: its actions can each name their own
+  // contact, or drive a page that never touches Telegram.
+  if (!name || (needsAccount && !accountId) || (resolvedType !== "custom" && !botUsername)) {
     res.status(400).json({
-      error: "name and botUsername are required; accountId is required for checkin, custom and autoreg jobs",
+      error:
+        "name is required; botUsername is required for every type except custom; " +
+        "accountId is required for checkin, custom and autoreg jobs",
     });
     return;
   }
@@ -427,6 +435,7 @@ router.post("/:id/run", async (req, res) => {
     const accountRow = db
       .prepare("SELECT * FROM tg_accounts WHERE id = ?")
       .get(jobRow.account_id) as AccountRow | undefined;
+    if (accountRow) decryptAccountRow(accountRow);
     if (!accountRow?.session_string) {
       res.status(400).json({ error: "Account is not authenticated" });
       return;
@@ -444,6 +453,7 @@ router.post("/:id/run", async (req, res) => {
     const accountRow = db
       .prepare("SELECT * FROM tg_accounts WHERE id = ?")
       .get(job.accountId) as AccountRow | undefined;
+    if (accountRow) decryptAccountRow(accountRow);
     if (accountRow?.session_string) {
       account = rowToAccount(accountRow);
     }
@@ -469,16 +479,22 @@ router.post("/:id/run", async (req, res) => {
       db.prepare(
         "UPDATE job_logs SET status = 'success', message = ?, detail = ? WHERE id = ?",
       ).run(completedMessage(warnings), detail, logId);
-      if (account?.sessionString) {
-        const cfg = getNotifyConfig();
-        if (cfg.events.includes("success") && cfg.username) {
-          sendTgNotify(
-            account,
-            buildSuccessMessage(job.name, job.jobType),
-            cfg.username,
-          ).catch((e) => console.warn("[notify] TG notification failed:", e));
-        }
+      // Durable stamp; job_logs is pruned by log_retention_days. Only moves
+      // forward so a slow run finishing after a later one can't rewind it.
+      // Isolated: a failure here must not demote an otherwise successful run.
+      try {
+        db.prepare(
+          `UPDATE jobs SET last_success_at = ?
+           WHERE id = ? AND (last_success_at IS NULL OR last_success_at < ?)`,
+        ).run(ranAt, job.id, ranAt);
+      } catch (e) {
+        console.warn(`[jobs] "${job.name}" last_success_at stamp failed:`, e);
       }
+      void notifyJobEvent(
+        "success",
+        buildSuccessMessage(job.name, job.jobType),
+        account,
+      );
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -487,16 +503,12 @@ router.post("/:id/run", async (req, res) => {
       db.prepare(
         "UPDATE job_logs SET status = 'failed', message = ?, detail = ? WHERE id = ?",
       ).run(isCancelled ? "Cancelled" : message, detail, logId);
-      if (!isCancelled && account?.sessionString) {
-        const cfg = getNotifyConfig();
-        if (cfg.events.includes("failed")) {
-          const target = cfg.username ?? "me";
-          sendTgNotify(
-            account,
-            buildFailureMessage(job.name, job.jobType, message),
-            target,
-          ).catch((e) => console.warn("[notify] TG notification failed:", e));
-        }
+      if (!isCancelled) {
+        void notifyJobEvent(
+          "failed",
+          buildFailureMessage(job.name, job.jobType, message),
+          account,
+        );
       }
     })
     .finally(() => { unregisterJob(Number(logId)); clearLiveDetail(Number(logId)); });

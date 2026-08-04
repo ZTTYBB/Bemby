@@ -15,6 +15,7 @@ vi.mock("../db/database", () => ({
 }));
 vi.mock("../jobs/runner", () => ({ runJob: vi.fn() }));
 vi.mock("../jobs/notify", () => ({
+  notifyJobEvent: vi.fn(),
   sendTgNotify: vi.fn(),
   buildFailureMessage: vi.fn(),
   buildSuccessMessage: vi.fn(),

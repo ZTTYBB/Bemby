@@ -4,8 +4,12 @@ import { LogLevel } from "telegram/extensions/Logger";
 import { StringSession } from "telegram/sessions";
 import { NewMessage, Raw, type NewMessageEvent } from "telegram/events";
 import { db, getDefaultTgApiCredentials } from "../db/database";
+import { decryptAccountRow } from "../db/secretColumns";
+import { escapeHtml as escHtml, safeHref } from "./htmlEscape";
 import { parseTgProxy } from "../jobs/runner";
 import { resolveAppClientParams } from "./appClient";
+import { parseMiniAppLink, withClientLaunchParams } from "./miniApp";
+import { displayPeerId } from "./peerTarget";
 
 export type TgLiveMessage = {
   chatId: string;
@@ -58,6 +62,9 @@ export type TgDialogItem = {
   muted?: boolean;
   pinned?: boolean;
 };
+
+/** A Mini App a bot pins beside the composer. */
+export type TgBotMenuButton = { text: string; url: string };
 
 export type TgContactItem = {
   chatId: string;
@@ -216,26 +223,6 @@ function chatIdToPeer(chatId: string): Api.TypePeer | null {
   return null;
 }
 
-function escHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-// Only allow http/https/tg URLs in href attributes -- strips anything else.
-// Returns the normalised href (not the raw input) so quotes and other unsafe
-// characters cannot break out of the attribute once escaped.
-function safeHref(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return /^(https?|tg):$/i.test(parsed.protocol) ? parsed.href : "";
-  } catch {
-    return "";
-  }
-}
 
 // Converts Telegram message entities to safe HTML. Returns null when there are
 // no formatting entities (plain text can be rendered directly).
@@ -450,19 +437,45 @@ export function markSessionExpired(accountId: number): void {
   }
 }
 
+/**
+ * Connections in progress, so two callers asking for the same idle account share one.
+ *
+ * Without this there was a gap between the map lookup above and the `set` at the end: both
+ * callers saw no entry, both built and connected a TelegramClient, and the second overwrote
+ * the first in `liveClients`. The first was then live, connected and unreachable, running
+ * its update loop against Telegram until the process restarted.
+ */
+const connecting = new Map<number, Promise<LiveEntry>>();
+
 export async function getLiveClient(accountId: number): Promise<LiveEntry> {
-  let entry = liveClients.get(accountId);
-  if (entry) {
-    entry.lastActiveAt = Date.now();
-    if (!entry.client.connected) await entry.client.connect();
-    return entry;
+  const existing = liveClients.get(accountId);
+  if (existing) {
+    existing.lastActiveAt = Date.now();
+    if (!existing.client.connected) await existing.client.connect();
+    return existing;
   }
 
+  const inFlight = connecting.get(accountId);
+  if (inFlight) return inFlight;
+
+  const pending = connectLiveClient(accountId);
+  connecting.set(accountId, pending);
+  try {
+    return await pending;
+  } finally {
+    // Cleared whether it resolved or threw, so a failed connect does not wedge the account
+    connecting.delete(accountId);
+  }
+}
+
+async function connectLiveClient(accountId: number): Promise<LiveEntry> {
+  let entry: LiveEntry | undefined;
   const account = db
     .prepare(
       "SELECT api_id, api_hash, session_string, proxy_id, app_client_id FROM tg_accounts WHERE id = ?",
     )
     .get(accountId) as AccountRow | undefined;
+  if (account) decryptAccountRow(account);
 
   if (!account?.session_string)
     throw new Error("Account not found or not authenticated");
@@ -1293,6 +1306,8 @@ export async function fetchAvatarsBatch(
 
 export type TgProfileInfo = {
   chatId: string;
+  /** The ID as Telegram clients and bots show it, which is what a job's chat field takes. */
+  peerId: string;
   name: string;
   type: "user" | "bot" | "group" | "channel";
   username: string | null;
@@ -1355,6 +1370,7 @@ export async function getEntityDetails(
   const isUser = entity instanceof Api.User;
   return {
     chatId,
+    peerId: displayPeerId(chatId),
     name: entityName(entity),
     type,
     username: (entity as any).username ?? null,
@@ -1842,25 +1858,49 @@ export async function getThreadMessages(
   });
 }
 
-export async function getBotCommands(
+/**
+ * What a bot offers beside the composer: its command list, and its menu button.
+ *
+ * The menu button is the Mini App a bot pins next to the input ("Misaya Media" and the
+ * like). It is a property of the bot rather than of any message, so it appears nowhere in
+ * the chat history -- without asking for it here there is nothing to render.
+ *
+ * Both come from the one GetFullUser call, since asking twice on every chat open is a
+ * round trip for nothing.
+ */
+export async function getBotInfo(
   entry: LiveEntry,
   chatId: string,
-): Promise<TgBotCommand[]> {
+): Promise<{ commands: TgBotCommand[]; menuButton: TgBotMenuButton | null }> {
+  const empty = { commands: [] as TgBotCommand[], menuButton: null };
   await ensureEntityCached(entry, chatId);
   const entity = entry.entityCache.get(chatId);
-  if (!(entity instanceof Api.User) || !entity.bot) return [];
+  if (!(entity instanceof Api.User) || !entity.bot) return empty;
   try {
-    // GetFullUser returns botInfo.commands for bot entities
     const full = await entry.client.invoke(
       new Api.users.GetFullUser({ id: entity as any }),
     );
-    const commands: any[] = (full as any).fullUser?.botInfo?.commands ?? [];
-    return commands.map((c: any) => ({
-      command: c.command as string,
-      description: c.description as string,
-    }));
+    const info = (full as any).fullUser?.botInfo;
+    const commands: any[] = info?.commands ?? [];
+
+    // Three shapes come back here: the default and "commands" variants only say which
+    // menu the client should show, and carry no app. Only botMenuButton has one, which is
+    // the text and address of a Mini App.
+    const raw = info?.menuButton;
+    const menuButton: TgBotMenuButton | null =
+      raw && typeof raw.url === "string" && raw.url
+        ? { text: String(raw.text ?? "").trim() || "Mini App", url: raw.url }
+        : null;
+
+    return {
+      commands: commands.map((c: any) => ({
+        command: c.command as string,
+        description: c.description as string,
+      })),
+      menuButton,
+    };
   } catch {
-    return [];
+    return empty;
   }
 }
 
@@ -1957,29 +1997,9 @@ export async function startBot(
   };
 }
 
-/**
- * Parses a t.me/BotName[/AppShortName]?startapp=PARAM mini app link.
- * The startapp value is percent-decoded and stripped of base64 padding:
- * Telegram only accepts [A-Za-z0-9_-] in start_param, so raw links carrying
- * %3D-encoded padding fail with START_PARAM_INVALID (issue seen with
- * telegram.me/.../panel?startapp=...%3D%3D).
- */
-export function parseMiniAppLink(
-  tmeOrUrl: string,
-): { botUsername: string; appShortName?: string; startParam: string } | null {
-  const m = tmeOrUrl.match(
-    /t(?:elegram)?\.me\/([A-Za-z]\w+)(?:\/([A-Za-z]\w+))?\?startapp=([^&\s]+)/i,
-  );
-  if (!m) return null;
-  let startParam = m[3];
-  try {
-    startParam = decodeURIComponent(startParam);
-  } catch {
-    // Malformed escape sequence -- keep the raw value
-  }
-  startParam = startParam.replace(/=+$/, "");
-  return { botUsername: m[1], appShortName: m[2], startParam };
-}
+// Mini app link parsing is shared with the job runner (tg/miniApp.ts); re-exported
+// here so existing callers keep working.
+export { parseMiniAppLink };
 
 // Resolves a mini app URL to an authenticated web app URL.
 // Handles two cases:
@@ -1991,6 +2011,7 @@ export async function resolveWebApp(
   tmeOrUrl: string,
   botChatId?: string, // for direct URLs we need to know which bot owns the app
   peerChatId?: string, // chat where the webview button lives (for RequestWebView)
+  fromBotMenu?: boolean, // the address came from the bot's menu button, not a message
 ): Promise<{ url: string; resolved: boolean }> {
   const miniApp = parseMiniAppLink(tmeOrUrl);
   if (miniApp) {
@@ -2016,7 +2037,7 @@ export async function resolveWebApp(
           writeAllowed: true,
         }),
       )) as any;
-      return { url: result.url as string, resolved: true };
+      return { url: withClientLaunchParams(result.url as string), resolved: true };
     }
 
     const result = (await entry.client.invoke(
@@ -2027,7 +2048,7 @@ export async function resolveWebApp(
         startParam,
       }),
     )) as any;
-    return { url: result.url as string, resolved: true };
+    return { url: withClientLaunchParams(result.url as string), resolved: true };
   }
 
   // Direct web app URL with a known bot
@@ -2050,9 +2071,14 @@ export async function resolveWebApp(
               bot,
               url: tmeOrUrl,
               platform: "web",
+              // Telegram signs a menu button's app only when told that is where the
+              // address came from. Asked without it, the request is taken for an
+              // inline-keyboard webview and what comes back carries no account data at
+              // all, so the app loads and immediately fails on "No initData found".
+              ...(fromBotMenu ? { fromBotMenu: true } : {}),
             } as any),
           )) as any;
-          return { url: result.url as string, resolved: true };
+          return { url: withClientLaunchParams(result.url as string), resolved: true };
         } catch {
           const result = (await entry.client.invoke(
             new Api.messages.RequestSimpleWebView({
@@ -2061,7 +2087,7 @@ export async function resolveWebApp(
               platform: "web",
             } as any),
           )) as any;
-          return { url: result.url as string, resolved: true };
+          return { url: withClientLaunchParams(result.url as string), resolved: true };
         }
       }
     } catch {

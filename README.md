@@ -2,7 +2,7 @@
   <img src="docs/logo.png" width="200" alt="Bemby" />
 </p>
 
-# Bemby v0.9.36-patch-1
+# Bemby v1.0.0
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/liveinaus/bemby)](https://hub.docker.com/r/liveinaus/bemby)
 [![更新日志](https://img.shields.io/badge/%E6%9B%B4%E6%96%B0%E6%97%A5%E5%BF%97-%E6%9F%A5%E7%9C%8B-blue)](https://github.com/liveinaus/Bemby/blob/main/CHANGELOG.md)
@@ -14,22 +14,36 @@
 
 一款自托管的自动化工具，用于管理每日 Telegram 机器人签到和 Emby 视频观看会话。内置 Web 管理门户，支持多账号和多任务管理。
 
-<table>
+Bemby可签到市面上所有的服（需要正确配置）。无论是TG内，网页，小程序，回答问题或者验证码。同时 Bemby 有完整的 Web TG 应用，支持批量入群，订阅，抽奖，更多玩法等你来挖掘。同时感谢群友们的建议，意见与测试。
+
+最后请大家支持公益服，切勿滥用，祝大家玩的开心。
+
+<table width="100%">
   <tr>
-    <td align="center" colspan="3"><img src="docs/accounts.png" alt="账户配置" /><br/><sub>账户配置</sub></td>
+    <td align="center" colspan="3"><img src="docs/accounts.png" alt="账户配置" width="100%" /><br/><sub>账户配置</sub></td>
   </tr>
   <tr>
-    <td align="center" colspan="3"><img src="docs/jobs.png" alt="任务配置" /><br/><sub>任务配置</sub></td>
+    <td align="center" colspan="3"><img src="docs/jobs.png" alt="任务配置" width="100%" /><br/><sub>任务配置</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/rich_content_logs.png" alt="丰富内容日志" /><br/><sub>丰富内容日志</sub></td>
-    <td align="center"><img src="docs/ai_debugging_console.png" alt="AI 调试" /><br/><sub>AI 调试</sub></td>
-    <td align="center"><img src="docs/ai_provider_config.png" alt="AI 设置" /><br/><sub>AI 设置</sub></td>
+    <td align="center" width="33.33%"><img src="docs/rich_content_logs.png" alt="丰富内容日志" width="100%" /><br/><sub>丰富内容日志</sub></td>
+    <td align="center" width="33.33%"><img src="docs/ai_debugging_console.png" alt="AI 调试" width="100%" /><br/><sub>AI 调试</sub></td>
+    <td align="center" width="33.33%"><img src="docs/ai_provider_config.png" alt="AI 设置" width="100%" /><br/><sub>AI 设置</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/template-checkin.png" alt="添加签到模版" /><br/><sub>添加签到模版</sub></td>
-    <td align="center"><img src="docs/template-emby-watch.png" alt="添加观看模版" /><br/><sub>添加观看模版</sub></td>
-    <td align="center"><img src="docs/setting-emby-watch-ua.png" alt="观看 UA配置" /><br/><sub>观看 UA 配置</sub></td>
+    <td align="center" width="33.33%"><img src="docs/template-checkin.png" alt="添加签到模版" width="100%" /><br/><sub>添加签到模版</sub></td>
+    <td align="center" width="33.33%"><img src="docs/template-emby-watch.png" alt="添加观看模版" width="100%" /><br/><sub>添加观看模版</sub></td>
+    <td align="center" width="33.33%"><img src="docs/setting-emby-watch-ua.png" alt="观看 UA配置" width="100%" /><br/><sub>观看 UA 配置</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="33.33%"><img src="docs/auto-registration.png" alt="抢注" width="100%" /><br/><sub>添加抢注任务</sub></td>
+    <td align="center" width="33.33%"><img src="docs/custom-job.png" alt="自定义任务" width="100%" /><br/><sub>添加自定义任务</sub></td>
+    <td align="center" width="33.33%"><img src="docs/pass-cf-verification.png" alt="过CF 人机验证" width="100%" /><br/><sub>过 CF 人机验证</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="33.33%"><img src="docs/web-checkin.png" alt="网页签到" width="100%" /><br/><sub>网页版签到</sub></td>
+    <td align="center" width="33.33%"><img src="docs/lucky-draw.png" alt="抽奖" width="100%" /><br/><sub>抽奖</sub></td>
+    <td align="center" width="33.33%"><img src="docs/pass-nmbot.png" alt="过nmBot" width="100%" /><br/><sub>过nmBot人机</sub></td>
   </tr>
 </table>
 
@@ -42,21 +56,26 @@
 - **Telegram 账户安全管理** — 在账户编辑面板的"高级"选项卡中管理 2FA 密码（设置/修改/移除）、活跃会话（查看设备信息、单独终止或一键终止所有其他设备）、恢复邮箱（查看、设置、更改或移除；含完整的邮件确认流程）、以及通行密钥（查看、添加、移除已注册的 Passkeys；添加后可"使用通行密钥登录"，仅需再输入 2FA 密码，另可"验证"通行密钥是否仍被 Telegram 接受，实验性功能）
 - **更新 Telegram 个人资料** — 在"个人资料"选项卡中直接修改该账户的名字、姓氏和简介
 - **账户备注** — 可为每个账户添加自由文本备注；表格中备注列可切换显示；支持批量设置备注
-- **批量账户管理** — 账户批量操作统一收纳至"批量操作"菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免 Telegram 限流：**批量重命名**（`{index}` 递增序号、可补零、实时预览）、**批量获取属性**（刷新 TG 信息与附加属性）、**批量修改登录邮箱**（`+` 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行、绝不存储）、**批量修改凭据**（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥、按模板追加备注）、**批量添加通行密钥**、**批量修改资料**（批量设置名字/姓氏/简介，每行一个账户、字段用 Tab 分隔，可从表格粘贴或一键生成随机名字，后台批量执行、失败自动重试）；开启环境变量 `BULK_ACCOUNT_MANAGEMENT=1` 后还提供 **批量添加账户**（每行 `手机号----API网址`，自动创建并逐个从各 API 网页读取验证码/2FA 完成认证，支持名称编号方案、候选设备/代理/API 凭据随机选取、自定义提取正则）与 **批量清理**
+- **批量账户管理** — 账户批量操作统一收纳至"批量操作"菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免 Telegram 限流：**批量重命名**（`{index}` 递增序号、可补零、实时预览）、**批量获取属性**（刷新 TG 信息与附加属性）、**批量修改登录邮箱**（`+` 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行、绝不存储）、**批量修改凭据**（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥、按模板追加备注）、**批量添加通行密钥**、**批量修改资料**（批量设置名字/姓氏/简介，每行一个账户、字段用 Tab 分隔，可从表格粘贴、一键生成随机名字，或按要求交给 AI 生成——一次请求覆盖全部账户、可只生成名字，结果自动清理为可用格式；后台批量执行、失败自动重试）；开启环境变量 `BULK_ACCOUNT_MANAGEMENT=1` 后还提供 **批量添加账户**（每行 `手机号----API网址`，自动创建并逐个从各 API 网页读取验证码/2FA 完成认证，支持名称编号方案、候选设备/代理/API 凭据随机选取、自定义提取正则）与 **批量清理**
 - **账户备份加密** — 导出会话文件时可设置自定义密码保护；导入时自动识别加密状态并提示输入密码；"强制重新认证"选项可在导入时清除令牌，避免 Telegram 因同一令牌多设备使用而撤销会话
 - **内置 Telegram 消息客户端** — 独立页面视图，直接在 Bemby 中与联系人、群组和频道聊天；支持表情回应、引用回复、内联图片查看、发送图片与文件、频道帖子评论线程、机器人命令自动补全、自动标记已读、贴纸显示、右键菜单静音（8小时/1周/永久）和取消静音、加入文件夹、编辑联系人姓名、简介链接化、小程序显示模式切换（应用内/浏览器）；拉黑/取消拉黑、举报（附原因与备注，举报用户/机器人时同步拉黑并删除聊天）、删除聊天/消息（可选"为对方也删除"）、编辑自己发送的消息、转发消息、多选批量转发/删除、双向输入中提示；群组/频道搜索兼顾本地标题匹配与全局搜索，结果更全面；移动端聊天头部按钮合并为 ⋯ 菜单，新增"跳转到最新消息"悬浮按钮；账号级"清除缓存"与"清理账号"（退出全部群组/删除全部私聊/移除全部联系人及文件夹，需二次确认）；打开非 Telegram 链接时可选择在 Bemby 内嵌或浏览器打开，内嵌前自动探测目标站点是否允许被嵌入，不允许时经内置代理加载并提示
-- **三种任务类型**
+- **四种任务类型**
   - **签到** — 在随机的每日时间向 Telegram 机器人发送可配置命令并点击回复按钮
   - **Emby 观看** — 在 Emby 服务器上模拟播放会话，从随机进度位置开始，定期上报播放进度，结束后可标记为已看；上报前可校验媒体文件是否可播放（磁盘在线），避免文件离线时上报虚假观看；可开启**真实观看**以真实播放速率直连拉取实际媒体字节（产生真实串流流量，注意消耗下行流量）；可开启**顺序播放**从上次离开处续播（无则播下一集，仍无则随机），看完一集自动接着下一集，仅在看完整集时才标记已看；可**限定媒体库**（填写库名或从 1 开始的序号，匹配不到或库内无可播内容时回退到整个服务器）；User Agent 可从内置预设（SenPlayer、Yamby、Hills、Lenna、VidHub）中选择，也可在设置中自定义；可关联可选的 Telegram 账号用于发送通知
   - **自定义** — 通过可配置的多步骤流程操作任意 Telegram 机器人，每步可触发命令、等待消息、点击按钮（支持 `{aiBtn}` AI 自动识别）、加入群组 / 订阅频道（支持公开用户名或私有邀请链接，可校验订阅状态、入群后点击验证按钮）、向指定联系人发送消息或点击其消息上的按钮、输入验证码（`enter_captcha` 步骤：复用上一步按钮点击后机器人的回复图片，无需二次等待，自动识别后发送答案）；发送命令步骤支持 `{aiInput}` / `{aiInput:N}` 占位符，自动将上一条消息中的图片发给 AI 识别并将识别结果填入命令；每个动作（延时除外）可独立配置最大重试次数，失败时仅重试该动作而不中断整个任务链；整个任务链也支持独立的最大重试次数；等待回复步骤支持可选的成功/失败文字匹配，收到含指定文字的回复时自动标记成功或失败；输入验证码步骤若 AI 返回字符数与预期长度不符则视为失败并触发重试；任务失败时完整保存已执行步骤的详细日志，AI 调用的提示词与响应始终写入步骤日志（无需开启开发者模式）
+  - **自动注册** — 监听群组里发布的注册码并抢注：注册码可用固定前缀（支持 `*` 通配）或正则匹配（有捕获组时取第 1 组）；发送前可即时清理（移除中文字符 / 移除指定字符），也可交给 AI 按群内上下文修正（删除干扰符号、替换字符、补全被拆分的码）；提交方式支持"点击注册按钮后发送"与"随启动命令一并发送"；可分别配置发送注册码前与发送用户名前要等待的机器人提示文字，避免机器人未就绪时白白浪费一个码；对于"先校验注册码、通过后才给出开始注册按钮"的机器人，可开启注册码通过后再点击一次按钮/链接（支持回调按钮与 ?start= 链接，可自定义匹配文字），并可选择该步骤是必需（找不到按钮即换下一个码）还是可选（仅记录并继续）；被标记为已使用的码自动作废，用户名支持随机占位符
 - **命令模板** — 支持在启动命令中嵌入随机占位符（`{word:N}`、`{num:N}`、`{alpha:N}`、`{uuid}`）
 - **AI 按钮识别** — 签到按钮文字设为 `{aiBtn}` 时，自动通过视觉大模型识别应点击的按钮（支持图片验证码类场景）；AI 返回结果与可用按钮不符时自动重试（最多不超过任务重试次数，硬性上限 5 次）；可在设置页面配置 API 地址、密钥和模型；支持配置多个服务商，默认模型报错时自动切换；默认模型精确锁定到具体的"服务商 + 模型"记录，避免不同服务商提供同名模型时用错凭据
+- **小程序（Mini App）** — 在 Messenger 中直接打开机器人的小程序：聊天头部按钮、左侧机器人菜单，以及贴在输入框旁的机器人菜单小程序，均由 Telegram 按当前账户签名后打开；可选择在 Bemby 内嵌或浏览器打开。内嵌前先探测目标是否允许被嵌入，不允许时经内置代理提供同一页面（剥掉阻止内嵌的响应头、注入小程序桥接、补齐主题/版本/平台等启动参数），并使用仅对该站点有效的一次性票据而非面板令牌；设置 `WEBVIEW_PUBLIC_ORIGIN` 可让小程序拥有自己的源以正确路由自身路径
+- **网页与小程序自动化** — 自定义任务可打开小程序（按钮、`t.me/<机器人>/<应用>` 链接、普通网址或机器人菜单）并在其中编排子步骤：点击、填写、等待元素、滚动、断言文字；支持 CSS 选择器与多语言标签候选；由内置的指纹修补浏览器（CloakBrowser）驱动，可按出口轮换代理以通过 Cloudflare 验证
+- **用 ID 指定私密群组** — 没有用户名也没有邀请链接的群组，可用群组 ID（`-100…`）指定：Messenger 资料面板提供一键复制，任务的群组/联系人字段均接受，由本账户的聊天列表解析
+- **计划列表** — 可在设置中把"计划"独立为左侧菜单项；按任务类型显示图标与颜色；可单独取消某一次即将运行的任务（任务保持启用，顺延到下一个可运行日）
 - **调度器** — 在每个任务可配置的每日时间窗口内随机选取执行时间；自动错峰，各任务至少间隔可配置的分钟数（默认 2 分钟），避免同一分钟并发；同一时刻最多并发执行 2 个任务，超出自动排队；失败时自动重试
 - **实时日志** — 打开正在运行的任务日志时，详情面板实时刷新，每秒更新一次；任务完成后展示完整对话或播放摘要
 - **详细日志** — 点击日志行可展开详情：签到任务显示仿 Telegram 气泡对话；Emby 观看任务显示播放摘要卡片（剧集信息、起止位置、已看标记、已串流数据量，顺序播放时另列出本次播放的每一集、顺序播放集数与总观看时长）
-- **TG 通知** — 可在设置中配置通知目标（用户名/t.me 链接）及触发时机（失败/成功），通过关联账号发送；未配置目标时默认发至"收藏夹"
+- **TG 通知** — 在设置中填入 BotFather 提供的机器人 Token 与默认目标（Chat ID 或频道 @名称）及触发时机（失败/成功），任务结束后由该机器人发送通知，不依赖任务账号是否已登录；可"查找会话"从机器人最近的对话中直接选取 Chat ID，并可发送测试通知验证整条链路；未配置 Token 时沿用旧方式：由任务关联账号发送（**已弃用**，将在后续版本中移除，请尽早改用机器人 Token）
 - **停止运行中的任务** — 可在日志列表中随时中止正在执行的任务
-- **复制任务** — 在任务列表中一键将现有任务复制为新任务
+- **复制任务 / 复制模板** — 在任务列表或模板列表中一键复制为新任务/新模板
 - **任务筛选与搜索** — 任务列表支持按账号、机器人/网址筛选，并可按名称搜索；账号、任务、日志、模板列表均为服务端分页与筛选，支持大数据量浏览，账户与模板支持搜索框（模板为模糊匹配），日志支持按状态筛选
 - **批量运行任务** — 勾选多个任务后点击"运行 (N)"，按顺序依次执行，支持自定义任务间延迟（默认 70 秒）
 - **批量修改时间窗口** — 勾选多个任务后可一键将其时间窗口批量设置为相同的开始/结束时间
@@ -173,7 +192,7 @@ Railway 支持直接从 Docker Hub 镜像部署，无需 Fork 或连接 GitHub�
 - **任务错峰** — 各任务执行时间自动错开的最小间隔分钟数（0–30，默认 2，0 表示关闭）
 - **Emby 观看默认值** — 播放时长、设备名称和默认 User Agent；**User Agent 预设** — 内置 SenPlayer、Yamby、Hills、Lenna、VidHub 五个预设，可在设置中增删自定义预设
 - **AI 按钮识别** — 配置用于 `{aiBtn}` 功能的 AI 服务商；全新安装时默认预置 OpenRouter（`https://openrouter.ai/api/v1`）及 `nvidia/nemotron-nano-12b-v2-vl:free` 模型，在设置页面添加 API 密钥即可启用；兼容所有 OpenAI 兼容接口，可添加任意服务商
-- **TG 通知** — 配置接收通知的 Telegram 目标（支持用户名、@用户名或 t.me 链接）及触发时机（失败/成功）；未配置目标时发至"收藏夹"
+- **TG 通知** — 机器人 Token（在 Telegram 中打开 @BotFather，发送 /newbot 获取；已有机器人可用 /token 重新获取）、默认目标（Chat ID，或频道/群组的 @名称）及触发时机（失败/成功）。机器人无法主动发起对话，因此需先给机器人发送任意消息，再用"查找会话"选取 Chat ID；"发送测试"会立即发送一条真实消息以验证 Token、网络与目标。Token 保存后仅以掩码形式回显，留空即保留原值。未配置 Token 时改由任务关联账号发送（未配置目标时发至"收藏夹"）——该方式**已弃用**，将在后续版本中移除：它需要为每条通知建立一次完整的 MTProto 连接，且仅在该账号已登录时可用，请改用机器人 Token
 - **TG 应用客户端** — 自定义 Telegram 会话的设备信息；可设为固定默认或从所有预设中随机选取；设备型号支持 `{name}`、`{tgName}`、`{tgUsername}`、`{id}` 及随机变量，使每个账户拥有唯一的设备名称
 - **TG 账号显示** — 开启后，引用账户的位置（消息、任务、模板）将同时显示 Bemby 名称与 Telegram 名称
 - **默认 TG API 凭据** — 在设置中统一配置 API ID 和 Hash，无独立凭据的账号自动使用全局默认值；Hash 在界面中始终脱敏显示
@@ -221,7 +240,7 @@ bemby/
 │       │   ├── runner.ts      -- 任务分发与重试
 │       │   ├── checkin.ts     -- Telegram MTProto 签到逻辑
 │       │   ├── embywatch.ts   -- Emby 播放模拟
-│       │   └── notify.ts      -- TG 自身通知工具
+│       │   └── notify.ts      -- 任务通知（机器人，回退到账号自发）
 │       ├── routes/
 │       │   ├── auth.ts        -- 登录、JWT、凭证管理、验证码
 │       │   ├── accounts.ts    -- Telegram 账号 CRUD 及认证流程
@@ -286,8 +305,9 @@ Emby 服务器将该会话识别为与所选 User Agent 预设对应的客户端
 
 ## TODO
 
-- [ ] 过 CF 签到 — 支持带 Cloudflare 防护的机器人签到
-- [ ] 自动抢注 — 自动完成新账号注册流程
+- [x] 过 CF 签到 — 支持带 Cloudflare 防护的机器人签到（v1.0.0，CloakBrowser）
+- [x] 自动抢注 — 自动完成新账号注册流程（v1.0.0，自动注册任务）
+- [ ] 模板中心 — 允许用户快速分享与下载模板
 - [ ] 自动答题 — 自动识别并回答机器人问题
 
 ---
@@ -338,28 +358,40 @@ Bemby 仅供个人自动化和学习目的使用。请负责任地使用，并�
 [![Changelog](https://img.shields.io/badge/changelog-view-blue)](CHANGELOG.md)
 [![Telegram](https://img.shields.io/badge/Telegram-community-2CA5E0?logo=telegram&logoColor=white)](https://t.me/cool_bemby)
 
-[简体中文](#bemby-v0936) | **English**
+[简体中文](#bemby-v100) | **English**
 
 > If Bemby saves you time, please consider giving it a star on GitHub. It helps others find the project and keeps development going.
 
 A self-hosted automation tool for managing daily Telegram bot check-ins (签到) and Emby video-watch sessions. Includes a web admin portal for managing multiple accounts and jobs.
 
-<table>
+**Bemby can check in to every server out there**, given the right configuration: inside Telegram, on a web page, in a Mini App, or behind a question to answer or a captcha to solve. Bemby also ships a complete web Telegram client, with bulk group joining, subscribing, lucky draws and plenty more to discover. Thanks to everyone in the community group for their suggestions, feedback and testing.
+
+<table width="100%">
   <tr>
-    <td align="center" colspan="3"><img src="docs/accounts.png" alt="Account configuration" /><br/><sub>Account configuration</sub></td>
+    <td align="center" colspan="3"><img src="docs/accounts.png" alt="Account configuration" width="100%" /><br/><sub>Account configuration</sub></td>
   </tr>
   <tr>
-    <td align="center" colspan="3"><img src="docs/jobs.png" alt="Job configuration" /><br/><sub>Job configuration</sub></td>
+    <td align="center" colspan="3"><img src="docs/jobs.png" alt="Job configuration" width="100%" /><br/><sub>Job configuration</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/rich_content_logs.png" alt="Rich content logs" /><br/><sub>Rich content logs</sub></td>
-    <td align="center"><img src="docs/ai_debugging_console.png" alt="AI debug console" /><br/><sub>AI debug console</sub></td>
-    <td align="center"><img src="docs/ai_provider_config.png" alt="AI provider settings" /><br/><sub>AI provider settings</sub></td>
+    <td align="center" width="33.33%"><img src="docs/rich_content_logs.png" alt="Rich content logs" width="100%" /><br/><sub>Rich content logs</sub></td>
+    <td align="center" width="33.33%"><img src="docs/ai_debugging_console.png" alt="AI debug console" width="100%" /><br/><sub>AI debug console</sub></td>
+    <td align="center" width="33.33%"><img src="docs/ai_provider_config.png" alt="AI provider settings" width="100%" /><br/><sub>AI provider settings</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/template-checkin.png" alt="Add check-in template" /><br/><sub>Add check-in template</sub></td>
-    <td align="center"><img src="docs/template-emby-watch.png" alt="Add Emby Watch template" /><br/><sub>Add Emby Watch template</sub></td>
-    <td align="center"><img src="docs/setting-emby-watch-ua.png" alt="Emby Watch UA settings" /><br/><sub>Emby Watch UA settings</sub></td>
+    <td align="center" width="33.33%"><img src="docs/template-checkin.png" alt="Add check-in template" width="100%" /><br/><sub>Add check-in template</sub></td>
+    <td align="center" width="33.33%"><img src="docs/template-emby-watch.png" alt="Add Emby Watch template" width="100%" /><br/><sub>Add Emby Watch template</sub></td>
+    <td align="center" width="33.33%"><img src="docs/setting-emby-watch-ua.png" alt="Emby Watch UA settings" width="100%" /><br/><sub>Emby Watch UA settings</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="33.33%"><img src="docs/auto-registration.png" alt="Add an auto-registration job" width="100%" /><br/><sub>Add an auto-registration job</sub></td>
+    <td align="center" width="33.33%"><img src="docs/custom-job.png" alt="Add a custom job" width="100%" /><br/><sub>Add a custom job</sub></td>
+    <td align="center" width="33.33%"><img src="docs/pass-cf-verification.png" alt="Solving a Cloudflare challenge automatically" width="100%" /><br/><sub>Cloudflare challenge</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="33.33%"><img src="docs/web-checkin.png" alt="Web check-in" width="100%" /><br/><sub>Web check-in</sub></td>
+    <td align="center" width="33.33%"><img src="docs/lucky-draw.png" alt="Lucky draw" width="100%" /><br/><sub>Lucky draw</sub></td>
+    <td align="center" width="33.33%"><img src="docs/pass-nmbot.png" alt="pass nmBot verification" width="100%" /><br/><sub>nmBot challenge</sub></td>
   </tr>
 </table>
 
@@ -371,21 +403,26 @@ A self-hosted automation tool for managing daily Telegram bot check-ins (签到)
 - **Telegram account security** — manage 2FA password (set/change/remove), active login sessions (view device info, terminate individual or all others), recovery email (view, set, change, or remove with a full confirmation code flow), and passkeys (list, add, and remove registered WebAuthn passkeys — once added, **Log in with passkey** signs in and then asks only for the 2FA password, and **Verify** confirms Telegram still accepts the passkey; experimental) — all from the Advanced tab of the account edit panel
 - **Update Telegram profile** — edit the account's first name, last name, and bio directly from the Profile tab
 - **Account notes** — add free-text notes per account; the Notes column in the accounts table is toggleable (always hidden on mobile); bulk-update notes across selected accounts at once
-- **Bulk account management** — bulk operations are consolidated under a **Bulk Actions** menu and share a "Gap between accounts (seconds)" control to avoid Telegram flood limits: **Bulk Rename** (`{index}` running number, zero-padding, live preview), **Fetch Attributes** (refresh TG info and extra attributes), **Bulk Change Login Email** (`+`-tag template with variables, codes read from Gmail over IMAP with an app password used only for the run and never stored), **Bulk Change Credential** (set/rotate 2FA password, optionally removing other devices/passkeys and appending to notes), **Bulk Add Passkey**, and **Bulk Rename TG Profile** (set first name/last name/intro for many accounts at once, one Tab-separated line per account so columns can be pasted from a spreadsheet or filled with generated random names, run as a background batch that retries failures); setting `BULK_ACCOUNT_MANAGEMENT=1` additionally enables **Bulk Add** (one `phone----apiUrl` per line, auto-creating and authenticating each account by reading the code/2FA from its API page, with a numbering scheme, random candidate device/proxy/API credentials, and custom extraction regexes) and **Bulk Clean**
+- **Bulk account management** — bulk operations are consolidated under a **Bulk Actions** menu and share a "Gap between accounts (seconds)" control to avoid Telegram flood limits: **Bulk Rename** (`{index}` running number, zero-padding, live preview), **Fetch Attributes** (refresh TG info and extra attributes), **Bulk Change Login Email** (`+`-tag template with variables, codes read from Gmail over IMAP with an app password used only for the run and never stored), **Bulk Change Credential** (set/rotate 2FA password, optionally removing other devices/passkeys and appending to notes), **Bulk Add Passkey**, and **Bulk Rename TG Profile** (set first name/last name/intro for many accounts at once, one Tab-separated line per account so columns can be pasted from a spreadsheet, filled with generated random names, or written by the AI to a requirement -- one request covers every account, bios optional, and what comes back is cleaned to what Telegram accepts; run as a background batch that retries failures); setting `BULK_ACCOUNT_MANAGEMENT=1` additionally enables **Bulk Add** (one `phone----apiUrl` per line, auto-creating and authenticating each account by reading the code/2FA from its API page, with a numbering scheme, random candidate device/proxy/API credentials, and custom extraction regexes) and **Bulk Clean**
 - **Encrypted account backup** — export account sessions protected by a user-supplied password; imports require the matching key; optional "force re-auth" clears session tokens on import to prevent Telegram revoking a shared token
 - **Built-in Telegram Messenger** — a dedicated page view to chat with contacts, groups, and channels directly from Bemby; supports emoji reactions, quoted replies, inline photo viewing, sending images and files, channel post comment threads, bot command autocomplete, automatic read-marking, sticker display, mute/unmute from the context menu (8 h / 1 week / forever), add chats to folders, edit contact names in the profile panel, clickable URLs and @mentions in bios, mini app display toggle (in-app or browser); block/unblock, report (with a reason and comment, blocking and deleting the chat too when reporting a user/bot), delete chats/messages (with an optional "also delete for them"), edit your own sent messages, forward messages, multi-select bulk forward/delete, and two-way typing indicators; group/channel search combines local title matching with a global search for much more complete results; chat header buttons collapse into a single ⋯ menu on mobile, plus a floating "jump to latest" button; per-account **Clear cache** and **Clean account** (leave every group, delete every private chat, remove every contact and folder — gated behind a confirmation checkbox); opening a non-Telegram link offers a choice between opening in Bemby or the browser, probing first whether the target site allows embedding and falling back to a built-in proxy with a warning banner when it doesn't
-- **Three job types**
+- **Four job types**
   - **Check-in (签到)** — sends a configurable command to a Telegram bot and clicks the reply button on a randomised daily schedule
   - **Emby Watch** — simulates a playback session on an Emby server, starting from a random position, reporting progress at regular intervals, and optionally marking the item as watched; can verify the media file is playable (disk online) before reporting to avoid a fake watch when the file is offline; **Real Watch** pulls the actual media bytes at real playback pace so the server sees genuine streaming traffic (at the cost of download bandwidth); **Sequence Play** resumes where the account left off (else Next Up, else a random item) and chains into the next episode when one finishes, marking an episode watched only when it actually finishes; **Limit to library** restricts selection to one library by name or index (starting from 1), falling back to the whole server when it can't be matched or has nothing to play; User Agent is selectable from built-in presets (SenPlayer, Yamby, Hills, Lenna, VidHub) or custom values managed in Settings; supports an optional linked Telegram account for notifications
   - **Custom** — configurable multi-step flows that interact with any Telegram bot: send commands, wait for replies, click buttons (with `{aiBtn}` AI selection), join a group / subscribe to a channel (public username or private invite link, with optional subscription check and post-join verification button), send a message to or click a button for a specific contact, or run an **Enter Captcha** step that reuses the bot's reply from the preceding button click without waiting again, automatically recognises the image, and sends the answer; the `{aiInput}` / `{aiInput:N}` placeholder in a send-command step feeds the previous message's image to AI and substitutes the result into the command; each action (except delay) has its own max retry count — only that action is retried on failure, not the whole chain; the whole action chain also has its own max retry count independent of the global job retry; wait-for-reply supports optional success/fail text matching to classify replies automatically; enter-captcha validates the AI response length against the configured count and retries on mismatch; AI prompt and response are always visible per step in logs without needing developer logs enabled
+  - **Auto-register** — watches a group for registration codes and races to claim one: codes are matched by a fixed prefix (with `*` as a wildcard) or by a regex (capture group 1 where the pattern has one); before a code is sent it can be cleaned instantly (strip Chinese characters, strip named characters) or handed to the AI to adjust from the surrounding group context (delete a decoy symbol, swap a character, join a split code); the code reaches the bot either by clicking its register button first or alongside the start command; separate optional waits for the bot's "send me the code" and "send me the username" wording keep a code from being spent on a bot that is not listening yet; for bots that vet the code first and only then offer the button (or `?start=` link) that actually opens registration, that extra click can be enabled with its own match text, and marked required (no button means the code is spent and the next one is tried) or optional (logged, and the run carries on); codes announced as used are burned automatically, and the signup username supports the random placeholders
 - **Command templates** — embed random placeholders in the start command (`{word:N}`, `{num:N}`, `{alpha:N}`, `{uuid}`)
 - **AI button detection** — set the check-in button to `{aiBtn}` and a vision model automatically identifies which button to click, including image-based CAPTCHA-style challenges; when the AI response does not match an available button it retries automatically (up to the job's max retries, hard-capped at 5); a fresh install pre-configures OpenRouter (`https://openrouter.ai/api/v1`) with the `nvidia/nemotron-nano-12b-v2-vl:free` model — just add your API key in Settings to activate it; configure multiple providers and enable auto-fallback so a rate-limited default model rolls over to another provider; the default model is pinned to an exact provider + model combination so two identically named models from different providers never get mixed up
+- **Mini Apps** — open a bot's Mini App straight from Messenger: from the chat header, from the bot's left-hand menu, and the one a bot pins beside the composer, each signed by Telegram for the current account; choose whether they open inside Bemby or in the browser. Framing is probed first, and where a site refuses it the same page is served through a built-in proxy (framing headers dropped, the Mini App bridge injected, and the launch parameters a real client adds -- theme, version, platform -- filled in), reached with a single-use ticket good for that one site rather than the panel's session token; `WEBVIEW_PUBLIC_ORIGIN` gives the app an origin of its own so its router sees its own paths
+- **Web and Mini App automation** — a custom job can open a Mini App (from a button, a `t.me/<bot>/<app>` link, a plain address, or the bot's menu) and drive sub-steps inside it: click, fill, wait for an element, scroll, assert text, with CSS selectors and multi-language label alternatives; it runs on the bundled fingerprint-patched browser (CloakBrowser) and can rotate proxies per exit to get past Cloudflare
+- **Name a private group by its ID** — a group with no username and no invite link can be named by its ID (`-100…`): the Messenger Info panel copies it in one click, and a job's group or contact field takes it, resolved from the account's own chat list
+- **Schedule list** — Settings can give **Schedule** its own menu entry; chips are coloured and iconed by job type, and any upcoming run can be called off individually (the job stays enabled and moves to its next eligible day)
 - **Scheduler** — picks a random time within a configurable daily window per job, automatically staggering jobs at least a configurable number of minutes apart (default 2) so they never pile into the same minute, with at most 2 jobs executing at once (extras queue); handles retry on failure
 - **Live log streaming** — opening a running job's log shows real-time updates as each step completes, refreshing every second
 - **Rich log detail** — click any log row to expand: check-in jobs show a Telegram-style chat view; Emby Watch jobs show a playback summary card with episode info, position data, and streamed volume, listing every episode played plus episodes completed and total watched time for Sequence Play runs
-- **TG notifications** — configure a notification target and trigger events (failed / success) in Settings; the linked account sends to the configured target, falling back to Saved Messages if none is set
+- **TG notifications** — set a bot token from BotFather plus a default target (chat ID, or a channel's @name) and trigger events (failed / success) in Settings; the bot sends when a job finishes, so notifications no longer depend on the job's account being authenticated. **Find chats** reads the chat IDs the bot has heard from lately so you can pick one, and **Send test** proves the whole path. With no token set, the old sender still applies — the linked account sends to the configured target, falling back to Saved Messages — but it is **deprecated and will be removed in a future release**, so set a token
 - **Stop running jobs** — cancel an in-progress job directly from the log list
-- **Duplicate job** — copy any existing job into a new job with one click from the job list
+- **Duplicate job / template** — copy any existing job or template into a new one with one click from its list
 - **Job filters and search** — filter the jobs list by account or by bot / URL, and search by name; Accounts, Jobs, Logs, and Templates all use server-side pagination and filtering to handle large datasets, with search boxes on Accounts and Templates (fuzzy-matched on Templates) and a status filter on Logs
 - **Bulk run jobs** — select multiple jobs and run them sequentially with a configurable delay between each (default 70 s)
 - **Bulk change time window** — select multiple jobs and set them all to the same start/end window in one action
@@ -502,7 +539,7 @@ Go to **Settings** to configure:
 - **Job Staggering** — minimum number of minutes the scheduler keeps between different jobs' run times (0–30, default 2, 0 disables)
 - **Emby Watch defaults** — play duration, device name, and default User Agent; **UA presets** — five built-in presets (SenPlayer, Yamby, Hills, Lenna, VidHub) with the ability to add and remove custom presets in Settings
 - **AI Providers** — manage AI suppliers and models; a fresh install pre-configures OpenRouter with the `nvidia/nemotron-nano-12b-v2-vl:free` model — add your API key in Settings to activate; supports any OpenAI-compatible provider; a warning banner appears on any provider with no API key configured
-- **TG Notifications** -- configure a notification target (username, @username, or t.me link) and which events trigger a notification (failed / success); falls back to Saved Messages if no target is set
+- **TG Notifications** -- a bot token (open @BotFather in Telegram and send /newbot; /token reissues one for an existing bot), a default target (a numeric chat ID, or a channel's / group's @name) and which events trigger a notification (failed / success). A bot cannot message you first, so send your bot any message and then use **Find chats** to pick your chat ID; **Send test** sends a real message now, which is the only check covering token, network and target at once. The stored token is only ever echoed back masked, and leaving the field blank keeps it. With no token set, the linked account sends instead, falling back to Saved Messages if no target is set — that sender is **deprecated and will be removed in a future release** (it opens a full MTProto connection per notification and only works while that account is authenticated), so a token is the way forward; the panel warns while it is still in use, as does the job log
 - **TG App Clients** — customise the device fingerprint Telegram sees per account; set one as default or enable random selection to rotate across all configured presets; the Device Model supports `{name}`, `{tgName}`, `{tgUsername}`, `{id}`, and random variables so each account gets a unique device name
 - **TG account display** — a toggle to show accounts as "{Bemby name} - {TG name}" across the messenger, jobs, and templates
 - **Default TG API credentials** — set a global API ID and Hash in Settings that pre-fill the Add Account form; the Hash is masked in the UI; accounts without their own credentials fall back to the global default
@@ -550,7 +587,7 @@ bemby/
 │       │   ├── runner.ts      -- Job dispatcher with retry
 │       │   ├── checkin.ts     -- Telegram MTProto check-in logic
 │       │   ├── embywatch.ts   -- Emby playback simulation
-│       │   └── notify.ts      -- TG self-notification utility
+│       │   └── notify.ts      -- job notifications (bot, account fallback)
 │       ├── routes/
 │       │   ├── auth.ts        -- Login, JWT, credential management, CAPTCHA
 │       │   ├── accounts.ts    -- Telegram account CRUD and auth flow
@@ -615,8 +652,8 @@ Optional advanced toggles:
 
 ### TODO
 
-- [ ] Pass CF for check-in — support bots protected by Cloudflare
-- [ ] Auto registration — automatically complete new account sign-up flows
+- [x] Pass CF for check-in — support bots protected by Cloudflare (v1.0.0, on CloakBrowser)
+- [x] Auto registration — automatically complete new account sign-up flows (v1.0.0, the auto-register job type)
 - [ ] Auto quiz — automatically identify and answer bot quiz questions
 
 ---

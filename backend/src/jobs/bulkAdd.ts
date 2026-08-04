@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { db, getDefaultTgApiCredentials } from "../db/database";
+import { decryptAccountRow, encryptSecret } from "../db/secretColumns";
 import {
   cancelPendingAuth,
   requestCode,
@@ -331,6 +332,7 @@ async function authenticateAccount(
     .prepare("SELECT * FROM tg_accounts WHERE id = ?")
     .get(item.accountId) as AccountRow | undefined;
   if (!account) throw new Error("Account not found");
+  decryptAccountRow(account);
 
   const own =
     account.api_id && account.api_hash
@@ -413,11 +415,11 @@ async function authenticateAccount(
     const session = await submitPassword(account.id, pass2fa);
     db.prepare(
       "UPDATE tg_accounts SET auth_status = 'authenticated', session_string = ? WHERE id = ?",
-    ).run(session, account.id);
+    ).run(encryptSecret(session), account.id);
   } else {
     db.prepare(
       "UPDATE tg_accounts SET auth_status = 'authenticated', session_string = ? WHERE id = ?",
-    ).run(result.session, account.id);
+    ).run(encryptSecret(result.session), account.id);
   }
 
   item.status = "done";
@@ -610,7 +612,7 @@ function createAccounts(
       name,
       line.phoneNumber,
       cred?.apiId ?? null,
-      cred?.apiHash ?? null,
+      encryptSecret(cred?.apiHash ?? null),
       proxyId,
       appClientId,
       ++sortOrder,

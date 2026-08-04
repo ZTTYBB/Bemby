@@ -1,6 +1,12 @@
 import { Router, raw } from "express";
-import dns from "dns";
-import net from "net";
+import { assertPublicUrl, isFrameable } from "../tg/safeFetch";
+import {
+  issueWebviewTicket,
+  webviewClaimUrl,
+  webviewProxyUrl,
+  webviewPublicOrigin,
+  type WebviewMode,
+} from "../tg/webviewTickets";
 import {
   getLiveClient,
   loadDialogs,
@@ -12,18 +18,16 @@ import {
   editContact,
   searchPeers,
   fetchPhoto,
-  fetchAvatar,
   getEntityDetails,
   muteDialog,
   pinDialog,
   clickButton,
   sendReaction,
   getThreadMessages,
-  getBotCommands,
+  getBotInfo,
   markRead,
   resolvePeer,
   reconnectClient,
-  subscribeToMessages,
   getFolders,
   addChatToFolder,
   checkInvite,
@@ -59,6 +63,8 @@ import {
   getReadOutboxMaxId,
 } from "../tg/liveClient";
 import type { Response } from "express";
+import { issueMediaTicket } from "../auth/mediaTickets";
+import { requireMediaAuth } from "../middleware/auth";
 
 // Centralised error response: marks session expired for auth errors automatically.
 function tgError(err: any, accountId: number, res: Response): void {
@@ -68,190 +74,12 @@ function tgError(err: any, accountId: number, res: Response): void {
 
 const router = Router();
 
-// Reject IPs in private/reserved ranges to prevent SSRF against internal services.
-function isBlockedIp(ip: string): boolean {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split(".").map(Number);
-    return (
-      a === 0 ||
-      a === 127 ||
-      a === 10 ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 169 && b === 254)
-    );
-  }
-  if (net.isIPv6(ip)) {
-    const lower = ip.toLowerCase();
-    return lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd");
-  }
-  return true; // reject unrecognised formats
-}
-
-async function assertPublicUrl(rawUrl: string): Promise<void> {
-  const parsed = new URL(rawUrl);
-  if (!/^https?:$/i.test(parsed.protocol)) throw new Error("Only http(s) allowed");
-  const hostname = parsed.hostname;
-  if (net.isIP(hostname)) {
-    if (isBlockedIp(hostname)) throw new Error("Private IP not allowed");
-    return;
-  }
-  // Resolve to IP before fetching so literal hostname tricks don't bypass the check
-  const { address } = await dns.promises.lookup(hostname).catch(async () =>
-    dns.promises.lookup(hostname, { family: 6 }),
-  );
-  if (isBlockedIp(address)) throw new Error("Private IP not allowed");
-}
-
-// SSRF-safe fetch: validates the initial URL and every redirect target against
-// assertPublicUrl before following it, so a public host cannot 3xx-redirect the
-// request to localhost / cloud-metadata / other internal services.
-async function ssrfSafeFetch(
-  startUrl: string,
-  init: RequestInit,
-  maxHops = 5,
-): Promise<globalThis.Response> {
-  let current = startUrl;
-  for (let hop = 0; hop <= maxHops; hop++) {
-    await assertPublicUrl(current);
-    const resp = await fetch(current, { ...init, redirect: "manual" });
-    if (resp.status >= 300 && resp.status < 400) {
-      const location = resp.headers.get("location");
-      if (!location) return resp;
-      current = new URL(location, current).toString();
-      continue;
-    }
-    return resp;
-  }
-  throw new Error("Too many redirects");
-}
-
-// GET /miniapp-proxy -- proxy mini app content through the backend.
-// For HTML: rewrites <script src> and <link href> (stylesheet/modulepreload) so all
-// JS/CSS also flows through this proxy, bypassing CORS and X-Frame-Options on the bot server.
-// The fragment (#tgWebAppData=...) stays in the iframe src so window.location.hash works normally.
-router.get("/miniapp-proxy", async (req, res) => {
-  const url = req.query.url as string;
-  const token = (req.query.token as string) ?? "";
-  if (!url || !/^https?:\/\//i.test(url)) {
-    res.status(400).json({ error: "valid url required" });
-    return;
-  }
-  try {
-    await assertPublicUrl(url);
-  } catch {
-    res.status(400).json({ error: "URL not allowed" });
-    return;
-  }
-  try {
-    const upstream = await ssrfSafeFetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Linux; Android 11; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36 Telegram/10.0",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-
-    const contentType = upstream.headers.get("content-type") ?? "text/html";
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.removeHeader("X-Frame-Options");
-    res.removeHeader("Content-Security-Policy");
-
-    if (contentType.includes("text/html")) {
-      let html = await upstream.text();
-      const finalUrl = (upstream.url || url).split("#")[0];
-      const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
-
-      // Strip any <base href> the bot's own HTML injects -- it would redirect our
-      // relative proxy URLs to the bot server instead of our backend
-      html = html.replace(/<base\b[^>]*>/gi, "");
-
-      const toProxyUrl = (resourceUrl: string): string => {
-        if (!resourceUrl || resourceUrl.startsWith("data:") || resourceUrl.includes("/miniapp-proxy")) {
-          return resourceUrl;
-        }
-        const abs = /^https?:\/\//i.test(resourceUrl)
-          ? resourceUrl
-          : new URL(resourceUrl, finalUrl).toString();
-        // Relative path -- without <base href> this resolves against our backend origin correctly
-        return `/api/tg-client/miniapp-proxy?url=${encodeURIComponent(abs)}${tokenParam}`;
-      };
-
-      const toAbsUrl = (resourceUrl: string): string => {
-        if (!resourceUrl || resourceUrl.startsWith("data:") || /^https?:\/\//i.test(resourceUrl)) {
-          return resourceUrl;
-        }
-        try { return new URL(resourceUrl, finalUrl).toString(); } catch { return resourceUrl; }
-      };
-
-      // Rewrite <script src="..."> through proxy -- strip crossorigin (same-origin after rewrite)
-      html = html.replace(
-        /(<script\b)([^>]*?)\s(src\s*=\s*)(["'])([^"']+)\4/gi,
-        (m, tag, attrs, srcAttr, q, src) => {
-          const cleanAttrs = attrs.replace(/\bcrossorigin\b(?:\s*=\s*["'][^"']*["'])?/gi, "").trimEnd();
-          return `${tag}${cleanAttrs} ${srcAttr}${q}${toProxyUrl(src)}${q}`;
-        },
-      );
-
-      // Rewrite <link href="..."> for stylesheets, modulepreload, and script preloads through proxy
-      html = html.replace(/<link\b[^>]+>/gi, (linkTag) => {
-        const isScriptResource =
-          /rel\s*=\s*["']?(stylesheet|modulepreload)["']?/i.test(linkTag) ||
-          (/rel\s*=\s*["']?preload["']?/i.test(linkTag) && /\bas\s*=\s*["']?script["']?/i.test(linkTag));
-        if (!isScriptResource) {
-          // For icon, dns-prefetch, etc. just make relative URLs absolute
-          return linkTag.replace(/(href\s*=\s*)(["'])([^"']+)\2/i, (_m, attr, q, href) => `${attr}${q}${toAbsUrl(href)}${q}`);
-        }
-        return linkTag
-          .replace(/\bcrossorigin\b(?:\s*=\s*["'][^"']*["'])?/gi, "")
-          .replace(/(href\s*=\s*)(["'])([^"']+)\2/i, (_m, attr, q, href) => `${attr}${q}${toProxyUrl(href)}${q}`);
-      });
-
-      // Make all remaining relative src= absolute so images/fonts load from the bot server
-      // without needing a <base href> (which would break our relative proxy URLs above)
-      html = html.replace(
-        /(\bsrc\s*=\s*)(["'])(?!data:|https?:\/\/|\/\/|\/api\/)([^"']+)\2/gi,
-        (_m, attr, q, src) => `${attr}${q}${toAbsUrl(src)}${q}`,
-      );
-
-      // Inject an ES module importmap so Vite dynamic chunk imports (e.g. import('/chunk.js'))
-      // are redirected through our proxy instead of hitting our backend root unauthenticated.
-      // Scope is limited to modules loaded from our proxy URL so it doesn't affect other imports.
-      const botOrigin = new URL(finalUrl).origin;
-      const encodedBase = encodeURIComponent(`${botOrigin}/`);
-      const proxyBase = token
-        ? `/api/tg-client/miniapp-proxy?token=${encodeURIComponent(token)}&url=${encodedBase}`
-        : `/api/tg-client/miniapp-proxy?url=${encodedBase}`;
-      const importMap = JSON.stringify({
-        scopes: {
-          "/api/tg-client/miniapp-proxy": {
-            "/": proxyBase,
-            [`${botOrigin}/`]: proxyBase,
-          },
-        },
-      });
-      const importMapTag = `<script type="importmap">${importMap}</script>`;
-      // Must appear before any <script type="module">
-      if (/<script\b[^>]*type\s*=\s*["']module["']/i.test(html)) {
-        html = html.replace(
-          /<script\b[^>]*type\s*=\s*["']module["']/i,
-          `${importMapTag}\n$&`,
-        );
-      } else {
-        html = html.replace(/<head[^>]*>/i, (m) => `${m}\n${importMapTag}`);
-      }
-
-      res.send(html);
-    } else {
-      const buf = await upstream.arrayBuffer();
-      res.send(Buffer.from(buf));
-    }
-  } catch (err: any) {
-    res.status(502).json({ error: err.message });
-  }
-});
+/**
+ * Routes a browser loads by address rather than by fetch, so they authenticate with a media
+ * ticket instead of a header. Mounted in server.ts ahead of the session guard; anything it
+ * does not match falls through to the guarded router.
+ */
+export const mediaRouter = Router();
 
 // GET /frameable?url= -- probe whether a page allows cross-origin framing
 router.get("/frameable", async (req, res) => {
@@ -269,108 +97,39 @@ router.get("/frameable", async (req, res) => {
   res.json({ frameable: await isFrameable(url) });
 });
 
-// GET /web-proxy?url=&token= -- proxy a page that refuses framing so the
-// messenger viewer can still render it. The frontend shows the result in an
-// iframe WITHOUT allow-same-origin, so proxied scripts run in an opaque origin
-// and cannot reach Bemby's storage or API. Subresources are rewritten to load
-// directly from the site; link navigation is routed back through the proxy.
-router.get("/web-proxy", async (req, res) => {
-  const url = req.query.url as string;
-  const token = (req.query.token as string) ?? "";
+// POST /webview/ticket -- an address for the viewer to show a page that refuses framing.
+// Requested here, where the caller is authenticated, so the address handed to the iframe
+// carries only the ticket: the page can read its own URL, and a session token there would be
+// a session token given to the site. See tg/webviewTickets.
+router.post("/webview/ticket", (req, res) => {
+  const { url, mode } = req.body as { url?: string; mode?: WebviewMode };
   if (!url || !/^https?:\/\//i.test(url)) {
     res.status(400).json({ error: "valid url required" });
     return;
   }
   try {
-    await assertPublicUrl(url);
-  } catch {
-    res.status(400).json({ error: "URL not allowed" });
-    return;
-  }
-  try {
-    const upstream = await ssrfSafeFetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
+    const ticket = issueWebviewTicket(url, mode === "app" ? "app" : "page");
+    // A viewer origin serves the page at its own root, which a Mini App needs to route itself,
+    // and being a separate origin the frame may hold it with `allow-same-origin`. Without one
+    // configured the page still loads under a path prefix here, which suits a plain web page.
+    const viewerOrigin = webviewPublicOrigin();
+    res.json({
+      proxyUrl: viewerOrigin
+        ? webviewClaimUrl(ticket.id, url, viewerOrigin)
+        : webviewProxyUrl(ticket.id, url),
+      isolated: Boolean(viewerOrigin),
+      expiresAt: ticket.expiresAt,
     });
-
-    const contentType = upstream.headers.get("content-type") ?? "text/html";
-    res.setHeader("Content-Type", contentType);
-    res.removeHeader("X-Frame-Options");
-    res.removeHeader("Content-Security-Policy");
-
-    if (!contentType.includes("text/html")) {
-      const buf = await upstream.arrayBuffer();
-      res.send(Buffer.from(buf));
-      return;
-    }
-
-    let html = await upstream.text();
-    const finalUrl = (upstream.url || url).split("#")[0];
-    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
-
-    const toAbs = (resourceUrl: string): string => {
-      try {
-        return new URL(resourceUrl, finalUrl).toString();
-      } catch {
-        return resourceUrl;
-      }
-    };
-
-    // A <base> or meta CSP from the page would break the proxied copy
-    html = html.replace(/<base\b[^>]*>/gi, "");
-    html = html.replace(
-      /<meta\b[^>]+http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi,
-      "",
-    );
-
-    // Route link navigation back through the proxy so clicking around keeps
-    // working (a direct navigation would hit the framing block again)
-    html = html.replace(
-      /(<a\b[^>]*?\shref\s*=\s*)(["'])([^"']+)\2/gi,
-      (m, prefix, q, href) => {
-        if (/^(#|mailto:|tel:|javascript:|data:)/i.test(href)) return m;
-        const abs = toAbs(href);
-        if (!/^https?:\/\//i.test(abs)) return m;
-        return `${prefix}${q}/api/tg-client/web-proxy?url=${encodeURIComponent(abs)}${tokenParam}${q}`;
-      },
-    );
-
-    // Everything else (images, scripts, styles, forms) loads directly from
-    // the site -- make relative URLs absolute
-    html = html.replace(
-      /(\b(?:src|action)\s*=\s*)(["'])(?!data:|https?:\/\/|\/\/|#)([^"']+)\2/gi,
-      (_m, attr, q, val) => `${attr}${q}${toAbs(val)}${q}`,
-    );
-    html = html.replace(/<link\b[^>]+>/gi, (linkTag) =>
-      linkTag.replace(
-        /(href\s*=\s*)(["'])(?!data:|https?:\/\/|\/\/|#)([^"']+)\2/i,
-        (_m, attr, q, href) => `${attr}${q}${toAbs(href)}${q}`,
-      ),
-    );
-    html = html.replace(
-      /(\bsrcset\s*=\s*)(["'])([^"']+)\2/gi,
-      (_m, attr, q, val) => {
-        const rewritten = val
-          .split(",")
-          .map((part: string) => {
-            const [u, ...rest] = part.trim().split(/\s+/);
-            if (!u || /^(data:|https?:\/\/|\/\/)/i.test(u)) return part.trim();
-            return [toAbs(u), ...rest].join(" ");
-          })
-          .join(", ");
-        return `${attr}${q}${rewritten}${q}`;
-      },
-    );
-
-    res.send(html);
   } catch (err: any) {
-    res.status(502).json({ error: err.message });
+    res.status(400).json({ error: err?.message ?? "url not allowed" });
   }
+});
+
+// POST /media-ticket -- a short-lived credential for addresses the browser loads itself.
+// An <img src> cannot set an Authorization header, and the session token has no business
+// being in a URL (see auth/mediaTickets).
+router.post("/media-ticket", (_req, res) => {
+  res.json(issueMediaTicket());
 });
 
 // GET /:accountId/folders
@@ -895,27 +654,6 @@ router.post("/:accountId/messages/:chatId/forward", async (req, res) => {
   }
 });
 
-// GET /:accountId/avatar/:chatId -- profile photo (single)
-router.get("/:accountId/avatar/:chatId", async (req, res) => {
-  const accountId = Number(req.params.accountId);
-  const chatId = decodeURIComponent(req.params.chatId);
-  try {
-    const entry = await getLiveClient(accountId);
-    const buf = await fetchAvatar(entry, chatId);
-    if (!buf) {
-      res.set("Cache-Control", "public, max-age=3600");
-      res.status(404).end();
-      return;
-    }
-    res.set("Content-Type", "image/jpeg");
-    res.set("Cache-Control", "public, max-age=86400");
-    res.send(buf);
-  } catch {
-    res.set("Cache-Control", "public, max-age=3600");
-    res.status(404).end();
-  }
-});
-
 // GET /:accountId/avatars?ids=chatId1,chatId2,... -- batch profile photos
 // Returns { [chatId]: base64String } for chats that have an avatar.
 router.get("/:accountId/avatars", async (req, res) => {
@@ -1001,8 +739,14 @@ router.get("/:accountId/messages/:chatId/:msgId/thread", async (req, res) => {
   }
 });
 
-// GET /:accountId/messages/:chatId/:msgId/photo -- fetch photo for a message
-router.get("/:accountId/messages/:chatId/:msgId/photo", async (req, res) => {
+// GET /:accountId/messages/:chatId/:msgId/photo -- fetch photo for a message.
+//
+// On `mediaRouter`, not the router below, because the difference is where the guard sits.
+// The main router is mounted behind `requireAuth`, which only reads the Authorization
+// header; an <img> cannot set one, so a request carrying a perfectly good media ticket was
+// refused by the outer guard before this route was ever consulted. This router is mounted
+// ahead of that guard and carries its own.
+mediaRouter.get("/:accountId/messages/:chatId/:msgId/photo", requireMediaAuth, async (req, res) => {
   const accountId = Number(req.params.accountId);
   const chatId = req.params.chatId;
   const msgId = Number(req.params.msgId);
@@ -1098,58 +842,28 @@ router.post("/:accountId/mark-read/:chatId", async (req, res) => {
 });
 
 // GET /:accountId/bot-commands/:chatId -- commands for a bot chat
-router.get("/:accountId/bot-commands/:chatId", async (req, res) => {
+// GET /:accountId/bot-info/:chatId -- the bot's command list and its menu button (the
+// Mini App pinned beside the composer). One call: both are read off the same GetFullUser.
+router.get("/:accountId/bot-info/:chatId", async (req, res) => {
   const accountId = Number(req.params.accountId);
   const chatId = decodeURIComponent(req.params.chatId);
   try {
     const entry = await getLiveClient(accountId);
-    res.json(await getBotCommands(entry, chatId));
+    res.json(await getBotInfo(entry, chatId));
   } catch (err: any) {
     tgError(err, accountId, res);
   }
 });
 
 // True when the response headers allow embedding the page in an iframe from another origin
-function headersAllowFraming(headers: Headers): boolean {
-  const xfo = (headers.get("x-frame-options") ?? "").toLowerCase();
-  if (xfo.includes("deny") || xfo.includes("sameorigin")) return false;
-  const csp = headers.get("content-security-policy") ?? "";
-  const m = csp.match(/frame-ancestors([^;]*)/i);
-  // frame-ancestors listing anything but a wildcard will not include our origin
-  if (m && !m[1].trim().toLowerCase().split(/\s+/).includes("*")) return false;
-  return true;
-}
-
-// Probes a URL to check whether it can be shown in the messenger webview iframe
-async function isFrameable(url: string): Promise<boolean> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 5000);
-  try {
-    let resp = await fetch(url, {
-      method: "HEAD",
-      redirect: "follow",
-      signal: ctrl.signal,
-    });
-    if (resp.status === 405 || resp.status === 501) {
-      resp = await fetch(url, { redirect: "follow", signal: ctrl.signal });
-      resp.body?.cancel().catch(() => {});
-    }
-    return headersAllowFraming(resp.headers);
-  } catch {
-    // Unreachable from the backend; let the browser iframe try anyway
-    return true;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 // POST /:accountId/webview/resolve -- resolve a mini app URL to an authenticated web app URL
 router.post("/:accountId/webview/resolve", async (req, res) => {
   const accountId = Number(req.params.accountId);
-  const { url, botChatId, peerChatId } = req.body as {
+  const { url, botChatId, peerChatId, fromBotMenu } = req.body as {
     url: string;
     botChatId?: string;
     peerChatId?: string;
+    fromBotMenu?: boolean;
   };
   if (!url) {
     res.status(400).json({ error: "url required" });
@@ -1162,10 +876,24 @@ router.post("/:accountId/webview/resolve", async (req, res) => {
       url,
       botChatId,
       peerChatId,
+      fromBotMenu,
     );
-    // TG-issued webview URLs are made to be framed; probe only unresolved ones
-    const frameable = resolved || (await isFrameable(webAppUrl));
-    res.json({ webAppUrl, resolved, frameable });
+    // Telegram answering at all is not the same as Telegram signing the address: a request
+    // made the wrong way comes back with a URL and no account data in it, and the only sign
+    // of that used to be the app itself failing on "No initData found" once it had loaded.
+    const signed = /[#&]tgWebAppData=/.test(webAppUrl);
+    if (resolved && !signed) {
+      console.warn(
+        `[tg-client] webview resolve returned no account data for ${new URL(webAppUrl).host}` +
+          `${fromBotMenu ? " (menu button)" : ""} -- the app will load logged out`,
+      );
+    }
+    // Probed even when Telegram signed the URL. A signed URL is not a frameable one: apps
+    // increasingly send `frame-ancestors 'self' https://web.telegram.org` (or X-Frame-Options
+    // SAMEORIGIN), which keeps working in Telegram's own clients while our origin is refused.
+    // Assuming otherwise showed the operator a dead panel reading "refused to connect".
+    const frameable = await isFrameable(webAppUrl);
+    res.json({ webAppUrl, resolved, frameable, signed });
   } catch (err: any) {
     tgError(err, accountId, res);
   }
@@ -1220,42 +948,6 @@ router.post("/:accountId/start-bot/:username", async (req, res) => {
     res.json(dialog);
   } catch (err: any) {
     tgError(err, accountId, res);
-  }
-});
-
-// GET /:accountId/events -- SSE stream for real-time messages
-router.get("/:accountId/events", async (req, res) => {
-  const accountId = Number(req.params.accountId);
-
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
-  res.write(":\n\n");
-
-  const send = (data: object) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
-
-  try {
-    // Ensure client is alive so the event handler is registered
-    await getLiveClient(accountId);
-
-    const heartbeat = setInterval(() => res.write(":\n\n"), 25_000);
-
-    const unsubscribe = subscribeToMessages(accountId, (msg) => {
-      send({ type: "message", ...msg });
-    });
-
-    req.on("close", () => {
-      clearInterval(heartbeat);
-      unsubscribe();
-    });
-  } catch (err: any) {
-    send({ type: "error", error: err.message });
-    res.end();
   }
 });
 

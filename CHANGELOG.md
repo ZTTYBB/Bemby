@@ -4,6 +4,146 @@ All notable changes to Bemby are documented here.
 
 ---
 
+## v1.0.0
+
+第一个 1.0 版本：小程序（Mini App）支持、网页子步骤、注册任务增强、计划列表与批量资料生成，Cloudflare 验证改用 CloakBrowser，并完成一轮安全加固。
+
+The first 1.0: Mini App support, page sub-steps, autoreg enhancements, the schedule list, AI-written bulk profiles, Cloudflare solving on CloakBrowser, and a security hardening pass.
+
+### 中文
+
+**变更**
+
+- **在 Messenger 中打开小程序（Mini App）** -- 聊天头部与左侧机器人菜单新增打开按钮，由 Telegram 按当前账户签名后在 Bemby 内查看；机器人菜单里的小程序（贴在输入框旁的那个）也能直接打开。可在设置里切换"应用内 / 浏览器"两种打开方式。
+- **小程序内嵌代理** -- 多数小程序拒绝被非 Telegram 站点内嵌，因此内嵌前会先探测；不允许时改由内置代理提供同一页面，剥掉阻止内嵌的响应头，并注入小程序运行时所需的桥接。代理页面使用一次性票据而非面板令牌，票据只对该站点有效，页面脚本读不到（HttpOnly）。设置 `WEBVIEW_PUBLIC_ORIGIN`（指向同一实例的另一个主机名）可让小程序拥有自己的源，从而正确路由自身路径。
+- **按网址打开小程序（自定义任务）** -- 新增"打开小程序（网址）"动作：填 `t.me/<机器人>/<应用>` 链接由链接自身确定机器人，填普通 https 地址则由所属机器人签名；另有"打开机器人菜单小程序"动作，无需在聊天记录里翻找按钮。
+- **网页子步骤** -- 小程序/网页动作内可编排子步骤：点击、填写、等待元素、滚动（元素或页面）、断言文字；支持 CSS 选择器与多语言标签候选（同一按钮在不同语言下的多种写法）。
+- **自定义任务不再必须填目标机器人** -- 纯网页/小程序流程可以完全不涉及聊天。
+- **模板复制** -- 模板列表一键复制为新模板（自动命名"（副本）"）。
+- **注册任务：正则匹配注册码** -- 群里没有固定前缀时可用正则匹配，有捕获组时取第 1 组；也支持 `/pattern/i` 形式。前缀与正则二者填其一即可。
+- **注册任务：注册码即时修正** -- 新增"移除中文字符"与"移除指定字符"两个即时处理（不需要 AI、无额外等待），发送前按群里的约定清理注册码。
+- **注册任务：AI 修正注册码** -- 可选开关：发送前把注册码连同群内上下文（该消息、其前后消息、机器人提示）交给 AI，按群里的说明修正（删除干扰符号、替换字符、补全被拆分的码）；一次请求覆盖整批，AI 不可用时按原样发送。
+- **注册任务：发送前等待机器人就绪** -- 可分别配置"发送注册码前"与"发送用户名前"要等待的机器人文字（如"对我发送注册码"），避免机器人尚未就绪时白白浪费一个注册码；超时仍会发送并在日志中标注。
+- **注册任务：注册码通过后再点击一次按钮/链接** -- 有些机器人先校验注册码，通过后才在回复里给出真正开始注册的按钮或链接。新增开关与匹配文字（留空取第一个可点击项），在"注册码被接受"与"发送用户名"之间点击它；支持回调按钮与 `?start=` 链接（含正文中的文字链接），纯网页链接需要浏览器，请改用自定义任务的"打开网址"动作。该步骤可标记为**必需**（找不到按钮即视为此码失效，直接换下一个）或保持可选（仅记录并继续发送用户名），适配"有时才要求这一步"的机器人。点击后的回复同样按"失败包含文字"判定，因此机器人在此才说"已被使用"时会自动尝试下一个码。
+- **用 ID 指定私密群组** -- 没有用户名、也没有邀请链接的私密群组，现在可以用群组 ID 指定：Messenger 的资料面板新增可复制的 ID（`-100…` 形式），任务中的群组/联系人字段都接受该 ID，由本账户的聊天列表解析（因此账户必须已在群内）。邀请链接也可在不重新加入的情况下解析。
+- **批量修改资料：AI 生成** -- 批量修改 Telegram 资料时可让 AI 按要求生成（例如"中国用户，简介用中文"）：一次请求覆盖全部账户，可勾选"不生成简介"只生成名字。生成结果会自动清理成可用格式：单行、不含制表符、名字/姓氏 64 字符与简介 70 字符以内、去重、去掉重复的姓氏。
+- **计划列表增强** -- 可在设置中把"计划"独立为左侧菜单项（完整列表、不再限高）；每个任务按类型显示图标与颜色（签到 / 观看 / 自定义 / 注册）；每一项可单独取消这次运行——任务保持启用，按其运行间隔顺延到下一个可运行日。
+- **显示最近成功时间** -- 任务列表可切换"最近成功"列，显示相对时间（悬停显示完整时间戳）。
+- **任务通知改由机器人发送** -- 在设置中填入 BotFather 的机器人 Token 与默认目标（数字 Chat ID，或频道／群组的 `@名称`），任务结束后由该机器人发送通知，不再依赖任务关联账号是否已登录——因此未关联账号的 Emby 观看任务同样能收到通知。机器人无法主动发起对话，故新增**查找会话**从机器人最近的对话中读取 Chat ID，并可**发送测试**立即验证 Token、网络可达性与目标（字段中未保存的值也会被采用，便于先试后存）。Token 仅以掩码回显，留空即保留原值，且在导出时视为敏感项（必须加密导出）。
+- **原"由任务账号发送通知"已弃用** -- 未配置机器人 Token 时该方式仍然生效，但将在后续版本中移除：它需要为每条通知建立一次完整的 MTProto 连接，且仅在该账号已登录时可用。设置页在未配置 Token 时给出提示，走该路径时任务日志也会记录一条弃用告警。
+- **浏览器配置文件管理** -- 设置中可清理浏览器留下的配置文件（Cookie 与指纹会按出口保留，需要重置时使用）。
+- **Cloudflare 验证改用 CloakBrowser** -- 过 CF 的整套浏览器底层已从 `puppeteer-real-browser` + Playwright 下载的普通 Chromium，替换为 **CloakBrowser**：一个在源码层修补指纹（Canvas、WebGL、音频、字体、WebRTC、TLS、`navigator.webdriver` 等）的 Chromium，通过 Playwright 驱动。挑战检测、小程序步骤、网页步骤与代理轮换逻辑保持不变。首次启用时按需下载（约 200MB）到数据目录，升级后仍然保留；旧版本留下的浏览器（`pw-browsers`、`cf-chromium`）会在安装成功后自动清理。
+- **CloakBrowser 授权密钥（设置页）** -- 新增密钥管理：不填密钥时使用较旧的免费构建；在 cloakbrowser.dev/free 用 GitHub 账号可免费领取密钥以使用最新构建。每个免费密钥仅允许 1 个并发会话，因此可添加多个（来自不同 GitHub 账号）密钥，运行中的浏览器各占用一个，用完则该次启动回退到免费构建。密钥仅保存在本机，界面始终掩码显示，并可一键验证有效性与套餐。
+- **授权构建按需下载** -- 添加授权密钥后，设置页会提示「授权构建尚未下载」，并把安装按钮切换为<strong>下载授权构建</strong>；状态行也会标明当前装的是免费构建还是授权构建。下载始终由你触发，任务运行中不会自动下载。
+- **每个出口固定设备指纹** -- 浏览器指纹种子由出口（代理）推导而来，同一出口在多次运行中呈现同一台设备，与其保留的 Cookie（含 `cf_clearance`）一致，而不再每次随机。
+- **虚拟显示由应用自行管理** -- headed 模式所需的 Xvfb 现由应用启动并复用（原先由 `puppeteer-real-browser` 负责）；无法启动时回退到 headless 并给出提示。
+- **自动更新默认关闭** -- CloakBrowser 的后台自动更新默认关闭，避免任务运行中突然下载约 200MB 并在数据卷中堆积旧构建；更新请使用设置页的「重新下载 / 更新浏览器」。
+
+**安全**
+
+- **登录验证码不再形同虚设** -- 之前验证码答案被签进发给浏览器的令牌里，而 JWT 的载荷是 base64 而非密文，解码即可读到答案；同一个验证码在 5 分钟内还能反复使用。现在答案只保存在服务端，发给客户端的只是一个不透明的 id，且一次验证即作废。
+- **修改密码会使旧令牌失效** -- 会话令牌现在带有"纪元"值，修改用户名或密码会推进它，此前签发的所有令牌随即失效。设置页新增<strong>退出所有其他设备</strong>按钮。升级不会让你掉线：第一次修改凭据后才开始生效。
+- **Telegram 凭据静态加密** -- 设置 `BEMBY_DATA_KEY` 后，会话字符串、每账户 API hash 与通行密钥私钥在 SQLite 中以 AES-256-GCM 加密存放；已存在的明文会在下次启动时就地加密。未设置时行为不变，但启动时会提示。**请妥善备份该密钥：丢失则相关账户需要重新登录。**
+- **SSRF 防护补漏** -- 此前 `::ffff:127.0.0.1` 这类 IPv4 映射地址、`fe80::` 链路本地地址以及 `100.64.0.0/10` 等保留段可以绕过检查。现在按地址本身（而非文本形式）判断，且校验移到了连接时的名称解析上，因此"检查后改答案"的 DNS 重绑定同样被挡住。
+- **面板内容安全策略** -- 之前只有 `frame-ancestors`。现在加上 `script-src 'self'`、`object-src 'none'`、`base-uri`、`form-action` 等，日志与消息里渲染的机器人内容即使转义出问题也无法执行脚本。
+- **图片地址不再携带会话令牌** -- 聊天图片改用 15 分钟有效的媒体票据，会话令牌不再出现在 URL、浏览器历史与访问日志中。
+- **小程序票据按可注册域限定** -- 之前取最后两段，`shop.com.au` 被读成 `com.au`，一张票据等于放行整个后缀下的所有站点。
+- **代理密码不再下发** -- 设置接口返回的代理列表中密码以掩码替代，未修改则原样回存（与 API hash 同样的做法）。
+- **其他** -- 用户名改为常量时间比较；验证码与凭据接口加上限流；替换式导入在既无存储密码也无 `ADMIN_PASSWORD` 时不再放行空密码；小程序页面的 `frame-ancestors` 取自配置而非请求头；升级 argon2 与 vite，两侧依赖告警清零。
+
+**修复**
+
+- **小程序不再显示自身的错误页** -- Telegram 返回的地址只带账户数据，主题、版本与平台是客户端该补的部分。基于 `@telegram-apps/sdk` 的小程序会校验整套启动参数，缺少主题即抛出"是否在 Telegram 之外打开"，表现为应用自己的报错页（例如 Nebula 的"Oops :("）。现在这些参数会补齐，签名地址与真实客户端一致。
+- **模板分享不再带上无关字段** -- 启动命令与签到按钮存在于每个模板上（含默认值），但只有签到与注册任务会用到，分享自定义/观看模板时却一并带出，读起来像是会发送 `/start`、会去找"签到"按钮。现在按任务类型只分享真正相关的字段；导入侧不受影响。
+- **Microsoft Edge 最小化后立即还原** -- vue-router 会在 `visibilitychange` 里调用 `history.replaceState` 保存滚动位置，Edge 把它当作"页面被激活"，于是窗口刚最小化就弹回。现在仅在该事件派发期间跳过这一次调用（且只在 Edge 上），后台标签页正常的跳转仍会更新地址栏。
+- **任务参数问题** -- 修正自定义任务参数在若干动作间传递时的问题。
+- **浏览器测试不再 504** -- 设置页的浏览器测试改为后台执行并轮询结果，长时间的验证不再被反向代理掐断。
+- **代理导入导出** -- 修正带代理配置的导入导出。
+- **只启动 CloakBrowser 构建** -- 旧版方案会启动 `PUPPETEER_EXECUTABLE_PATH` 指向的浏览器，升级前配置过该变量的安装会继续使用它——那是没有任何指纹修补的普通 Chromium，看似在过验证，实则毫无作用。现在该变量完全不再读取（启动时会提示可删除），数据目录中遗留的 `pw-browsers` / `.pw-browsers` / `cf-chromium` 也会在下次安装时清理。
+- **设置页显示的是真正会启动的浏览器** -- 版本号改为从构建目录读取，并新增所用二进制的完整路径。此前是运行该二进制取版本，而授权构建在没有密钥的环境下拒绝启动（密钥存在数据库而非环境变量里），于是页面仍显示被替换掉的旧版本。
+- **强制重装不再清空整个缓存** -- 「重新下载 / 更新浏览器」此前会删除全部构建，导致添加密钥后免费构建被一并删除；现在只清除本次要替换的那一档。
+- **授权席位不足时排队等待** -- 密钥全部占用时不再直接以无密钥方式启动（授权构建会拒绝运行），而是等待席位释放（上限为单个操作的总时长），使并发数量自动跟随密钥数量。
+- **整页验证下发的 Turnstile 令牌不再当作通过** -- Cloudflare 的整页验证会自行完成自己的 Turnstile 并写入令牌，但被拒绝的出口 IP 依然停留在验证页。此前只要看到令牌就判定"已通过"，于是后续网页子步骤在一个根本没有站点内容的页面上空等到超时（例如等待登录框 120 秒），最后才报出误导性的步骤错误。现在整页验证必须真正消失才算通过；站点自己页面上的 Turnstile 组件仍以令牌为准。
+- **不再把站点自己的验证组件当作阻塞** -- 许多站点会把 Turnstile 放在自家登录表单里，此时页面完全可用。此前只要页面上存在该组件就中止子步骤，导致能正常打开的登录页也无法填写。现在只有整页验证（页面上没有任何站点内容时）才会中止。
+- **不再误触站点自己的按钮** -- 用于"先点一下才会出现验证组件"的验证页的按钮猜测逻辑，此前会在完整站点页面上匹配到"发送验证码"这类文字并点击，等于用空邮箱提交了表单（页面因此显示"邮箱不正确"）。现在仅在控件极少的纯验证页上才会点击。
+- **网页子步骤遇到验证会立即停止** -- 子步骤开始前及等待元素期间会检查验证是否占据页面，一旦出现立即中止并说明原因，而不是耗尽各自的超时。
+- **判定验证前先等页面就绪** -- 普通网页此前在 `goto` 返回的瞬间就判断有无验证，此时文档可能还是空的，验证会被漏判。现在与小程序一样先等页面就绪。
+- **不再把未通过的挑战记为成功** -- 托管挑战会跳转到自己的 URL 并在校验期间短暂清空文档，此前会被误判为「已通过」，从而记录一次并未发生的签到。现在挑战仍在页面上时不认可任何成功信号，且「挑战已消失」需连续两次确认。失败时日志会写明未能通过 Cloudflare 验证。
+- **并发连接同一账户会泄漏一个客户端** -- 两个请求同时唤醒同一个闲置账户时，各自建立并连接一个 `TelegramClient`，后者覆盖前者，被覆盖的连接无人可达却持续运行到进程重启。现在共享同一个连接过程。
+- **小程序的重定向会被服务端吞掉** -- 站点返回的 3xx 此前在服务端跟完，浏览器地址不变，小程序路由停在被要求离开的页面上；现在按原样转交浏览器。
+
+**清理**
+
+- 移除无引用的导出、失效的单头像与 SSE 路由，以及 27 个未使用的翻译键；导出加密信封、HTML 转义与域名判断的重复实现合并为共用模块。
+
+### English
+
+**Changes**
+
+- **Open a Mini App from Messenger** -- an open button in the chat header and in the bot's left-hand menu; Telegram signs the address for the current account and it opens inside Bemby. The Mini App a bot pins beside the composer (its menu button) opens too, which appears nowhere in the chat history. A setting switches between opening in-app and in the browser.
+- **Mini App viewer proxy** -- most Mini Apps refuse to be framed by anything but Telegram, so framing is probed first; where it is refused the same page is served through a built-in proxy with the framing headers dropped and the Mini App bridge injected. The proxied page carries a single-use ticket rather than the panel's session token: it is good for that one site, and HttpOnly so the page's own scripts cannot read it. Setting `WEBVIEW_PUBLIC_ORIGIN` (another hostname pointing at the same instance) gives the app an origin of its own so its router sees its own paths.
+- **Open a Mini App by address (custom jobs)** -- an **Open Mini App (URL)** action: a `t.me/<bot>/<app>` link names its own bot, and a plain https address is signed through the bot that owns it. A companion action opens the bot's menu Mini App, so neither needs a button hunted for in the chat history.
+- **Page sub-steps** -- steps inside a Mini App or web action: click, fill, wait for an element, scroll (an element or the page), assert text. CSS selectors are supported, as are multi-language label alternatives for a control that is worded differently per locale.
+- **A custom job no longer requires a target bot** -- a purely web/Mini App flow need not involve a chat at all.
+- **Duplicate a template** -- copy any template into a new one from the list, named "(copy)".
+- **Autoreg: match codes by regex** -- for groups whose codes carry no stable prefix; capture group 1 is the code where the pattern has one, and `/pattern/i` works for flags. A prefix or a regex -- one of the two is enough.
+- **Autoreg: instant code fixups** -- **Strip Chinese characters** and **Strip these characters** clean a code the way the group asked, with no AI call and nothing to wait for.
+- **Autoreg: fix the code with AI** -- optional: before each code is sent the model is shown it along with the group context (its own message, the messages around it, the bot's prompt) and adjusts it as the group instructed -- a decoy symbol to delete, a character to swap, a split code to join. One request covers the batch, and the captured code is sent as it stands if the AI is unavailable.
+- **Autoreg: wait for the bot to be ready** -- separate optional waits for the wording that means "send me the code" and "send me the username", so a code is not spent on a bot that is not listening yet. On timeout it is sent anyway and the log says so.
+- **Autoreg: click a button/link after the code is verified** -- some bots vet the code first and only then offer the button (or `?start=` link) that actually opens registration. A toggle and its own match text (blank takes the first clickable one) put that click between the code being accepted and the username being sent. Callback buttons and `?start=` links are supported, including a link written into the message text; a plain web link needs a browser, so a custom job's "Open URL" action covers that. The step can be marked **required** (no button means the code is spent, so the next one is tried) or left optional (logged, and the username is sent anyway), which is what a bot that only sometimes asks for the extra click needs. The reply after the click is matched against **Fail contains** too, so a bot that only reports "already used" at that point moves straight on to the next code.
+- **Name a private group by its ID** -- a group with no username and no invite link left can now be named by ID: the Messenger Info panel shows a copyable ID (`-100…` form), and a job's group or contact field takes it, resolved from the account's own chat list (so the account must be a member). An invite link also resolves without rejoining.
+- **Bulk profile: generate with AI** -- when bulk-updating Telegram profiles, the AI can write them to a requirement ("Chinese users, bios in Chinese"). One request covers every selected account, and a **Skip the bios** toggle asks for names only. What comes back is cleaned to what Telegram and the form accept: one line, no tabs, 64/64/70 character limits, no duplicates, no surname repeated into the given-name field.
+- **Schedule list** -- Settings can give **Schedule** its own menu entry, showing the full list without the height cap. Each chip carries an icon and colour for its job type (check-in / watch / custom / autoreg), and each can be called off individually: the job stays enabled and moves to its next eligible day, respecting its run-every-days interval.
+- **Last successful run** -- a toggleable column on the jobs list showing how long ago each job last succeeded, with the full timestamp on hover.
+- **Job notifications are sent by a bot** -- set a bot token from BotFather and a default target (a numeric chat ID, or a channel's / group's `@name`) in Settings, and that bot sends when a job finishes. Notifications no longer depend on the job's account being authenticated, so an Emby Watch job with no linked account gets them too. A bot cannot start a conversation, so **Find chats** reads the chat IDs it has heard from lately, and **Send test** proves the token, the host's reachability and the target at once (an unsaved token or target in the fields is used, so either can be tried before it is committed). The token is only ever echoed back masked, blank keeps the stored one, and it counts as sensitive on export, which must then be encrypted.
+- **Sending notifications from a job's account is deprecated** -- it still applies while no bot token is set, but it will be removed in a future release: it opens a full MTProto connection per notification and only works while that account is authenticated. Settings warns while no token is configured, and a run that takes that path logs a deprecation warning.
+- **Browser profile housekeeping** -- clear the profiles the solver keeps per exit (cookies and fingerprint) from Settings when a reset is wanted.
+- **Cloudflare solving now runs on CloakBrowser** -- the whole browser layer behind CF solving moved from `puppeteer-real-browser` plus a Playwright-downloaded stock Chromium to **CloakBrowser**: a Chromium whose fingerprint is patched at source (canvas, WebGL, audio, fonts, WebRTC, TLS, `navigator.webdriver`), driven through Playwright. Challenge detection, Mini App steps, page steps and proxy rotation are unchanged. It is downloaded on demand (~200MB) into the data dir so it survives an upgrade, and the browsers earlier versions left behind (`pw-browsers`, `cf-chromium`) are removed once the new one installs.
+- **CloakBrowser licence keys (Settings)** -- with no key the solver runs the older free build; a free key (one per GitHub account at cloakbrowser.dev/free) gets the current one. A free key allows a single concurrent session, so several keys can be stored and one is leased per running browser, with a launch falling back to the free build when every seat is taken. Keys are stored on the host, only ever shown masked, and can be checked for validity and plan from the same panel.
+- **The licensed build is offered as a download** -- once a key is added, Settings says the build it unlocks has not been downloaded and the install button becomes <strong>Download the licensed build</strong>; the status line names which build is on disk. Downloads still only happen when you ask, never mid-job.
+- **A stable device per exit** -- the browser fingerprint seed is derived from the exit (proxy) rather than chosen at random each launch, so an exit presents the same machine run after run, matching the cookies its profile keeps (`cf_clearance` included).
+- **The app manages its own virtual display** -- the Xvfb that headed mode needs is now started and shared by the app itself (it used to come from `puppeteer-real-browser`), falling back to headless with a warning when it cannot be started.
+- **Auto-update off by default** -- CloakBrowser's background update is disabled, so a job no longer triggers a surprise ~200MB download mid-run or leaves superseded builds on the data volume. Use "Re-download / update browser" in Settings instead.
+
+**Security**
+
+- **The login captcha was decorative** -- the answer was signed into the token handed to the browser, and a JWT payload is base64 rather than ciphertext, so decoding it gave the answer; the same challenge was also replayable for its full five minutes. The answer now stays on the server, the client gets an opaque id, and a challenge is good for one attempt.
+- **Changing the password now invalidates existing tokens** -- session tokens carry an epoch, and changing the username or password advances it, retiring every token issued before it. Settings gains a **Sign out all other devices** button. Upgrading does not sign you out: the epoch only starts to bite after the first credential change.
+- **Telegram credentials are encrypted at rest** -- with `BEMBY_DATA_KEY` set, session strings, per-account API hashes and passkey private keys are stored AES-256-GCM encrypted, and anything already in plain text is encrypted in place on the next start. Behaviour is unchanged without the key, but the boot log says so. **Back the key up: lose it and the affected accounts have to be authenticated again.**
+- **SSRF gaps closed** -- IPv4-mapped addresses such as `::ffff:127.0.0.1`, link-local `fe80::` and reserved ranges like `100.64.0.0/10` previously passed the check. Addresses are now judged as addresses rather than as text, and the check moved onto the connection's own name resolution, so a DNS answer that changes between the check and the connection is caught too.
+- **A real content security policy for the panel** -- previously `frame-ancestors` alone. Now `script-src 'self'`, `object-src 'none'`, `base-uri` and `form-action` as well, so bot-authored content rendered in the logs and the messenger cannot execute even if the escaping around it ever slips.
+- **Image addresses no longer carry the session token** -- chat photos use a 15-minute media ticket, keeping a seven-day credential out of URLs, browser history and access logs.
+- **Mini App tickets are scoped to the registrable domain** -- the old last-two-labels rule read `shop.com.au` as `com.au`, so one ticket authorised every site under that suffix.
+- **Proxy passwords are no longer sent to the client** -- the settings response masks them and restores the stored value when it comes back unchanged, the same round trip the API hash already made.
+- **Also** -- constant-time username comparison; rate limits on the captcha and credential endpoints; replace-mode import no longer accepts an empty password when neither a stored hash nor `ADMIN_PASSWORD` exists; the Mini App page's `frame-ancestors` comes from configuration rather than the request's Host header; argon2 and vite updated, leaving both dependency trees with no advisories.
+
+**Fixes**
+
+- **A Mini App no longer opens on its own error page** -- Telegram returns an address carrying only the account data; the theme, version and platform are the client's part to add. An app built on `@telegram-apps/sdk` validates the whole launch-parameter set and throws "opened outside Telegram?" when the theme is missing, which surfaces as the app's own error screen (Nebula's "Oops :(", in the report). Those parameters are filled in now, so a signed address matches what a real client hands over.
+- **A shared template no longer carries fields it never uses** -- the start command and check-in button exist on every template, defaulted, but only check-in and autoreg jobs read them; sharing a custom or watch template brought them along, reading as though it sends `/start` and hunts for a 签到 button. Only the fields the job type actually uses are shared now; importing is unaffected.
+- **Microsoft Edge restored a minimised window immediately** -- vue-router saves the scroll position with `history.replaceState` inside a `visibilitychange` handler, which Edge reads as the page being activated, so the window popped straight back up. That one call is now skipped for the duration of the event dispatch (and only on Edge), leaving genuine navigation in a background tab free to update the address bar.
+- **Job parameters** -- fixed parameters not carrying correctly between several custom-job actions.
+- **Browser tests no longer 504** -- the Settings browser test runs in the background and is polled for its result, so a long solve is not cut off by a reverse proxy.
+- **Proxy import/export** -- fixed importing and exporting configurations that carry proxies.
+- **Only CloakBrowser builds are launched** -- the previous solver ran whatever `PUPPETEER_EXECUTABLE_PATH` named, and installs that were set up before the switch kept using it: a stock Chromium with none of the fingerprint patches, which looks like it is solving challenges without doing any of the work. The variable is no longer read at all (a startup line says so), and the browsers left in the data dir (`pw-browsers`, `.pw-browsers`, `cf-chromium`) are cleaned up on the next install.
+- **Settings names the browser that will actually launch** -- the version is read from the build directory and the full binary path is shown. It used to come from running the binary, which the keyed build refuses to do without its licence key (the key lives in the database, not this process's environment), so the page went on naming the build it had replaced.
+- **A forced reinstall no longer empties the whole cache** -- "Re-download / update browser" deleted every build, so adding a key and reinstalling took the free build with it. Only the tier being replaced is cleared now.
+- **Launches queue for a licence seat** -- with every key in use a browser no longer starts keyless (which the keyed build refuses); it waits for a seat, bounded by the budget one action gets, so how many solvers run at once follows how many keys are configured.
+- **A Turnstile token from a full-page interstitial no longer counts as a pass** -- Cloudflare's interstitial satisfies its own Turnstile and fills the token field in, while an exit IP it has decided against stays on the interstitial. The token alone used to be read as "solved", so the page steps then ran against a page with none of the site on it and waited out their whole timeout (two minutes for a login field, in one report) before failing with a misleading step error. The interstitial now has to actually go away; a Turnstile the site itself put on its page still passes on the token.
+- **A widget the site put on its own page no longer blocks anything** -- plenty of sites place a Turnstile inside their login form, where the page around it is perfectly usable. Treating any widget on the page as blocking stopped the steps on login pages that had loaded fine. Only a full-page interstitial, where none of the site is on screen, stops them now.
+- **The site's own buttons are no longer pressed** -- the guess used for verify portals that only render their widget after a click matched labels like "发送验证码" on a full site page and pressed it, submitting the login form with an empty field (which is where the "邮箱不正确" in the screenshot came from). It now only fires on a near-empty verify page, and the decision is a tested function rather than a regex buried in a page script.
+- **Page steps stop as soon as a challenge owns the page** -- checked before each step and while waiting for an element, so a challenge raised mid-run ends the step with the real reason instead of running out its timeout.
+- **The page is allowed to arrive before it is judged** -- a plain page used to be checked for a challenge the instant `goto` returned, when the document can still be empty and the interstitial has written nothing; it now waits for readiness the way a Mini App already did.
+- **A refused challenge is no longer logged as a pass** -- a managed challenge navigates to its own URL and briefly empties the document while it verifies, which used to read as "cleared" and recorded a checkin that never happened. Nothing counts as success while the interstitial is still up, and "the challenge is gone" now has to hold across two consecutive checks. The job log says plainly when the Cloudflare challenge was not passed.
+- **Connecting the same account twice at once leaked a client** -- two requests waking the same idle account each built and connected a `TelegramClient` and the second overwrote the first, leaving a live connection nothing could reach that ran until the process restarted. They now share one connection.
+- **Mini App redirects were swallowed server-side** -- a 3xx from the site was followed on the server, so the browser's address never changed and the app's router stayed on the page it had been told to leave. Redirects are now relayed to the browser.
+
+**Cleanup**
+
+- Unreferenced exports, the dead single-avatar and SSE routes and 27 unused translation keys removed; the export encryption envelope, HTML escaping and domain matching each collapsed from duplicate copies into one shared module.
+
+---
+
 ## v0.9.36-patch-1
 
 ### 中文

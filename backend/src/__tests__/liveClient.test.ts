@@ -248,6 +248,25 @@ describe('getLiveClient', () => {
     setupDb({ ...DEFAULT_ACCOUNT, session_string: null });
     await expect(getLiveClient(303)).rejects.toThrow('Account not found or not authenticated');
   });
+
+  it('builds one client when two callers ask for the same idle account at once', async () => {
+    // Both callers see no cached entry. Without an in-flight guard each builds and connects
+    // its own client and the second overwrites the first, leaving a live, connected session
+    // that nothing can reach and that keeps running until the process restarts.
+    const [first, second] = await Promise.all([getLiveClient(304), getLiveClient(304)]);
+
+    expect(first).toBe(second);
+    expect(MockTelegramClient).toHaveBeenCalledTimes(1);
+    expect(mockClientInstance.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not wedge the account when a connect fails', async () => {
+    setupDb(null);
+    await expect(getLiveClient(305)).rejects.toThrow();
+    // The failed attempt must not be cached, or the account could never connect again
+    setupDb(DEFAULT_ACCOUNT);
+    await expect(getLiveClient(305)).resolves.toBeDefined();
+  });
 });
 
 // ---- loadDialogs -----------------------------------------------------------
@@ -788,9 +807,32 @@ describe('parseMiniAppLink', () => {
     expect(parsed?.startParam).toBe('bad%zzvalue');
   });
 
+  // A named app needs no start parameter: plenty of apps have no context to be handed,
+  // and their link is just t.me/<bot>/<app>.
+  it('parses a named mini app link with no start param', () => {
+    expect(parseMiniAppLink('https://t.me/zzmeb_bot/miniapp')).toEqual({
+      botUsername: 'zzmeb_bot',
+      appShortName: 'miniapp',
+    });
+  });
+
+  it('leaves the start param off rather than sending an empty one', () => {
+    expect(parseMiniAppLink('https://t.me/somebot/app?startapp=')).toEqual({
+      botUsername: 'somebot',
+      appShortName: 'app',
+    });
+  });
+
   it('returns null for non-mini-app links', () => {
     expect(parseMiniAppLink('https://t.me/somebot?start=abc')).toBeNull();
     expect(parseMiniAppLink('https://example.com/?startapp=abc')).toBeNull();
+  });
+
+  // Without an app name or a start param there is no app in the link, only a bot -- and a
+  // message link (t.me/channel/123) is not one either.
+  it('does not claim a bare bot or channel link', () => {
+    expect(parseMiniAppLink('https://t.me/somebot')).toBeNull();
+    expect(parseMiniAppLink('https://t.me/somechannel/1234')).toBeNull();
   });
 });
 

@@ -30,6 +30,18 @@ export function timingSafeCompare(a: string, b: string): boolean {
   return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
+/**
+ * Constant-time equality for values of any length. `timingSafeCompare` above returns early
+ * when the lengths differ, which is right for two hashes (always the same length) but leaks
+ * the length of anything else. Hashing both sides first gives fixed-length inputs, so this
+ * suits a username, where the length is part of what an attacker is trying to learn.
+ */
+export function constantTimeStringEquals(a: string, b: string): boolean {
+  const ha = crypto.createHash('sha256').update(a, 'utf8').digest();
+  const hb = crypto.createHash('sha256').update(b, 'utf8').digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
 export function getStoredCredentials(): { username: string; passwordHash: string | null } {
   const rows = db.prepare(
     "SELECT key, value FROM settings WHERE key IN ('admin_username', 'admin_password_hash')"

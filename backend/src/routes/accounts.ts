@@ -1,5 +1,4 @@
 import { Router } from "express";
-import crypto from "crypto";
 import { db, getDefaultTgApiCredentials } from "../db/database";
 import { parsePaging, parseSort, textParam, escapeLike } from "./list-query";
 import {
@@ -26,6 +25,7 @@ import {
   type PasswordInfo,
 } from "../auth/tgAuth";
 import { checkSpamStatus } from "../jobs/checkin";
+import { generateProfiles } from "../jobs/profileGen";
 import {
   startBulkAdd,
   getBulkAddStatus,
@@ -67,47 +67,12 @@ import {
   foldImportedAttributes,
 } from "../db/accountAttributes";
 import { refreshScheduler } from "../scheduler";
-
-type EncryptedEnvelope = {
-  encrypted: true;
-  version: "1";
-  salt: string;
-  iv: string;
-  tag: string;
-  data: string;
-};
-
-function encryptPayload(plaintext: string, secret: string): EncryptedEnvelope {
-  const salt = crypto.randomBytes(16);
-  const key = crypto.scryptSync(secret, salt, 32);
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  const encrypted = Buffer.concat([
-    cipher.update(plaintext, "utf8"),
-    cipher.final(),
-  ]);
-  return {
-    encrypted: true,
-    version: "1",
-    salt: salt.toString("hex"),
-    iv: iv.toString("hex"),
-    tag: cipher.getAuthTag().toString("hex"),
-    data: encrypted.toString("base64"),
-  };
-}
-
-function decryptPayload(envelope: EncryptedEnvelope, secret: string): string {
-  const salt = Buffer.from(envelope.salt, "hex");
-  const key = crypto.scryptSync(secret, salt, 32);
-  const iv = Buffer.from(envelope.iv, "hex");
-  const tag = Buffer.from(envelope.tag, "hex");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(tag);
-  return (
-    decipher.update(Buffer.from(envelope.data, "base64")) +
-    decipher.final("utf8")
-  );
-}
+import {
+  decryptPayload,
+  encryptPayload,
+  type EncryptedEnvelope,
+} from "../db/exportCrypto";
+import { decryptAccountRow, encryptSecret } from "../db/secretColumns";
 
 // Reasons set by checkAccountStatus for frozen/revoked sessions that need re-auth
 const REAUTH_REASONS = new Set([
@@ -160,6 +125,18 @@ type AccountRow = {
   passkey: string | null;
   additional_attributes: string | null;
 };
+
+/**
+ * Loads one account with its credential columns decrypted. Every handler below goes through
+ * this rather than querying directly, so the decryption cannot be forgotten at a call site
+ * (see db/secretColumns for why the columns are encrypted at all).
+ */
+function loadAccount(id: string | number | bigint): AccountRow | undefined {
+  const row = db.prepare("SELECT * FROM tg_accounts WHERE id = ?").get(id) as
+    | AccountRow
+    | undefined;
+  return row ? decryptAccountRow(row) : undefined;
+}
 
 /** Resolves effective API credentials, falling back to global defaults. Throws if neither is set. */
 function resolveApiCredentials(account: AccountRow): {
@@ -284,6 +261,7 @@ router.get("/", (req, res) => {
     const rows = db
       .prepare(`SELECT * FROM tg_accounts ${where} ORDER BY ${orderClause}`)
       .all(...params) as AccountRow[];
+    rows.forEach(decryptAccountRow);
     res.json(rows.map(toJson));
     return;
   }
@@ -295,6 +273,7 @@ router.get("/", (req, res) => {
   const rows = db
     .prepare(`SELECT * FROM tg_accounts ${where} ORDER BY ${orderClause} LIMIT ? OFFSET ?`)
     .all(...params, paging.limit, paging.offset) as AccountRow[];
+  rows.forEach(decryptAccountRow);
 
   res.json({
     items: rows.map(toJson),
@@ -331,16 +310,14 @@ router.post("/", (req, res) => {
       name,
       phoneNumber,
       apiId ? Number(apiId) : null,
-      apiHash || null,
+      encryptSecret(apiHash || null),
       proxyId || null,
       appClientId || null,
       maxRow.m + 1,
       notes || null,
     );
 
-  const row = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(result.lastInsertRowid) as AccountRow;
+  const row = loadAccount(result.lastInsertRowid) as AccountRow;
   res.status(201).json(toJson(row));
 });
 
@@ -398,6 +375,30 @@ router.post("/bulk-profile", bulkMgmtGuard, (req, res) => {
     return;
   }
   res.status(201).json(result.batch);
+});
+
+// POST /bulk-profile/generate -- AI-written profiles, cleaned to what Telegram accepts
+router.post("/bulk-profile/generate", bulkMgmtGuard, async (req, res) => {
+  const { count, hint, includeAbout } = req.body as {
+    count?: number;
+    hint?: string;
+    includeAbout?: boolean;
+  };
+  const wanted = Number(count);
+  if (!Number.isInteger(wanted) || wanted < 1 || wanted > 200) {
+    res.status(400).json({ error: "count must be between 1 and 200" });
+    return;
+  }
+  try {
+    const { profiles } = await generateProfiles(
+      wanted,
+      hint?.trim() || undefined,
+      includeAbout !== false,
+    );
+    res.json({ profiles });
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message ?? "Profile generation failed" });
+  }
 });
 
 // GET /bulk-profile/status -- current batch progress (null if none has run)
@@ -513,6 +514,9 @@ router.post("/export", (req, res) => {
       .prepare("SELECT * FROM tg_accounts ORDER BY id")
       .all() as AccountRow[];
   }
+  // A backup carries the credentials in the clear inside its own encrypted envelope, so the
+  // at-rest key is never needed to restore one somewhere else
+  rows.forEach(decryptAccountRow);
   const payload = {
     version: "1",
     exportedAt: new Date().toISOString(),
@@ -618,8 +622,8 @@ router.post("/import", (req, res) => {
           a.name || a.phoneNumber,
           a.phoneNumber,
           a.apiId ? Number(a.apiId) : null,
-          a.apiHash,
-          forceReauth ? null : (a.sessionString ?? null),
+          encryptSecret(a.apiHash),
+          encryptSecret(forceReauth ? null : (a.sessionString ?? null)),
           forceReauth ? "unauthenticated" : (a.authStatus ?? "unauthenticated"),
           a.proxyId ?? null,
           a.appClientId ?? null,
@@ -650,9 +654,7 @@ router.put("/:id", (req, res) => {
     appClientId,
     notes,
   } = req.body as Record<string, string | null | boolean>;
-  const existing = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const existing = loadAccount(req.params.id) as AccountRow | undefined;
   if (!existing) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -673,7 +675,7 @@ router.put("/:id", (req, res) => {
     name ?? existing.name,
     phoneNumber ?? existing.phone_number,
     apiId !== undefined ? Number(apiId) : existing.api_id,
-    apiHash ?? existing.api_hash,
+    encryptSecret((apiHash as string | null | undefined) ?? existing.api_hash),
     newProxyId,
     newDisabled,
     newAppClientId,
@@ -681,9 +683,7 @@ router.put("/:id", (req, res) => {
     req.params.id,
   );
 
-  const row = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow;
+  const row = loadAccount(req.params.id) as AccountRow;
   res.json(toJson(row));
 });
 
@@ -709,9 +709,7 @@ router.delete("/:id", (req, res) => {
 // ── TG account status check ─────────────────────────────────────────────────
 
 router.post("/:id/check-status", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -744,9 +742,7 @@ router.post("/:id/check-status", async (req, res) => {
 
 // POST /:id/refresh-tg-meta -- fetch TG display name and persist it; returns { tgDisplayName, tgUsername }
 router.post("/:id/refresh-tg-meta", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -789,6 +785,7 @@ router.post("/check-enabled-sessions", async (req, res) => {
       "SELECT * FROM tg_accounts WHERE disabled = 0 AND auth_status = 'authenticated'",
     )
     .all() as AccountRow[];
+  rows.forEach(decryptAccountRow);
 
   const results = await Promise.allSettled(
     rows.map(async (account) => {
@@ -833,9 +830,7 @@ router.post("/check-enabled-sessions", async (req, res) => {
 
 // POST /:id/check-spam -- send /start to @SpamBot and return the parsed spam status
 router.post("/:id/check-spam", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -876,9 +871,7 @@ router.post("/:id/check-spam", async (req, res) => {
 // spam check. Each step runs independently so one failure does not block the rest;
 // per-step failures are returned as warnings.
 router.post("/:id/fetch-attributes", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
 
   let apiId!: number;
@@ -953,17 +946,13 @@ router.post("/:id/fetch-attributes", async (req, res) => {
     patchAttributes(account.id, { hasPasskey: passkeys.length > 0 });
   });
 
-  const row = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(account.id) as AccountRow;
+  const row = loadAccount(account.id) as AccountRow;
   res.json({ account: toJson(row), warnings, authExpired });
 });
 
 // POST /:id/update-2fa -- set, change, or remove the account's 2FA password
 router.post("/:id/update-2fa", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -999,9 +988,7 @@ router.post("/:id/update-2fa", async (req, res) => {
 
 // GET /:id/profile -- fetch the account's own Telegram profile (first/last name + bio)
 router.get("/:id/profile", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -1031,9 +1018,7 @@ router.get("/:id/profile", async (req, res) => {
 
 // POST /:id/update-profile -- update the account's own Telegram profile
 router.post("/:id/update-profile", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -1082,9 +1067,7 @@ router.post("/:id/update-profile", async (req, res) => {
 
 // GET /:id/sessions -- list all active Telegram sessions for this account
 router.get("/:id/sessions", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -1114,9 +1097,7 @@ router.get("/:id/sessions", async (req, res) => {
 
 // POST /:id/terminate-session -- revoke a specific session by hash
 router.post("/:id/terminate-session", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -1152,9 +1133,7 @@ router.post("/:id/terminate-session", async (req, res) => {
 
 // POST /:id/terminate-other-sessions -- revoke all sessions except the current one
 router.post("/:id/terminate-other-sessions", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -1184,9 +1163,7 @@ router.post("/:id/terminate-other-sessions", async (req, res) => {
 
 // POST /:id/force-reauth -- clear session and reset auth status so the account can be re-authenticated
 router.post("/:id/force-reauth", (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -1201,9 +1178,7 @@ router.post("/:id/force-reauth", (req, res) => {
     "UPDATE tg_accounts SET session_string = NULL, auth_status = 'unauthenticated' WHERE id = ?",
   ).run(account.id);
   markSessionExpired(account.id);
-  const row = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(account.id) as AccountRow;
+  const row = loadAccount(account.id) as AccountRow;
   res.json(toJson(row));
 });
 
@@ -1217,9 +1192,7 @@ function requireAuth(account: AccountRow | undefined, res: any): account is Acco
 
 // GET /:id/password-info -- returns 2FA status and masked login email pattern (no password needed)
 router.get("/:id/password-info", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   try {
     const { apiId, apiHash } = resolveApiCredentials(account);
@@ -1239,9 +1212,7 @@ router.get("/:id/password-info", async (req, res) => {
 // POST /:id/login-email/send-code -- send a verification code to a new login email
 // Telegram has no API to remove the login email from an authorised session; it can only be replaced.
 router.post("/:id/login-email/send-code", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   const { email } = req.body as { email?: string };
   if (!email) { res.status(400).json({ error: "email required" }); return; }
@@ -1262,9 +1233,7 @@ router.post("/:id/login-email/send-code", async (req, res) => {
 // POST /:id/login-email/auto -- set a Gmail plus-address login email and read
 // the confirmation code back over IMAP. Gated by BULK_ACCOUNT_MANAGEMENT.
 router.post("/:id/login-email/auto", bulkMgmtGuard, async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   const { gmail, appPassword, tag } = req.body as {
     gmail?: string;
@@ -1301,9 +1270,7 @@ router.post("/:id/login-email/auto", bulkMgmtGuard, async (req, res) => {
 
 // POST /:id/login-email/verify -- confirm the new login email with the emailed code
 router.post("/:id/login-email/verify", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   const { code } = req.body as { code?: string };
   if (!code) { res.status(400).json({ error: "code required" }); return; }
@@ -1325,9 +1292,7 @@ router.post("/:id/login-email/verify", async (req, res) => {
 
 // GET /:id/passkeys -- list the account's passkeys
 router.get("/:id/passkeys", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   try {
     const { apiId, apiHash } = resolveApiCredentials(account);
@@ -1350,9 +1315,7 @@ router.get("/:id/passkeys", async (req, res) => {
 
 // POST /:id/passkeys -- register a new passkey (experimental; WebAuthn ceremony run server-side)
 router.post("/:id/passkeys", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   try {
     const { apiId, apiHash } = resolveApiCredentials(account);
@@ -1391,9 +1354,7 @@ router.post("/:id/passkeys", async (req, res) => {
 
 // POST /:id/passkeys/:passkeyId/verify -- prove the passkey works via a real login
 router.post("/:id/passkeys/:passkeyId/verify", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   const secret = getPasskeySecret(req.params.passkeyId);
   if (!secret || secret.accountId !== account!.id) {
@@ -1423,9 +1384,7 @@ router.post("/:id/passkeys/:passkeyId/verify", async (req, res) => {
 
 // DELETE /:id/passkeys/:passkeyId -- revoke a passkey
 router.delete("/:id/passkeys/:passkeyId", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   try {
     const { apiId, apiHash } = resolveApiCredentials(account);
@@ -1451,9 +1410,7 @@ router.delete("/:id/passkeys/:passkeyId", async (req, res) => {
 // ── Telegram auth flow ──────────────────────────────────────────────────────
 
 router.post("/:id/auth/request", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -1486,7 +1443,7 @@ router.post("/:id/auth/request", async (req, res) => {
         } else {
           db.prepare(
             "UPDATE tg_accounts SET auth_status = 'authenticated', session_string = ? WHERE id = ?",
-          ).run(result.session, account.id);
+          ).run(encryptSecret(result.session), account.id);
           res.json({ method: "passkey", step: "done" });
         }
         return;
@@ -1518,9 +1475,7 @@ router.post("/:id/auth/request", async (req, res) => {
 });
 
 router.post("/:id/auth/resend", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -1535,9 +1490,7 @@ router.post("/:id/auth/resend", async (req, res) => {
 });
 
 router.post("/:id/auth/verify", async (req, res) => {
-  const account = db
-    .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-    .get(req.params.id) as AccountRow | undefined;
+  const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!account) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -1556,14 +1509,14 @@ router.post("/:id/auth/verify", async (req, res) => {
       } else {
         db.prepare(
           "UPDATE tg_accounts SET auth_status = 'authenticated', session_string = ? WHERE id = ?",
-        ).run(result.session, account.id);
+        ).run(encryptSecret(result.session), account.id);
         res.json({ step: "done" });
       }
     } else if (account.auth_status === "pending_2fa" && password) {
       const session = await submitPassword(account.id, password);
       db.prepare(
         "UPDATE tg_accounts SET auth_status = 'authenticated', session_string = ? WHERE id = ?",
-      ).run(session, account.id);
+      ).run(encryptSecret(session), account.id);
       res.json({ step: "done" });
     } else {
       res

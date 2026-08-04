@@ -217,14 +217,16 @@
                 <i class="fa-solid fa-shield-halved"></i>
                 {{ t("tgc.openLink.proxiedNote") }}
               </div>
-              <!-- Proxied pages are served from Bemby's own origin, so they
-                   must NOT get allow-same-origin -- it would let arbitrary
-                   site scripts reach Bemby's storage and auth token -->
+              <!-- A proxied page served from Bemby's own origin must NOT get
+                   allow-same-origin: it would let site scripts reach Bemby's
+                   storage and auth token. One on the viewer origin is a different
+                   origin already, so it can have a real origin of its own --
+                   which is what gives it working storage, cookies and crypto -->
               <iframe
                 :src="webViewPanel.url"
                 class="tgc-webview-frame"
                 :sandbox="
-                  webViewPanel.proxied
+                  webViewPanel.proxied && !webViewPanel.isolated
                     ? 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox'
                     : 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox'
                 "
@@ -829,6 +831,15 @@
                   /
                 </button>
                 <button
+                  v-if="botMenuButton"
+                  class="tgc-menu-app-btn"
+                  :title="botMenuButton.text"
+                  @click="openBotMenuApp"
+                >
+                  <i class="fa-regular fa-window-maximize"></i>
+                  <span class="tgc-menu-app-text">{{ botMenuButton.text }}</span>
+                </button>
+                <button
                   class="tgc-attach-btn"
                   title="Attach photo or file"
                   @click="triggerFilePick"
@@ -952,6 +963,23 @@
                     <div class="tgc-profile-row-label">Username</div>
                     <div class="tgc-profile-row-value">
                       @{{ profileDetails.username }}
+                    </div>
+                  </div>
+                  <i class="fa-regular fa-copy tgc-copy-icon"></i>
+                </div>
+
+                <!-- A private group has no username to name it by, so the ID is what a job
+                     has to go on -->
+                <div
+                  class="tgc-profile-row"
+                  :title="t('tgc.copyPeerId')"
+                  @click="copyField(profileDetails.peerId)"
+                >
+                  <i class="fa-solid fa-hashtag tgc-profile-row-icon"></i>
+                  <div class="tgc-profile-row-body">
+                    <div class="tgc-profile-row-label">{{ t('tgc.peerId') }}</div>
+                    <div class="tgc-profile-row-value tgc-profile-row-mono">
+                      {{ profileDetails.peerId }}
                     </div>
                   </div>
                   <i class="fa-regular fa-copy tgc-copy-icon"></i>
@@ -1713,7 +1741,6 @@
 <script setup lang="ts">
 import {
   ref,
-  reactive,
   computed,
   watch,
   onMounted,
@@ -1726,8 +1753,8 @@ import {
   type Account,
   type TgDialog,
   type TgMessage,
-  type TgReaction,
   type TgBotCommand,
+  type TgBotMenuButton,
   type TgContact,
   type TgFolder,
   type TgProfile,
@@ -1740,6 +1767,7 @@ import {
   formatAccountLabel,
   loadAccountDisplaySetting,
 } from "../composables/accountDisplay";
+import { displayPeerId } from "../utils/peerId";
 
 // ── Messenger state persistence ───────────────────────────────────────────────
 
@@ -1879,6 +1907,8 @@ const webViewPanel = ref<{
   url: string;
   title: string;
   proxied?: boolean;
+  /** Served from the viewer origin, so a real origin of its own is safe to grant. */
+  isolated?: boolean;
 } | null>(null);
 // Chooser for non-Telegram links: Bemby viewer or external browser
 const linkChooserUrl = ref<string | null>(null);
@@ -1900,6 +1930,8 @@ const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "👎", "🔥", 
 
 // Bot commands
 const botCommands = ref<TgBotCommand[]>([]);
+// The Mini App this bot pins beside the composer, if it has one
+const botMenuButton = ref<TgBotMenuButton | null>(null);
 const selectedCmdIdx = ref(-1);
 
 // Invite link preview / join confirmation
@@ -2107,6 +2139,9 @@ const commandSuggestions = computed(() => {
 onMounted(async () => {
   window.addEventListener("message", handleMiniAppMessage);
   loadAccountDisplaySetting();
+  // Inline photos are loaded by <img src>, which cannot send a header, so they go through a
+  // short-lived media ticket instead. Fetched before the first message renders.
+  await tgClientApi.ensureMediaTicket().catch(() => {});
   accounts.value = await accountsApi.list().catch(() => []);
   if (!authenticatedAccounts.value.length) return;
 
@@ -2769,6 +2804,7 @@ async function openProfile() {
     if (activeChat.value) {
       profileDetails.value = {
         chatId: activeChat.value.chatId,
+        peerId: displayPeerId(activeChat.value.chatId),
         name: activeChat.value.name,
         type: activeChat.value.type,
         username: activeChat.value.username,
@@ -2913,26 +2949,40 @@ async function openMiniApp(
   url: string,
   title: string,
   botChatId?: string | null,
+  fromBotMenu = false,
 ): Promise<void> {
   if (!selectedAccountId.value) {
     window.open(url, "_blank", "noopener");
     return;
   }
   try {
-    const { webAppUrl, frameable } = await tgClientApi.webviewResolve(
+    const { webAppUrl, frameable, signed } = await tgClientApi.webviewResolve(
       selectedAccountId.value,
       url,
       botChatId,
       activeChatId.value,
+      fromBotMenu,
     );
-    // Sites that refuse framing would show a blank panel -- open externally
-    if (openMiniAppInApp.value && frameable) {
-      webViewPanel.value = { url: webAppUrl, title };
-    } else {
-      window.open(webAppUrl, "_blank", "noopener");
+    // Said here rather than left to the app: unsigned, it loads and then fails on its own
+    // terms ("No initData found"), which reads as the viewer being broken
+    if (!signed) showToast("Telegram did not sign this app, so it opens logged out");
+    if (!openMiniAppInApp.value) {
+      // The resolve happens after the click and can outlive the gesture that lets a popup
+      // through, so a blocked window falls back to the chooser and a real click
+      if (!window.open(webAppUrl, "_blank", "noopener")) askOpenLink(webAppUrl);
+      return;
     }
+    if (frameable) {
+      webViewPanel.value = { url: webAppUrl, title };
+      return;
+    }
+    // Most apps now refuse to be framed by anything but Telegram, so the panel shows a
+    // proxied copy: same page, served from here with those headers dropped, sandboxed into
+    // an opaque origin and reached with a ticket that is good for that site alone.
+    const { proxyUrl, isolated } = await tgClientApi.webviewTicket(webAppUrl, "app");
+    webViewPanel.value = { url: proxyUrl, title, proxied: true, isolated };
   } catch {
-    window.open(url, "_blank", "noopener");
+    if (!window.open(url, "_blank", "noopener")) askOpenLink(url);
   }
 }
 
@@ -2959,12 +3009,16 @@ async function openLinkInBemby() {
   linkChooserUrl.value = null;
   if (frameable) {
     webViewPanel.value = { url, title };
-  } else {
-    const token = localStorage.getItem("token") ?? "";
-    const proxiedUrl = `/api/tg-client/web-proxy?url=${encodeURIComponent(
-      url,
-    )}&token=${encodeURIComponent(token)}`;
-    webViewPanel.value = { url: proxiedUrl, title, proxied: true };
+    return;
+  }
+  // A proxied page is served from Bemby's origin, so its scripts can read the address it was
+  // given. That address carries a ticket good only for this one site -- never the session
+  // token, which would hand the page the whole API.
+  try {
+    const { proxyUrl, isolated } = await tgClientApi.webviewTicket(url, "page");
+    webViewPanel.value = { url: proxyUrl, title, proxied: true, isolated };
+  } catch {
+    if (!window.open(url, "_blank", "noopener")) askOpenLink(url);
   }
 }
 
@@ -3467,18 +3521,30 @@ async function refreshMessages() {
   }
 }
 
-// ── Bot commands ──────────────────────────────────────────────────────────────
+// ── Bot commands and menu button ──────────────────────────────────────────────
 
 async function loadBotCommands(chatId: string) {
+  botMenuButton.value = null;
   if (!selectedAccountId.value) return;
   try {
-    botCommands.value = await tgClientApi.botCommands(
-      selectedAccountId.value,
-      chatId,
-    );
+    const info = await tgClientApi.botInfo(selectedAccountId.value, chatId);
+    botCommands.value = info.commands;
+    botMenuButton.value = info.menuButton;
   } catch {
     botCommands.value = [];
+    botMenuButton.value = null;
   }
+}
+
+/**
+ * Opens the bot's pinned Mini App. Flagged as coming from the menu button, which is what
+ * makes Telegram sign it: the address is the bot's registered one rather than a button in
+ * a message, and asked for any other way it comes back without the account data.
+ */
+function openBotMenuApp() {
+  const button = botMenuButton.value;
+  if (!button) return;
+  void openMiniApp(button.url, button.text, activeChatId.value, true);
 }
 
 function openCommandMenu() {
@@ -3629,6 +3695,7 @@ async function sendThreadMessage() {
       html: null,
       date: result.date,
       fromMe: true,
+      isRead: false,
       fromId: null,
       fromName: null,
       hasPhoto: false,
@@ -3738,7 +3805,7 @@ async function scrollBottom(force = false) {
 // Scroll to the first unread message when opening a chat with unread messages.
 // Falls back to scrolling to the bottom when all loaded messages are unread
 // (meaning there are more unread messages further back) or when there are none.
-async function scrollToUnread(unreadCount: number): Promise<void> {
+async function scrollToUnread(): Promise<void> {
   await nextTick();
   const el = messagesEl.value;
   if (!el) return;
@@ -3796,6 +3863,7 @@ async function onAccountChange() {
   typingTimers.clear();
   typingChats.value = {};
   botCommands.value = [];
+  botMenuButton.value = null;
   saveMessengerState();
   await loadDialogs();
   startLiveSocket();
@@ -3832,17 +3900,6 @@ function friendlyTgError(raw: string): string {
   return raw;
 }
 
-// Returns true for errors that a reconnect can potentially fix.
-function isAuthError(raw: string): boolean {
-  return (
-    raw.includes("AUTH_KEY_DUPLICATED") ||
-    raw.includes("AUTH_KEY_INVALID") ||
-    raw.includes("AUTH_KEY_UNREGISTERED") ||
-    raw.includes("SESSION_REVOKED") ||
-    raw.includes("SESSION_EXPIRED")
-  );
-}
-
 async function reconnectAccount() {
   if (!selectedAccountId.value || reconnecting.value) return;
   reconnecting.value = true;
@@ -3860,6 +3917,8 @@ async function reconnectAccount() {
 }
 
 async function loadDialogs() {
+  // A long-lived tab outlives one ticket, and a stale one shows every photo as broken
+  await tgClientApi.ensureMediaTicket().catch(() => {});
   if (!selectedAccountId.value) return;
   loadingDialogs.value = true;
   dialogError.value = "";
@@ -3983,6 +4042,7 @@ async function openChat(dialog: TgDialog, addToHistory = false) {
   editingMsg.value = null;
   exitSelectMode();
   botCommands.value = [];
+  botMenuButton.value = null;
   joinRequestSent.value = false;
   pendingJoinChatId.value = null;
   stopMembershipPoll();
@@ -4229,7 +4289,7 @@ async function fetchMessages(fresh = false) {
     } else {
       firstUnreadId.value = null;
     }
-    await scrollToUnread(unreadCount);
+    await scrollToUnread();
     scheduleBotMsgWatch();
   } catch (e: any) {
     if (ctrl.signal.aborted) return;
@@ -4458,6 +4518,7 @@ async function sendMessage() {
       html: null,
       date: result.date,
       fromMe: true,
+      isRead: false,
       fromId: null,
       fromName: null,
       hasPhoto: false,
@@ -5871,6 +5932,41 @@ async function saveContactEdit() {
 }
 
 /* Attach (paperclip) button */
+/* The bot's pinned Mini App, first in the composer row. Given the app's own name rather
+   than an icon alone: it is the one control here that leaves the chat. */
+.tgc-menu-app-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: none;
+  /* The row is bottom-aligned and every other control in it is 34px square, so anything
+     shorter sits low against them rather than reading as part of the same row. */
+  height: 34px;
+  box-sizing: border-box;
+  max-width: 160px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 17px;
+  background: #4a9eff;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.tgc-menu-app-btn:hover {
+  background: #3d8ae0;
+}
+
+.tgc-menu-app-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tgc-attach-btn {
   width: 34px;
   height: 34px;
@@ -6641,6 +6737,10 @@ async function saveContactEdit() {
   font-size: 14px;
   color: #1a1a2e;
   word-break: break-word;
+}
+
+.tgc-profile-row-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .tgc-bio-text {

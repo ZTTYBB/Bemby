@@ -1676,6 +1676,40 @@
                   <i class="fa-solid fa-wand-magic-sparkles"></i>
                   {{ t("accounts.bulkTgRename.generateBtn") }}
                 </button>
+                <button
+                  class="btn btn-secondary btn-sm"
+                  :disabled="bulkTgRenameAiBusy"
+                  @click="generateBulkTgRenameWithAi"
+                >
+                  <i
+                    :class="
+                      bulkTgRenameAiBusy
+                        ? 'fa-solid fa-spinner fa-spin'
+                        : 'fa-solid fa-robot'
+                    "
+                  ></i>
+                  {{
+                    bulkTgRenameAiBusy
+                      ? t("accounts.bulkTgRename.aiGenerating")
+                      : t("accounts.bulkTgRename.aiGenerateBtn")
+                  }}
+                </button>
+              </div>
+              <label class="form-label" style="margin-top: 6px">{{
+                t("accounts.bulkTgRename.aiHintLabel")
+              }}</label>
+              <input
+                v-model.trim="bulkTgRenameAiHint"
+                class="form-input"
+                :placeholder="t('accounts.bulkTgRename.aiHintPlaceholder')"
+                @keyup.enter="generateBulkTgRenameWithAi"
+              />
+              <label class="form-check" style="margin-top: 6px">
+                <input v-model="bulkTgRenameAiSkipAbout" type="checkbox" />
+                <span>{{ t("accounts.bulkTgRename.aiSkipAbout") }}</span>
+              </label>
+              <div class="form-hint">
+                {{ t("accounts.bulkTgRename.aiHintHint") }}
               </div>
               <textarea
                 v-model="bulkTgRenameText"
@@ -3354,11 +3388,6 @@ const allSelected = computed(
     accounts.value.length > 0 &&
     accounts.value.every((a) => selectedIds.value.has(a.id)),
 );
-const someSelected = computed(
-  () =>
-    accounts.value.some((a) => selectedIds.value.has(a.id)) &&
-    !allSelected.value,
-);
 
 function toggleSelectAll() {
   if (allSelected.value) {
@@ -3727,6 +3756,9 @@ const showBulkTgRename = ref(false);
 const bulkTgRenameText = ref("");
 const bulkTgRenameError = ref("");
 const bulkTgRenameBusy = ref(false);
+const bulkTgRenameAiBusy = ref(false);
+const bulkTgRenameAiHint = ref("");
+const bulkTgRenameAiSkipAbout = ref(false);
 const bulkTgRenameGap = ref(3);
 const bulkTgRenameBatch = ref<BulkProfileBatch | null>(null);
 let bulkTgRenamePollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3776,6 +3808,36 @@ function generateBulkTgRename() {
   bulkTgRenameText.value = bulkTgRenameTargets.value
     .map(() => `${randomOf(TG_FIRST_NAMES)}\t${randomOf(TG_LAST_NAMES)}`)
     .join("\n");
+}
+
+// The backend does the cleaning, so whatever lands in the box already parses back into the
+// same rows and sits inside Telegram's limits
+async function generateBulkTgRenameWithAi() {
+  const count = bulkTgRenameTargets.value.length;
+  if (!count || bulkTgRenameAiBusy.value) return;
+  bulkTgRenameAiBusy.value = true;
+  bulkTgRenameError.value = "";
+  try {
+    const { profiles } = await accountsApi.bulkProfileGenerate(
+      count,
+      bulkTgRenameAiHint.value || undefined,
+      !bulkTgRenameAiSkipAbout.value,
+    );
+    bulkTgRenameText.value = profiles
+      .map((p) => `${p.firstName}\t${p.lastName}\t${p.about}`.replace(/\t+$/, ""))
+      .join("\n");
+    // Short of a row per account the operator would have to spot the mismatch themselves
+    if (profiles.length < count) {
+      bulkTgRenameError.value = t("accounts.bulkTgRename.aiShort")
+        .replace("{n}", String(profiles.length))
+        .replace("{total}", String(count));
+    }
+  } catch (err: any) {
+    bulkTgRenameError.value =
+      err.response?.data?.error ?? t("accounts.bulkTgRename.aiFailed");
+  } finally {
+    bulkTgRenameAiBusy.value = false;
+  }
 }
 
 function openBulkTgRename() {

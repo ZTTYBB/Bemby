@@ -6,6 +6,11 @@ BACKEND_PORT=${BACKEND_PORT:-3000}
 FRONTEND_HOST=${FRONTEND_HOST:-localhost}
 FRONTEND_PORT=${FRONTEND_PORT:-5173}
 
+# A Mini App shown in the messenger panel is served on its own hostname, pointed at this same
+# host and port (see backend/src/tg/webviewTickets.ts for why it cannot share the panel's).
+# Unset, apps open in a browser tab instead.
+WEBVIEW_PUBLIC_ORIGIN=${WEBVIEW_PUBLIC_ORIGIN:-}
+
 # Services always bind to 0.0.0.0; BACKEND_HOST/FRONTEND_HOST are display/proxy names only
 PROXY_HOST=127.0.0.1
 
@@ -108,11 +113,15 @@ kill_stale_watchers
 echo ""
 echo "  Backend:  http://${BACKEND_HOST}:${BACKEND_PORT}"
 echo "  Frontend: http://${FRONTEND_HOST}:${FRONTEND_PORT}"
+if [ -n "$WEBVIEW_PUBLIC_ORIGIN" ]; then
+  echo "  Mini App viewer: ${WEBVIEW_PUBLIC_ORIGIN}"
+fi
 echo ""
 echo "Press Ctrl+C to stop both."
 echo ""
 
-(cd backend && HOST=0.0.0.0 PORT=$BACKEND_PORT DISPLAY_HOST=$BACKEND_HOST npm run dev) &
+(cd backend && HOST=0.0.0.0 PORT=$BACKEND_PORT DISPLAY_HOST=$BACKEND_HOST \
+  WEBVIEW_PUBLIC_ORIGIN=$WEBVIEW_PUBLIC_ORIGIN npm run dev) &
 BACKEND_PID=$!
 
 printf "Waiting for backend"
@@ -122,7 +131,8 @@ until (echo > /dev/tcp/127.0.0.1/$BACKEND_PORT) 2>/dev/null; do
 done
 echo " ready"
 
-(cd frontend && BACKEND_HOST=$PROXY_HOST BACKEND_PORT=$BACKEND_PORT npm run dev -- --host 0.0.0.0 --port "$FRONTEND_PORT" --strictPort) &
+(cd frontend && BACKEND_HOST=$PROXY_HOST BACKEND_PORT=$BACKEND_PORT \
+  WEBVIEW_PUBLIC_ORIGIN=$WEBVIEW_PUBLIC_ORIGIN npm run dev -- --host 0.0.0.0 --port "$FRONTEND_PORT" --strictPort) &
 FRONTEND_PID=$!
 
 wait

@@ -3,6 +3,16 @@ import { ref } from "vue";
 
 export const api = axios.create({ baseURL: "/api" });
 
+// Credential for addresses the browser loads by itself (see tgClientApi.photoUrl). Renewed
+// a little before it lapses so an image never asks with an expired one.
+//
+// A ref rather than a plain variable: photoUrl() is called from a template, so an <img>
+// rendered before the ticket arrives has to be re-evaluated once it does. A bare `let` is
+// invisible to Vue and those images would stay pointed at a ticket-less address for good.
+const TICKET_REFRESH_MARGIN_MS = 60_000;
+const mediaTicket = ref("");
+let mediaTicketExpiry = 0;
+
 function readRequirePwdChangeClaim(): boolean {
   const token = localStorage.getItem("token");
   if (!token) return false;
@@ -26,13 +36,36 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * A 401 from one of these means "those credentials are wrong", not "your session has
+ * expired", so it belongs to the form that asked and must be left for it to display.
+ *
+ * Sending them through the redirect below reloaded the whole page on every failed sign-in,
+ * which threw away the error before it could render: to the person typing, the login screen
+ * simply refreshed itself, over and over, saying nothing about what was wrong. The same
+ * applied to a wrong current password in Settings, which logged the operator out rather
+ * than telling them they had mistyped it.
+ */
+function isCredentialCheck(url: string | undefined): boolean {
+  if (!url) return false;
+  const path = url.split("?")[0];
+  return (
+    path.endsWith("/auth/login") ||
+    path.endsWith("/auth/captcha") ||
+    path.endsWith("/auth/credentials")
+  );
+}
+
 // Redirect to login on 401; surface force-password-change on 403
 api.interceptors.response.use(
   (r) => r,
   (err) => {
-    if (err.response?.status === 401) {
+    if (err.response?.status === 401 && !isCredentialCheck(err.config?.url)) {
       localStorage.removeItem("token");
-      window.location.href = "/login";
+      mediaTicket.value = "";
+      mediaTicketExpiry = 0;
+      // Already on the login screen, a reload only loses whatever it was showing
+      if (window.location.pathname !== "/login") window.location.href = "/login";
     }
     if (
       err.response?.status === 403 &&
@@ -340,6 +373,7 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
+      cfChallenge?: boolean;
     }
   | {
       type: "click_message_button";
@@ -350,6 +384,7 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
+      cfChallenge?: boolean;
     }
   | {
       type: "ai_multiple_btn";
@@ -375,7 +410,86 @@ export type CustomAction =
       verifyButton?: string;
       verifyWaitMs?: number;
     }
+  | {
+      /** Mini App opened at a given address rather than one found on a button. */
+      type: "open_mini_app_url";
+      url: string;
+      /** Bot that owns the app, used to sign the URL. Blank uses the job's bot. */
+      contact?: string;
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      maxWaitMs?: number;
+      proxyId?: string;
+      tryAllProxies?: boolean;
+    }
+  | {
+      /** The Mini App a bot pins beside the composer, opened without naming an address. */
+      type: "open_bot_menu_app";
+      /** Bot whose menu button to open. Blank uses the job's bot. */
+      contact?: string;
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      maxWaitMs?: number;
+      proxyId?: string;
+      tryAllProxies?: boolean;
+    }
+  | {
+      type: "open_mini_app";
+      contact?: string;
+      button?: string;
+      appButtons?: string[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      /** Budget for the browser part, across every proxy tried. 0/blank uses the default. */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy id, or "direct". Blank uses the job proxy. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. */
+      tryAllProxies?: boolean;
+    }
+  | {
+      type: "open_url";
+      url: string;
+      steps?: WebStep[];
+      successContains?: string;
+      failContains?: string;
+      maxRetries?: number;
+      /** Budget for the browser part, across every proxy tried. 0/blank uses the default. */
+      maxWaitMs?: number;
+      /** Proxy the browser exits through: a proxy id, or "direct". Blank uses the job proxy. */
+      proxyId?: string;
+      /** Work through the rest of the proxy list when an exit is refused. */
+      tryAllProxies?: boolean;
+    }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
+
+/** One sub-step of `open_url`, run against the loaded page. */
+export type WebStep =
+  | { type: "web_input"; selector: string; text: string }
+  | { type: "web_button"; selector: string }
+  | { type: "web_delay"; waitMs: number }
+  | { type: "web_scroll"; x?: number; y?: number }
+  | { type: "web_wait_element"; selector: string; waitMs?: number }
+  | { type: "web_turnstile" }
+  | { type: "ai_web_button"; hint?: string }
+  | { type: "ai_web_click_xy"; hint?: string }
+  | { type: "ai_web_input"; hint?: string; text?: string };
+
+/** What one `open_url` sub-step did, with the page as it looked afterwards. */
+export type WebStepLog = {
+  type: WebStep["type"];
+  label: string;
+  outcome?: string;
+  error?: string;
+  screenshot?: string;
+  aiPrompt?: string;
+  aiResponse?: string;
+};
 
 export type CustomConfig = {
   actions: CustomAction[];
@@ -383,10 +497,38 @@ export type CustomConfig = {
   proxyId?: string;
 };
 
+export type CheckinConfig = {
+  successContains?: string;
+  failContains?: string;
+  proxyId?: string;
+  /** Open a Cloudflare-gated checkin URL in a browser to pass the "I am not a bot" check. */
+  cfChallenge?: boolean;
+};
+
 export type AutoregConfig = {
   groupId: string;
   codePrefix: string;
+  /** Matches codes with no stable prefix; capture group 1 is the code. Replaces codePrefix. */
+  codeRegex?: string;
+  /** Strip Chinese characters and punctuation out of a code before sending. */
+  stripChinese?: boolean;
+  /** Characters to strip out of a code before sending, e.g. `~*`. */
+  stripChars?: string;
+  /** Have the AI adjust each code before sending, going on the surrounding chat. */
+  aiModifyCode?: boolean;
+  aiModifyCodeHint?: string;
+  aiContextCount?: number;
+  /** Bot text meaning it is ready for a code, waited for after the register button. */
+  codeReadyContains?: string;
+  /** Bot text meaning it is ready for the username, waited for after a code is accepted. */
+  usernameReadyContains?: string;
   registerButton?: string;
+  /** Click a button or t.me link on the bot's reply once a code is accepted. */
+  clickAfterCode?: boolean;
+  /** Text of that button or link (partial match); blank takes the sole/first one. */
+  afterCodeButton?: string;
+  /** On, a reply with no such button spends the code and the next one is tried. */
+  afterCodeRequired?: boolean;
   signupUsername: string;
   listenMinutes?: number;
   scanHistoryCount?: number;
@@ -426,6 +568,24 @@ export type CustomStepLog = {
   jobAttempt?: number;
   /** 1-based action attempt number (only set when action maxRetries > 0) */
   actionAttempt?: number;
+  // Browser (Cloudflare / Mini App) fields
+  cfHost?: string;
+  cfChallenged?: boolean;
+  cfPassed?: boolean;
+  cfMiniApp?: boolean;
+  cfMiniAppSigned?: boolean;
+  cfMiniAppAction?: string;
+  cfProxy?: string;
+  /** Which browser build ran the step: the licensed one, or the free fallback. */
+  cfBuild?: "keyed" | "free";
+  cfAttempts?: number;
+  cfPageTitle?: string;
+  cfNavError?: string;
+  cfTrace?: string[];
+  /** Screenshot of the page the browser ended up on. */
+  cfScreenshot?: string;
+  /** For open_url: one entry per sub-step run on the page, in order. */
+  webSteps?: WebStepLog[];
 };
 
 export type Job = {
@@ -450,6 +610,8 @@ export type Job = {
   runEveryDays: number;
   runEveryDaysMax?: number | null;
   retired?: string | null;
+  /** ISO timestamp of the last successful run; null when it has never succeeded */
+  lastSuccessAt?: string | null;
 };
 
 export type JobTemplate = {
@@ -541,6 +703,8 @@ export type Log = {
 export type ScheduleStatus = {
   jobId: number;
   jobName: string;
+  /** checkin | embywatch | custom | autoreg -- drives the icon and colour on the chip. */
+  jobType: string;
   nextRun: string;
 };
 
@@ -573,6 +737,12 @@ export const authApi = {
         message: string;
         token?: string;
       }>("/auth/credentials", { currentPassword, username, newPassword })
+      .then((r) => r.data),
+  // Retires every session token issued so far. The reply carries a new one for this tab,
+  // so signing everyone else out does not sign the operator out of the page they did it on.
+  revokeSessions: () =>
+    api
+      .post<{ message: string; token: string }>("/auth/revoke-sessions")
       .then((r) => r.data),
 };
 
@@ -715,6 +885,16 @@ export const accountsApi = {
     api
       .get<BulkProfileBatch | null>("/accounts/bulk-profile/status")
       .then((r) => r.data),
+  /**
+   * AI-written profiles, already cleaned to what Telegram and the bulk form accept. One
+   * request covers the whole batch; `includeAbout: false` asks for names only.
+   */
+  bulkProfileGenerate: (count: number, hint?: string, includeAbout = true) =>
+    api
+      .post<{
+        profiles: { firstName: string; lastName: string; about: string }[];
+      }>("/accounts/bulk-profile/generate", { count, hint, includeAbout })
+      .then((r) => r.data),
   bulkProfileCancel: () =>
     api
       .post<{ cancelled: boolean }>("/accounts/bulk-profile/cancel")
@@ -850,6 +1030,8 @@ export const templatesApi = {
     api.post<JobTemplate>("/templates", data).then((r) => r.data),
   update: (id: number, data: Partial<JobTemplate>) =>
     api.put<JobTemplate>(`/templates/${id}`, data).then((r) => r.data),
+  duplicate: (id: number) =>
+    api.post<JobTemplate>(`/templates/${id}/duplicate`).then((r) => r.data),
   delete: (id: number) => api.delete(`/templates/${id}`),
   setLinkedJobsEnabled: (id: number, enabled: boolean) =>
     api
@@ -937,6 +1119,11 @@ export type MemoryReport = {
 
 export const statusApi = {
   get: () => api.get<ScheduleStatus[]>("/status").then((r) => r.data),
+  /** Calls off one upcoming run; the job keeps its schedule and returns on its next day. */
+  skipRun: (jobId: number) =>
+    api
+      .post<{ ok: boolean; nextRun?: string }>(`/status/skip/${jobId}`)
+      .then((r) => r.data),
   memory: () => api.get<MemoryReport>("/status/memory").then((r) => r.data),
 };
 
@@ -962,8 +1149,20 @@ export type Settings = {
   /** ai_models row id pinning the default model to an exact supplier. */
   ai_default_model_id?: string;
   ai_fallback_enabled?: string;
+  /**
+   * Target for the account-session sender, used only when no bot token is set.
+   * @deprecated That sender is due for removal; use notify_bot_token + notify_bot_target.
+   */
   notify_tg_username: string;
   notify_tg_events: string;
+  /** Bot API token from BotFather. Write-only: reads come back as notify_bot_token_masked. */
+  notify_bot_token?: string;
+  /** Chat the bot notifies: a numeric chat id, or @name for a public channel. */
+  notify_bot_target?: string;
+  /** Server-computed: "true" when a notification bot token is stored. */
+  notify_bot_configured?: string;
+  /** Server-computed: the stored token as 12345678:****wXyZ. Never the raw value. */
+  notify_bot_token_masked?: string;
   ua_presets: string;
   proxies: string;
   tg_app_clients: string;
@@ -973,8 +1172,72 @@ export type Settings = {
   default_tg_api_hash?: string;
   /** "true" to show accounts as "{Bemby name} - {TG name}" throughout the app. */
   account_display_with_tg_name?: string;
+  /** "true" moves the upcoming-runs list to its own menu entry. */
+  schedule_separate_page?: string;
   /** Days to keep job logs; "0" keeps all logs. */
   log_retention_days?: string;
+  /** Minimum minutes between scheduled runs; "0" disables staggering. */
+  schedule_min_gap_minutes?: string;
+  /** "true" once the user has enabled the on-demand Cloudflare solver. */
+  cf_solver_enabled?: string;
+  /** Server-computed: "true" when the Cloudflare-solver browser is installed. */
+  cf_chromium_installed?: string;
+  /** Server-computed: version of that browser, e.g. "Chromium 151.0.7922.34". */
+  cf_chromium_version?: string;
+  /** Server-computed: "keyed" when the installed build is the one a licence key unlocks. */
+  cf_chromium_tier?: string;
+  /** Server-computed: path of the browser a job will actually launch. */
+  cf_chromium_path?: string;
+  /** Server-computed: "true" when a key is stored but its build is not downloaded yet. */
+  cf_chromium_keyed_pending?: string;
+  /** Server-computed: "true" when the unlicensed build is on disk to fall back on. */
+  cf_chromium_free_installed?: string;
+  /** Server-computed: how many solver browsers are open right now. */
+  cf_browsers_running?: string;
+  /** Server-computed JSON: every installed build, with its tier, version and path. */
+  cf_chromium_builds?: string;
+  /** Server-computed: how many browser profiles are on disk. */
+  cf_profile_count?: string;
+  /** Locale the browser reports; blank follows the country its exit comes out in. */
+  cf_browser_lang?: string;
+  /** Server-computed: "true" when the CJK/emoji faces are in the data dir. */
+  cf_fonts_installed?: string;
+  /** Server-computed: comma-separated faces still to download. */
+  cf_fonts_missing?: string;
+  /** Server-computed JSON: stored CloakBrowser licence keys, masked. */
+  cf_cloak_keys_masked?: string;
+  /** Server-computed: how many licence keys are held by a running browser. */
+  cf_cloak_keys_in_use?: string;
+  /** JSON: the browser timings and limits in force. */
+  cf_tuning?: string;
+  /** Server-computed JSON: the values the solver ships with. */
+  cf_tuning_defaults?: string;
+  /** Server-computed JSON: `{min,max}` each timing is held to. */
+  cf_tuning_limits?: string;
+  proxy_providers_count?: string;
+};
+
+export type CfBrowserTestRun = {
+  running: boolean;
+  ok?: boolean;
+  error?: string;
+  /** One entry per installed build, appended as each finishes. */
+  builds: CfBrowserTest[];
+  message?: string;
+};
+
+export type CfBrowserTest = {
+  ok: boolean;
+  /** Which build this result is for. */
+  tier?: "keyed" | "free";
+  executable?: string;
+  version?: string;
+  renderedText?: string;
+  error?: string;
+  env?: Record<string, unknown>;
+  warnings?: string[];
+  notes?: string[];
+  exitCountry?: string;
 };
 
 export const settingsApi = {
@@ -985,6 +1248,148 @@ export const settingsApi = {
     api
       .post<{ ok: boolean; error?: string }>("/settings/test-proxy", { url })
       .then((r) => r.data),
+  /** `force` downloads the browser again over an existing one, i.e. updates it. */
+  installCfSolver: (force = false, tier?: "free") =>
+    api
+      .post<{
+        ok: boolean;
+        installed?: boolean;
+        version?: string;
+        output?: string;
+        message?: string;
+        fontsInstalled?: boolean;
+      }>("/settings/cf-solver/install", { force, ...(tier ? { tier } : {}) })
+      .then((r) => r.data),
+  /** Closes every solver browser that is open, failing the jobs holding them. */
+  stopCfBrowsers: () =>
+    api
+      .post<{ ok: boolean; stopped: number }>("/settings/cf-solver/stop")
+      .then((r) => r.data),
+  /** Deletes the per-exit browser profiles (cookies, cache, site data). */
+  clearCfProfiles: () =>
+    api
+      .post<{ ok: boolean; removed?: number; message?: string }>(
+        "/settings/cf-solver/clear-profiles",
+      )
+      .then((r) => r.data),
+  /** Deletes every downloaded browser build, reclaiming the space in the data dir. */
+  uninstallCfSolver: () =>
+    api
+      .post<{ ok: boolean; removed?: string[]; message?: string }>(
+        "/settings/cf-solver/uninstall",
+      )
+      .then((r) => r.data),
+  /**
+   * Starts a test of every installed build. It runs in the background -- a browser launch
+   * plus a real page load, once per build, outlives what a proxy will hold a request open
+   * for -- so this returns straight away and `cfSolverTestStatus` reports on it.
+   */
+  testCfSolver: () =>
+    api.post<CfBrowserTestRun>("/settings/cf-solver/test").then((r) => r.data),
+  /** How the run started above is going, with each build's result as it lands. */
+  cfSolverTestStatus: () =>
+    api.get<CfBrowserTestRun>("/settings/cf-solver/test").then((r) => r.data),
+  getCfKeys: () =>
+    api.get<CfKeysResponse>("/settings/cf-solver/keys").then((r) => r.data),
+  /** Send the masked value back unchanged to keep a stored key while editing its label. */
+  saveCfKeys: (keys: Array<{ label: string; key: string }>) =>
+    api.put<CfKeysResponse>("/settings/cf-solver/keys", { keys }).then((r) => r.data),
+  checkCfKeys: () =>
+    api
+      .post<{ results: CfKeyCheck[] }>("/settings/cf-solver/keys/check")
+      .then((r) => r.data.results),
+  getProxyProviders: () =>
+    api
+      .get<{ providers: ProxyProvider[] }>("/settings/proxy-providers")
+      .then((r) => r.data.providers),
+  saveProxyProviders: (providers: ProxyProvider[]) =>
+    api
+      .put<{ providers: ProxyProvider[] }>("/settings/proxy-providers", { providers })
+      .then((r) => r.data.providers),
+  syncProxyProviders: (providerId?: string) =>
+    api
+      .post<ProxySyncResult>(
+        "/settings/proxy-providers/sync",
+        providerId ? { providerId } : {},
+      )
+      .then((r) => r.data),
+  /** Who the stored notification token belongs to, so a bad token is visible. */
+  getNotifyBot: () =>
+    api.get<NotifyBotInfo>("/settings/notify/bot").then((r) => r.data),
+  /** Chats the bot has heard from lately, for filling in the default target. */
+  getNotifyBotChats: () =>
+    api
+      .get<{ ok: boolean; chats?: NotifyBotChat[]; error?: string }>(
+        "/settings/notify/bot/chats",
+      )
+      .then((r) => r.data),
+  /**
+   * Sends a real message now: the only check that proves the whole path works. An unsaved
+   * token or target can be passed to try it before committing to it.
+   */
+  testNotifyBot: (target?: string, token?: string) =>
+    api
+      .post<{ ok: boolean; error?: string }>("/settings/notify/bot/test", {
+        ...(target ? { target } : {}),
+        ...(token ? { token } : {}),
+      })
+      .then((r) => r.data),
+};
+
+export type NotifyBotInfo = {
+  configured: boolean;
+  ok?: boolean;
+  id?: number;
+  username?: string;
+  name?: string;
+  error?: string;
+};
+
+export type NotifyBotChat = { id: number; type: string; title: string };
+
+/** A stored CloakBrowser licence key as the server will show it: never the raw value. */
+export type CfKeyView = { label: string; masked: string };
+
+export type CfKeysResponse = { keys: CfKeyView[]; total: number; inUse: number };
+
+export type CfKeyCheck = {
+  label: string;
+  masked: string;
+  valid: boolean;
+  plan?: string;
+  expires?: string;
+  error?: string;
+};
+
+export type ProxyProviderType = "webshare" | "list";
+
+export type ProxyProvider = {
+  id: string;
+  name: string;
+  type: ProxyProviderType;
+  /** Never returned by the server; send a value to set or change it. */
+  apiKey?: string;
+  /** True when the server holds a key for this provider. */
+  hasKey?: boolean;
+  url?: string;
+  scheme?: "http" | "socks5";
+  enabled?: boolean;
+};
+
+export type ProxySyncResult = {
+  ok: boolean;
+  error?: string;
+  added?: number;
+  updated?: number;
+  removed?: number;
+  total?: number;
+  providers?: Array<{
+    providerId: string;
+    name: string;
+    ok: boolean;
+    fetched?: number;
+    error?: string;
+  }>;
 };
 
 // ── AI Suppliers ──────────────────────────────────────────────────────────────
@@ -1181,6 +1586,8 @@ export type TgContact = {
 
 export type TgProfile = {
   chatId: string;
+  /** The ID as Telegram shows it, which is what a job's chat field takes. */
+  peerId: string;
   name: string;
   type: "user" | "bot" | "group" | "channel";
   username: string | null;
@@ -1202,6 +1609,9 @@ export type TgReportReason =
   | "fake"
   | "copyright"
   | "other";
+
+/** A Mini App a bot pins beside the composer. */
+export type TgBotMenuButton = { text: string; url: string };
 
 export type TgBotCommand = {
   command: string;
@@ -1341,12 +1751,21 @@ export const tgClientApi = {
       .get<TgDialog[]>(`/tg-client/${accountId}/search`, { params: { q } })
       .then((r) => r.data),
 
-  photoUrl: (accountId: number, chatId: string, msgId: number) => {
-    const token = localStorage.getItem("token") ?? "";
-    return `/api/tg-client/${accountId}/messages/${encodeURIComponent(chatId)}/${msgId}/photo?token=${encodeURIComponent(token)}`;
-  },
+  // An <img src> cannot set an Authorization header, so the address carries a short-lived
+  // media ticket. The session token used to go here, which put a seven-day credential into
+  // the browser's history and the server's access log for every image on screen.
+  photoUrl: (accountId: number, chatId: string, msgId: number) =>
+    `/api/tg-client/${accountId}/messages/${encodeURIComponent(chatId)}/${msgId}/photo?ticket=${encodeURIComponent(mediaTicket.value)}`,
 
-  eventsUrl: (accountId: number) => `/api/tg-client/${accountId}/events`,
+  /** Fetches (or refreshes) the media ticket. Cheap, and idempotent enough to call on open. */
+  ensureMediaTicket: async (): Promise<void> => {
+    if (mediaTicket.value && Date.now() < mediaTicketExpiry - TICKET_REFRESH_MARGIN_MS) return;
+    const { ticket, expiresAt } = await api
+      .post<{ ticket: string; expiresAt: number }>("/tg-client/media-ticket")
+      .then((r) => r.data);
+    mediaTicket.value = ticket;
+    mediaTicketExpiry = expiresAt;
+  },
 
   folders: (accountId: number) =>
     api.get<TgFolder[]>(`/tg-client/${accountId}/folders`).then((r) => r.data),
@@ -1355,11 +1774,6 @@ export const tgClientApi = {
     api
       .post(`/tg-client/${accountId}/folders/${folderId}/chats`, { chatId })
       .then((r) => r.data),
-
-  avatarUrl: (accountId: number, chatId: string) => {
-    const token = localStorage.getItem("token") ?? "";
-    return `/api/tg-client/${accountId}/avatar/${encodeURIComponent(chatId)}?token=${encodeURIComponent(token)}`;
-  },
 
   avatarsBatch: (accountId: number, chatIds: string[]) =>
     api
@@ -1444,6 +1858,16 @@ export const tgClientApi = {
   frameable: (url: string) =>
     api
       .get<{ frameable: boolean }>("/tg-client/frameable", { params: { url } })
+      .then((r) => r.data),
+
+  // An address for the viewer iframe carrying a ticket instead of the session token, which
+  // the page itself would be able to read off its own URL
+  webviewTicket: (url: string, mode: "app" | "page") =>
+    api
+      .post<{ proxyUrl: string; isolated: boolean; expiresAt: number }>("/tg-client/webview/ticket", {
+        url,
+        mode,
+      })
       .then((r) => r.data),
 
   clearAccountCache: (accountId: number) =>
@@ -1534,10 +1958,11 @@ export const tgClientApi = {
       )
       .then((r) => r.data),
 
-  botCommands: (accountId: number, chatId: string) =>
+  /** The bot's commands and its menu button (the Mini App pinned beside the composer). */
+  botInfo: (accountId: number, chatId: string) =>
     api
-      .get<TgBotCommand[]>(
-        `/tg-client/${accountId}/bot-commands/${encodeURIComponent(chatId)}`,
+      .get<{ commands: TgBotCommand[]; menuButton: TgBotMenuButton | null }>(
+        `/tg-client/${accountId}/bot-info/${encodeURIComponent(chatId)}`,
       )
       .then((r) => r.data),
 
@@ -1628,16 +2053,21 @@ export const tgClientApi = {
     url: string,
     botChatId?: string | null,
     peerChatId?: string | null,
+    /** The address came from the bot's menu button; Telegram signs that case only when told. */
+    fromBotMenu?: boolean,
   ) =>
     api
       .post<{
         webAppUrl: string;
         resolved: boolean;
         frameable: boolean;
+        /** Telegram attached the account data. False means the app will load logged out. */
+        signed: boolean;
       }>(`/tg-client/${accountId}/webview/resolve`, {
         url,
         botChatId,
         peerChatId,
+        fromBotMenu,
       })
       .then((r) => r.data),
 };

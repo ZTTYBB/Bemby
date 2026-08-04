@@ -40,6 +40,7 @@ vi.mock("../jobs/custom", () => ({ runCustom: vi.fn(), CustomJobError: class ext
 vi.mock("../jobs/embywatch", () => ({ runEmbywatch: vi.fn(), testEmbyConnection: vi.fn() }));
 vi.mock("../jobs/runner", () => ({ runJob: vi.fn(), parseTgProxy: vi.fn() }));
 vi.mock("../jobs/notify", () => ({
+  notifyJobEvent: vi.fn(),
   sendTgNotify: vi.fn(),
   buildFailureMessage: vi.fn(),
   buildSuccessMessage: vi.fn(),
@@ -93,7 +94,8 @@ const SCHEMA = `
     start_command    TEXT    NOT NULL DEFAULT '/start',
     checkin_button   TEXT    NOT NULL DEFAULT '签到',
     created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
-    run_every_days   INTEGER NOT NULL DEFAULT 1
+    run_every_days   INTEGER NOT NULL DEFAULT 1,
+    run_every_days_max INTEGER
   );
 
   CREATE TABLE jobs (
@@ -114,6 +116,7 @@ const SCHEMA = `
     template_id           INTEGER REFERENCES job_templates(id) ON DELETE SET NULL,
     run_every_days        INTEGER NOT NULL DEFAULT 1,
     retired               TEXT,
+    last_success_at       TEXT,
     created_at            DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -135,6 +138,15 @@ let baseUrl: string;
 async function getJson(path: string) {
   const res = await fetch(`${baseUrl}${path}`);
   return { status: res.status, body: await res.json() };
+}
+
+async function postJson(path: string, body?: unknown) {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  return { status: res.status, body: res.status === 204 ? null : await res.json() };
 }
 
 beforeAll(async () => {
@@ -175,10 +187,32 @@ beforeEach(() => {
   testDb.exec("DELETE FROM job_logs; DELETE FROM jobs; DELETE FROM job_templates; DELETE FROM tg_accounts;");
 });
 
-function insertTemplate(name: string, opts: { jobType?: string; bot?: string; enabled?: number } = {}) {
+function insertTemplate(
+  name: string,
+  opts: {
+    jobType?: string;
+    bot?: string;
+    enabled?: number;
+    config?: string;
+    timezone?: string;
+    runEveryDays?: number;
+    runEveryDaysMax?: number | null;
+  } = {},
+) {
   return testDb
-    .prepare("INSERT INTO job_templates (name, job_type, bot_username, enabled) VALUES (?, ?, ?, ?)")
-    .run(name, opts.jobType ?? "checkin", opts.bot ?? "", opts.enabled ?? 1).lastInsertRowid as number;
+    .prepare(
+      "INSERT INTO job_templates (name, job_type, bot_username, enabled, config, timezone, run_every_days, run_every_days_max) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .run(
+      name,
+      opts.jobType ?? "checkin",
+      opts.bot ?? "",
+      opts.enabled ?? 1,
+      opts.config ?? null,
+      opts.timezone ?? "Australia/Sydney",
+      opts.runEveryDays ?? 1,
+      opts.runEveryDaysMax ?? null,
+    ).lastInsertRowid as number;
 }
 
 function insertAccount(name: string, opts: { disabled?: number; notes?: string; phone?: string } = {}) {
@@ -376,5 +410,102 @@ describe("GET /logs", () => {
 
     const byMessage = await getJson("/logs?page=1&pageSize=10&search=timeout");
     expect(byMessage.body.items.map((l: any) => l.message)).toEqual(["timeout waiting"]);
+  });
+});
+
+describe("POST /templates/:id/duplicate", () => {
+  it("copies every configured field onto a new template", async () => {
+    const cfg = JSON.stringify({ actions: [{ type: "open_mini_app_url", url: "https://x/app" }] });
+    const id = insertTemplate("Daily Draw", {
+      jobType: "custom",
+      bot: "drawbot",
+      config: cfg,
+      timezone: "Australia/Sydney",
+      runEveryDays: 3,
+      runEveryDaysMax: 5,
+    });
+
+    const { status, body } = await postJson(`/templates/${id}/duplicate`);
+    expect(status).toBe(201);
+    expect(body.id).not.toBe(id);
+    expect(body.name).toBe("Daily Draw (copy)");
+    expect(body.jobType).toBe("custom");
+    expect(body.botUsername).toBe("drawbot");
+    expect(body.config).toBe(cfg);
+    expect(body.timezone).toBe("Australia/Sydney");
+    expect(body.runEveryDays).toBe(3);
+    expect(body.runEveryDaysMax).toBe(5);
+
+    const all = await getJson("/templates");
+    expect(all.body.map((t: any) => t.name)).toEqual(["Daily Draw", "Daily Draw (copy)"]);
+  });
+
+  it("numbers further copies rather than repeating the name", async () => {
+    const id = insertTemplate("Alpha");
+    const first = await postJson(`/templates/${id}/duplicate`);
+    const second = await postJson(`/templates/${id}/duplicate`);
+    const third = await postJson(`/templates/${first.body.id}/duplicate`);
+    expect(first.body.name).toBe("Alpha (copy)");
+    expect(second.body.name).toBe("Alpha (copy 2)");
+    expect(third.body.name).toBe("Alpha (copy) (copy)");
+  });
+
+  it("leaves the source's linked jobs with the source", async () => {
+    const tpl = insertTemplate("Linked");
+    insertJob("Job A", { templateId: tpl });
+    const { body } = await postJson(`/templates/${tpl}/duplicate`);
+
+    const paged = await getJson("/templates?page=1&pageSize=10");
+    const rows = Object.fromEntries(
+      paged.body.items.map((t: any) => [t.id, t.linkedJobCount]),
+    );
+    expect(rows[tpl]).toBe(1);
+    expect(rows[body.id]).toBe(0);
+  });
+
+  it("404s for a template that does not exist", async () => {
+    const { status } = await postJson("/templates/9999/duplicate");
+    expect(status).toBe(404);
+  });
+});
+
+// `pageSize=0` is the "All" choice in the list views: one page, no ceiling -- including
+// past the 200-row cap the numbered page sizes are clamped to.
+describe("page size All (pageSize=0)", () => {
+  it("returns every template on one page, beyond the usual cap", async () => {
+    for (let i = 1; i <= 205; i++) insertTemplate(`Tpl ${String(i).padStart(3, "0")}`);
+    const { body } = await getJson("/templates?page=1&pageSize=0");
+    expect(body.total).toBe(205);
+    expect(body.items).toHaveLength(205);
+    expect(body.page).toBe(1);
+    expect(body.pageSize).toBe(0);
+  });
+
+  it("returns every job, account, and log on one page", async () => {
+    for (let i = 1; i <= 5; i++) insertAccount(`Acct ${i}`);
+    const job = insertJob("Job A");
+    for (let i = 1; i <= 5; i++) insertJob(`Job ${i}`);
+    for (let i = 1; i <= 5; i++)
+      insertLog(job, "success", `run ${i}`, `2026-07-0${i}T00:00:00Z`);
+
+    const jobs = await getJson("/jobs?page=1&pageSize=0");
+    expect(jobs.body.items).toHaveLength(6);
+    const accounts = await getJson("/accounts?page=1&pageSize=0");
+    expect(accounts.body.items).toHaveLength(5);
+    const logs = await getJson("/logs?page=1&pageSize=0");
+    expect(logs.body.items).toHaveLength(5);
+  });
+
+  it("ignores the page number, since All is a single page", async () => {
+    for (let i = 1; i <= 5; i++) insertTemplate(`Tpl ${i}`);
+    const { body } = await getJson("/templates?page=3&pageSize=0");
+    expect(body.page).toBe(1);
+    expect(body.items).toHaveLength(5);
+  });
+
+  it("still keeps the legacy array shape when no paging param is sent", async () => {
+    insertTemplate("Alpha");
+    const { body } = await getJson("/templates");
+    expect(Array.isArray(body)).toBe(true);
   });
 });
