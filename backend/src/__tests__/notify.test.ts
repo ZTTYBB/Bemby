@@ -112,11 +112,13 @@ describe("normaliseBotTarget", () => {
   });
 });
 
+// Deliberately shorter than a real token's 35-character secret: a fixture shaped like the
+// real thing trips GitHub's secret scanner, and none of this depends on the length.
+const FAKE_TOKEN = "123456789:test-token-not-a-secret";
+
 describe("maskBotToken", () => {
   it("keeps the public bot id and the last 4 chars", () => {
-    expect(maskBotToken("123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw")).toBe(
-      "123456789:****Dsaw",
-    );
+    expect(maskBotToken(FAKE_TOKEN)).toBe("123456789:****cret");
   });
 
   it("returns an empty string for no token", () => {

@@ -40,7 +40,9 @@ vi.mock("../jobs/notify", async (importOriginal) => ({
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import settingsRouter, { ALLOWED_KEYS, CLIENT_HIDDEN_KEYS } from "../routes/settings";
 
-const TOKEN = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+// Deliberately shorter than a real token's 35-character secret: a fixture shaped like the
+// real thing trips GitHub's secret scanner, and nothing here depends on the length.
+const TOKEN = "123456789:test-token-not-a-secret";
 
 /** Pulls a route handler out of the Express router so it can be called directly. */
 function routeHandler(method: string, path: string) {
@@ -93,7 +95,7 @@ describe("notification bot settings", () => {
 
     expect(CLIENT_HIDDEN_KEYS.has("notify_bot_token")).toBe(true);
     expect(res.body.notify_bot_token).toBeUndefined();
-    expect(res.body.notify_bot_token_masked).toBe("123456789:****Dsaw");
+    expect(res.body.notify_bot_token_masked).toBe("123456789:****cret");
     expect(res.body.notify_bot_configured).toBe("true");
     // The target is not a secret: the panel needs it to fill the field back in
     expect(res.body.notify_bot_target).toBe("42");
@@ -113,7 +115,7 @@ describe("notification bot settings", () => {
 
   it("leaves the stored token alone when the mask is sent back", () => {
     putSettings(
-      { body: { notify_bot_token: "123456789:****Dsaw", notify_bot_target: "42" } },
+      { body: { notify_bot_token: "123456789:****cret", notify_bot_target: "42" } },
       makeRes(),
     );
     expect(mockRun).not.toHaveBeenCalledWith(
