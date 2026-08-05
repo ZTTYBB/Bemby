@@ -150,12 +150,50 @@ describe.skipIf(!exe)("page steps in a real browser", () => {
   );
 
   it(
-    "says so when asked for a Turnstile checkbox on a page that has none",
+    "passes the Turnstile step on a page that shows no checkbox",
     async () => {
+      // Turnstile clears itself for an address it likes, often without drawing a checkbox,
+      // so nothing to tick is nothing to do -- not a failed step.
       const p = await open(`<div>no widget here</div>`);
       const run = await runWebSteps(p, [{ type: "web_turnstile" }], Date.now() + 30_000, {});
-      expect(run.ok).toBe(false);
-      expect(run.logs[0].error).toContain("no Turnstile widget");
+      expect(run.logs[0].error).toBeUndefined();
+      expect(run.ok).toBe(true);
+      expect(run.logs[0].outcome).toContain("no Turnstile widget");
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
+    "ticks the checkbox where the widget sits, and waits for its token",
+    async () => {
+      // A widget rendered into the site's own element: a sized wrapper holding nothing but
+      // the hidden response field, which is the shape the CDP lookup cannot help with and
+      // the ancestor fallback has to handle.
+      const p = await open(
+        `<div id="w" style="width:300px;height:65px;background:#eee"` +
+          ` onclick="document.getElementsByName('cf-turnstile-response')[0].value='tok-1'">` +
+          `<input type="hidden" name="cf-turnstile-response"></div>`,
+      );
+      const run = await runWebSteps(p, [{ type: "web_turnstile" }], Date.now() + 30_000, {});
+      expect(run.logs[0].error).toBeUndefined();
+      expect(run.logs[0].outcome).toContain("token issued");
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
+    "leaves a widget that has already solved itself alone",
+    async () => {
+      const p = await open(
+        `<div style="width:300px;height:65px"` +
+          ` onclick="window.__pressed = true">` +
+          `<input type="hidden" name="cf-turnstile-response" value="tok-already"></div>`,
+      );
+      const run = await runWebSteps(p, [{ type: "web_turnstile" }], Date.now() + 30_000, {});
+      expect(run.logs[0].outcome).toContain("already solved");
+      expect(await p.evaluate(() => (window as any).__pressed)).toBeUndefined();
       await p.close();
     },
     60_000,

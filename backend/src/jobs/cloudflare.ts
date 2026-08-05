@@ -637,6 +637,48 @@ export async function turnstileToken(page: Page): Promise<string> {
 }
 
 /**
+ * Backs the `web_turnstile` page step and the `{turnstile}` in-app step: tick the checkbox
+ * where it sits, and say what happened.
+ *
+ * A widget that is not there is a pass, not a failure. Turnstile clears itself for an
+ * address it likes -- often without ever drawing a checkbox -- so a step that insisted on
+ * one would fail exactly the runs that had nothing to do. The widget gets a short grace to
+ * render; where an app raises the challenge later than that, put a delay before the step.
+ */
+async function tickTurnstile(
+  page: Page,
+  deadline: number,
+): Promise<{ outcome: string; failure?: string }> {
+  const tune = cfTuning();
+  const graceBy = Math.min(Date.now() + tune.settleMs, deadline);
+  let present = await hasTurnstileWidget(page);
+  while (!present && Date.now() < graceBy) {
+    await sleep(tune.readyPollMs, graceBy);
+    present = await hasTurnstileWidget(page);
+  }
+  if (!present) return { outcome: "no Turnstile widget on the page, nothing to tick" };
+
+  // Already solved: the widget rendered and satisfied itself, so pressing it does nothing.
+  if (await turnstileToken(page)) return { outcome: "Turnstile was already solved" };
+
+  if (!(await clickTurnstileWidget(page))) {
+    return { outcome: "", failure: "the Turnstile widget has no on-screen box to press" };
+  }
+
+  // The token arrives a moment after the press and the site's own request carries it, so
+  // wait for it rather than leaving an unsolved challenge behind the step.
+  const tokenBy = Math.min(Date.now() + tune.confirmTimeoutMs, deadline);
+  let token = await turnstileToken(page);
+  while (!token && Date.now() < tokenBy) {
+    await sleep(tune.pollMs, tokenBy);
+    token = await turnstileToken(page);
+  }
+  return {
+    outcome: `pressed the Turnstile checkbox${token ? " (token issued)" : " (no token yet)"}`,
+  };
+}
+
+/**
  * Whether a Turnstile token means the page is through.
  *
  * A token issued to a widget the site itself put on its page is the deliverable: the site
@@ -1208,6 +1250,16 @@ export function parseAiBtnStep(step: string | undefined): { hint?: string } | nu
 }
 
 /**
+ * `{turnstile}` ticks the Cloudflare Turnstile checkbox where it sits, the same way the
+ * `web_turnstile` page step does, and passes when the app raised no challenge at all. A
+ * trailing `?` is accepted and means nothing: the step is already forgiving.
+ * Returns false for anything that is not a Turnstile step.
+ */
+export function parseTurnstileStep(step: string | undefined): boolean {
+  return /^\{\s*turnstile\s*\??\s*\}$/i.test(step?.trim() ?? "");
+}
+
+/**
  * `scroll(500)` moves down 500px; `scroll(120, 500)` moves both axes, and the named forms
  * (`scroll(y=500)`, `scroll(x:-120)`) move one. Negative figures scroll back. Returns null
  * for anything that is not a scroll step.
@@ -1410,6 +1462,22 @@ async function runInAppClicks(
     if (scroll) {
       const outcome = await scrollOutcome(page, scroll.x, scroll.y);
       done.push(outcome ?? `scroll(${scroll.x}, ${scroll.y}) found nothing that scrolls`);
+      await sleep(tune.inAppStepMs, deadline);
+      continue;
+    }
+
+    // Ticks a Turnstile checkbox mid-sequence. A challenge sitting on the page when the app
+    // opens is already worked before these steps run, and again after them; this is for the
+    // one an app raises between two steps of its own flow.
+    if (parseTurnstileStep(step)) {
+      const tick = await tickTurnstile(page, deadline);
+      if (tick.failure) {
+        failure = `{turnstile}: ${tick.failure}`;
+        break;
+      }
+      // Deliberately not counted as having acted: ticking a checkbox is what makes the
+      // checkin possible, not the checkin itself.
+      done.push(`{turnstile} ${tick.outcome}`);
       await sleep(tune.inAppStepMs, deadline);
       continue;
     }
@@ -2004,9 +2072,9 @@ export async function runWebSteps(
         }
 
         case "web_turnstile": {
-          if (!(await clickTurnstileWidget(page)))
-            throw new Error("no Turnstile widget is on the page");
-          log.outcome = "pressed the Turnstile checkbox";
+          const tick = await tickTurnstile(page, deadline);
+          if (tick.failure) throw new Error(tick.failure);
+          log.outcome = tick.outcome;
           break;
         }
 

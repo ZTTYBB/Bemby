@@ -169,8 +169,9 @@ export type CustomAction =
       button?: string;
       /**
        * Steps to run inside the app, in order: a control's visible text, `css:<selector>`,
-       * `delay(2500)`, `scroll(x, y)` to reach something below the fold, or an `{aiBtn}` /
-       * `{input}` / `{aiInput}` placeholder. Blank auto-detects a checkin-worded control.
+       * `delay(2500)`, `scroll(x, y)` to reach something below the fold, `{turnstile}` to
+       * tick a Cloudflare checkbox where one is shown, or an `{aiBtn}` / `{input}` /
+       * `{aiInput}` placeholder. Blank auto-detects a checkin-worded control.
        */
       appButtons?: string[];
       successContains?: string;
@@ -197,8 +198,8 @@ export type CustomAction =
       contact?: string;
       /**
        * Steps to run inside the app, in order, same vocabulary as `open_mini_app`
-       * (control text, `css:`, `delay()`, `scroll()`, `{aiBtn}`, `{input}`, `{aiInput}`).
-       * Blank auto-detects a checkin control.
+       * (control text, `css:`, `delay()`, `scroll()`, `{turnstile}`, `{aiBtn}`, `{input}`,
+       * `{aiInput}`). Blank auto-detects a checkin control.
        */
       appButtons?: string[];
       successContains?: string;
@@ -221,8 +222,8 @@ export type CustomAction =
       contact?: string;
       /**
        * Steps to run inside the app, in order, same vocabulary as `open_mini_app`
-       * (control text, `css:`, `delay()`, `scroll()`, `{aiBtn}`, `{input}`, `{aiInput}`).
-       * Blank auto-detects a checkin control.
+       * (control text, `css:`, `delay()`, `scroll()`, `{turnstile}`, `{aiBtn}`, `{input}`,
+       * `{aiInput}`). Blank auto-detects a checkin control.
        */
       appButtons?: string[];
       successContains?: string;
