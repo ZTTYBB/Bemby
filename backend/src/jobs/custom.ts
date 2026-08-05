@@ -41,6 +41,7 @@ import {
 import { resolvePeerTarget } from "../tg/peerTarget";
 import { cfMaxCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
 import { cfTuning } from "./cfTuning";
+import { rememberWebValue, usedWebValues } from "./webMemory";
 import type { CustomAction, CustomConfig, CustomStepLog } from "../types";
 
 export type CustomJobLog = {
@@ -2742,6 +2743,15 @@ export async function runCustom(
                     const { response } = await callAI([image], prompt, 512);
                     return response;
                   },
+                  // Same reason: what this job has already looped over lives in the
+                  // database, which the browser side does not reach into
+                  usedValues: (varName) => usedWebValues(cfRun.jobId, varName),
+                  markUsed: (varName, value) =>
+                    rememberWebValue(cfRun.jobId, varName, value),
+                  // A login belongs to this job, not to everything sharing its exit
+                  ...(action.ownProfile && cfRun.jobId
+                    ? { profileScope: `job${cfRun.jobId}` }
+                    : {}),
                 });
                 step.cfHost = cf.finalHost;
                 step.cfChallenged = cf.challenged;

@@ -654,10 +654,24 @@ function exitKey(proxyUrl?: string): string {
 }
 
 /**
- * The device fingerprint seed for an exit. CloakBrowser picks a random one per launch,
+ * Names the profile directory, and with it the device seed. The exit alone by default, so
+ * everything going out through it pools one `cf_clearance`; narrowed by `scope` when a caller
+ * needs its cookies to itself -- a job that logs in, above all, since two accounts sharing a
+ * profile would overwrite each other's session and a site that rations logins would not give
+ * either of them another one.
+ */
+export function cfProfileKey(proxyUrl?: string, scope?: string): string {
+  const exit = exitKey(proxyUrl);
+  const trimmed = scope?.trim();
+  // Whatever a scope is named, it ends up as a directory name
+  return trimmed ? `${exit}-${trimmed.replace(/[^a-zA-Z0-9_-]/g, "")}` : exit;
+}
+
+/**
+ * The device fingerprint seed for a profile. CloakBrowser picks a random one per launch,
  * which would hand the same site a different machine every run -- while the profile hands
- * it the same cookies. Derived from the exit key instead, so an exit keeps one identity
- * for as long as its profile does.
+ * it the same cookies. Derived from the profile's key instead, so the cookies and the device
+ * they were issued to stay together for as long as the profile does.
  */
 function fingerprintSeed(key: string): number {
   const digest = createHash("sha1").update(`bemby-fingerprint:${key}`).digest();
@@ -910,6 +924,13 @@ export async function launchCfBrowser(
      * the best one it can get.
      */
     tier?: BuildTier;
+    /**
+     * Keeps this caller's cookies apart from everything else on the same exit, by giving it
+     * a profile of its own named after this. What a job logs into is its own: two accounts
+     * going out through the same exit would otherwise share one cookie jar and overwrite
+     * each other's session.
+     */
+    profileScope?: string;
   } = {},
 ): Promise<LaunchedBrowser> {
   const tune = cfTuning();
@@ -930,7 +951,11 @@ export async function launchCfBrowser(
   const key = exitKey(proxyUrl);
   const geo = cfExitGeo(key);
   const locale = cfBrowserLang() ?? geo?.lang;
-  const profile = claimProfile(key);
+  // Geography follows the exit -- it is a fact about the IP, shared by everything going out
+  // through it. Cookies and the device they were issued to follow the profile, which a
+  // caller may narrow to itself: see `profileScope`.
+  const profileKey = cfProfileKey(proxyUrl, opts.profileScope);
+  const profile = claimProfile(profileKey);
   const proxy = await resolveProxy(proxyUrl);
   // The keyed build first, on a seat of its own: one licence key is one concurrent
   // session, so a seat is held for as long as this browser lives.
@@ -999,7 +1024,9 @@ export async function launchCfBrowser(
         ...(locale ? { locale } : {}),
         args: [
           // One machine per exit, kept across runs alongside its cookies
-          `--fingerprint=${fingerprintSeed(key)}`,
+          // Seeded from the profile, not the bare exit: the device has to stay with the
+          // cookies it was issued to, or a session comes back on a machine that has changed
+          `--fingerprint=${fingerprintSeed(profileKey)}`,
           // The container has no user namespaces to sandbox into, and /dev/shm is small
           "--no-sandbox",
           "--disable-setuid-sandbox",

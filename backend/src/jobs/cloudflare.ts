@@ -166,10 +166,20 @@ export type CfRunState = {
    * count -- "every proxy refused" says nothing about what went wrong.
    */
   lastFailure: Map<string, string>;
+  /**
+   * Job this run belongs to, when there is one. Only the page steps use it, to keep what a
+   * `web_collect` has already handed to a loop apart from every other job's.
+   */
+  jobId?: number;
 };
 
-export function newCfRunState(): CfRunState {
-  return { refused: new Map(), deadlines: new Map(), lastFailure: new Map() };
+export function newCfRunState(jobId?: number): CfRunState {
+  return {
+    refused: new Map(),
+    deadlines: new Map(),
+    lastFailure: new Map(),
+    ...(jobId ? { jobId } : {}),
+  };
 }
 
 /**
@@ -247,6 +257,15 @@ export type LoadOptions = {
   webSteps?: WebStep[];
   /** Hands a screenshot to the vision model, for the `ai_web_*` sub-steps. */
   aiLocate?: (image: string, prompt: string) => Promise<string>;
+  /** What a `web_pick` with `skipUsed` should leave out, and where a used value is kept. */
+  usedValues?: (varName: string) => string[];
+  markUsed?: (varName: string, value: string) => void;
+  /**
+   * Narrows the browser profile -- so the cookies -- to this caller, instead of sharing the
+   * one every job on this exit uses. What a job logs into is its own: two accounts going out
+   * through the same exit would otherwise overwrite each other's session.
+   */
+  profileScope?: string;
 };
 
 // Every timing and limit the browser side runs on lives in cfTuning, so it can be
@@ -409,8 +428,9 @@ async function probeExitGeo(
 async function launchAlignedBrowser(
   proxyUrl: string | undefined,
   deadline: number,
+  profileScope?: string,
 ): Promise<LaunchedBrowser> {
-  const launched = await launchCfBrowser(proxyUrl);
+  const launched = await launchCfBrowser(proxyUrl, { profileScope });
   if (launched.geo) return launched;
 
   const geo = await probeExitGeo(launched.page, launched.key, deadline);
@@ -422,7 +442,7 @@ async function launchAlignedBrowser(
   // be refused, which the keyed build answers by quitting during startup. The seat is
   // already free locally; this is purely to let the far side catch up.
   await sleep(cfTuning().relaunchSettleMs, deadline);
-  return launchCfBrowser(proxyUrl);
+  return launchCfBrowser(proxyUrl, { profileScope });
 }
 
 /**
@@ -1962,7 +1982,118 @@ export type WebStepHooks = {
    * the caller so the browser side stays clear of AI credentials and settings.
    */
   aiLocate?: (image: string, prompt: string) => Promise<string>;
+  /**
+   * Values a `web_collect` with `skipUsed` should leave out, and where one is recorded once
+   * the loop has been through it. Supplied by the caller for the same reason: what a job has
+   * already worked through lives in the database, which this side does not touch.
+   */
+  usedValues?: (varName: string) => string[];
+  markUsed?: (varName: string, value: string) => void;
+  /**
+   * Works any Cloudflare challenge standing on the page right now, or returns null when
+   * there is none. Called after a `web_goto`, since a fresh navigation is exactly what
+   * raises one mid-run.
+   */
+  solveChallenge?: () => Promise<boolean | null>;
 };
+
+/** State one `runWebSteps` call carries through its steps, loops included. */
+type WebStepRun = {
+  logs: WebStepLog[];
+  deadline: number;
+  hooks: WebStepHooks;
+  tune: ReturnType<typeof cfTuning>;
+  /** What each name is holding for the round in progress. Cleared between rounds. */
+  current: Map<string, string>;
+  /** What a `web_pick` chose this round, for the loop to remember once the round is clean. */
+  picked: Map<string, string>;
+  /** `name value` for everything picked so far this run, so no two rounds coincide. */
+  taken: Set<string>;
+  /** Names whose `web_pick` asked for chosen values to be remembered. */
+  remember: Set<string>;
+  /** The round in progress, e.g. `2/5`, which a pick sharpens with the value it chose. */
+  round?: string;
+  /** Set when a pick finds the page holds nothing new: the loop stops rather than failing. */
+  exhausted: boolean;
+  /** Screenshots kept so far, so a loop's rounds cannot fill a job log with images. */
+  shots: number;
+};
+
+/** A hard ceiling on the candidates one `web_pick` reads off a page. */
+const MAX_COLLECTED = 200;
+
+/** Characters of page text a `web_read` keeps when it is not told a length. */
+const WEB_READ_CHARS = 1000;
+
+/**
+ * Replaces `{name}` with the value of the round, for every loop currently running. A name
+ * no loop is holding is left as it stands: a page step may well want a literal brace, and
+ * `expandCommand`'s placeholders are spelled the same way.
+ */
+export function fillVars(text: string, vars: Map<string, string>): string {
+  if (!text || !vars.size) return text;
+  return text.replace(/\{(\w+)\}/g, (whole, name: string) => vars.get(name) ?? whole);
+}
+
+/**
+ * Turns what a `web_pick` read off the page into the candidates it may choose from:
+ * narrowed to the part that matters, de-duplicated, and minus what has already been used.
+ * Kept out of the step body because this is where a mis-configured pick goes wrong, and
+ * none of it needs a browser to try.
+ *
+ * Throws for the cases worth stopping on: nothing matched the selector at all, the
+ * expression cannot be compiled, or it described none of what was found. An empty list with
+ * everything skipped is not one of them -- that is a page with nothing new on it, which the
+ * pick reports and the loop stops on.
+ */
+export function narrowCollected(
+  raw: string[],
+  opts: { selector: string; pattern?: string; used?: string[] },
+): { values: string[]; found: number; skipped: number } {
+  if (!raw.length) throw new Error(`nothing matching \`${opts.selector}\` is on the page`);
+
+  const source = opts.pattern?.trim();
+  let pattern: RegExp | undefined;
+  if (source) {
+    try {
+      pattern = new RegExp(source);
+    } catch {
+      throw new Error(`\`${source}\` is not a valid regular expression`);
+    }
+  }
+
+  const seen = new Set<string>();
+  const found: string[] = [];
+  for (const value of raw) {
+    let kept = value.trim();
+    if (pattern) {
+      const m = pattern.exec(kept);
+      // A value the expression does not describe is not what was asked for: a list page
+      // carries plenty of links that are not posts
+      if (!m) continue;
+      kept = (m[1] ?? m[0]).trim();
+    }
+    if (!kept || seen.has(kept)) continue;
+    seen.add(kept);
+    found.push(kept);
+  }
+  if (!found.length)
+    throw new Error(
+      pattern
+        ? `${raw.length} element(s) matched \`${opts.selector}\`, but none of them matched \`${source}\``
+        : `${raw.length} element(s) matched \`${opts.selector}\`, but all of them read empty`,
+    );
+
+  let values = found;
+  let skipped = 0;
+  if (opts.used?.length) {
+    const used = new Set(opts.used);
+    values = values.filter((v) => !used.has(v));
+    skipped = found.length - values.length;
+  }
+
+  return { values, found: found.length, skipped };
+}
 
 /**
  * Runs the `open_url` sub-steps against the loaded page, capturing the page after each
@@ -1976,34 +2107,80 @@ export async function runWebSteps(
   deadline: number,
   hooks: WebStepHooks,
 ): Promise<{ logs: WebStepLog[]; ok: boolean; failure?: string }> {
-  const tune = cfTuning();
-  const logs: WebStepLog[] = [];
-  let failure: string | undefined;
+  const run: WebStepRun = {
+    logs: [],
+    deadline,
+    hooks,
+    tune: cfTuning(),
+    current: new Map(),
+    picked: new Map(),
+    taken: new Set(),
+    remember: new Set(),
+    exhausted: false,
+    shots: 0,
+  };
+  const failure = await runStepList(page, steps, run, { depth: 0, inLoop: false });
+  // Let the last step's request round-trip before the page text is read
+  if (run.logs.length) await sleep(run.tune.inAppSettleMs, deadline);
+  return { logs: run.logs, ok: !failure, failure };
+}
+
+/** How deep containers may go, so a config cannot nest itself into something unreadable. */
+const MAX_WEB_DEPTH = 3;
+
+/** Where in the nesting a list of steps sits, which decides what may appear in it. */
+type WebStepNest = {
+  /** Containers enclosing this list. */
+  depth: number;
+  /** Whether one of them is a loop, which is what stops a loop going inside a loop. */
+  inLoop: boolean;
+};
+
+/**
+ * Works through one list of steps, appending to the shared log. Called again for a branch of
+ * a `web_if` and for each round of a `web_repeat`; `nest` is what keeps that nesting in
+ * bounds.
+ *
+ * Returns the failure that stopped it, or undefined when every step got through.
+ */
+async function runStepList(
+  page: Page,
+  steps: WebStep[],
+  run: WebStepRun,
+  nest: WebStepNest,
+): Promise<string | undefined> {
+  const { deadline, tune, hooks } = run;
 
   for (const step of steps) {
-    if (msLeft(deadline) <= 0) {
-      failure = "ran out of time before the page steps finished";
-      break;
-    }
+    if (msLeft(deadline) <= 0) return "ran out of time before the page steps finished";
+    // A pick that found nothing new ends the round: the steps after it have no value to
+    // work with, and the loop is about to stop anyway
+    if (run.exhausted) return undefined;
 
-    const log: WebStepLog = { type: step.type, label: describeWebStep(step) };
-    logs.push(log);
+    const log: WebStepLog = {
+      type: step.type,
+      label: describeWebStep(step, run),
+      ...(run.round ? { iteration: run.round } : {}),
+    };
+    run.logs.push(log);
     // Set when a step leaves something drawn on the page for its own screenshot to show
     let marked = false;
+    // A loop or a branch only holds other steps: what it runs does the waiting and
+    // capturing itself
+    const container = step.type === "web_repeat" || step.type === "web_if";
 
     // A challenge raised by the previous step (a login press is exactly what raises one)
     // leaves nothing of the site on screen for this one to act on
-    if (step.type !== "web_delay" && (await interstitialOnPage(page))) {
+    if (!container && step.type !== "web_delay" && (await interstitialOnPage(page))) {
       log.error = "a full-page Cloudflare challenge is covering the site";
-      failure = `${log.label}: ${log.error}`;
       log.screenshot = await screenshotOf(page);
-      break;
+      return `${log.label}: ${log.error}`;
     }
 
     try {
       switch (step.type) {
         case "web_button": {
-          const selector = step.selector.trim();
+          const selector = fillVars(step.selector, run.current).trim();
           if (!selector) throw new Error("no CSS selector given");
           if (!(await clickElement(page, selector)))
             throw new Error(`nothing matching \`${selector}\` is on the page`);
@@ -2012,11 +2189,12 @@ export async function runWebSteps(
         }
 
         case "web_input": {
-          const selector = step.selector.trim();
+          const selector = fillVars(step.selector, run.current).trim();
           if (!selector) throw new Error("no CSS selector given");
-          if (!(await typeInto(page, selector, step.text)))
+          const text = fillVars(step.text, run.current);
+          if (!(await typeInto(page, selector, text)))
             throw new Error(`nothing matching \`${selector}\` could be typed into`);
-          log.outcome = `typed ${maskForLog(step.text, selector)} into \`${selector}\``;
+          log.outcome = `typed ${maskForLog(text, selector)} into \`${selector}\``;
           break;
         }
 
@@ -2038,7 +2216,7 @@ export async function runWebSteps(
         }
 
         case "web_wait_element": {
-          const selector = step.selector.trim();
+          const selector = fillVars(step.selector, run.current).trim();
           if (!selector) throw new Error("no CSS selector given");
           const waitMs = step.waitMs && step.waitMs > 0 ? step.waitMs : 30_000;
           const until = Math.min(Date.now() + waitMs, deadline);
@@ -2078,6 +2256,281 @@ export async function runWebSteps(
           break;
         }
 
+        case "web_pick": {
+          const selector = fillVars(step.selector, run.current).trim();
+          if (!selector) throw new Error("no CSS selector given");
+          const name = step.varName.trim();
+          if (!name) throw new Error("no name given to hold the chosen value under");
+
+          // The values come back raw and are narrowed here: a regular expression is far
+          // easier to get right in Node than serialised into the page
+          const raw = await page
+            .evaluate(
+              (arg: { sel: string; attr: string; cap: number }) =>
+                Array.from(document.querySelectorAll(arg.sel))
+                  .slice(0, arg.cap)
+                  .map((el) => {
+                    const value = arg.attr
+                      ? el.getAttribute(arg.attr)
+                      : (el as HTMLElement).innerText;
+                    return (value ?? "").trim();
+                  }),
+              { sel: selector, attr: step.attribute?.trim() ?? "", cap: MAX_COLLECTED },
+            )
+            .catch(() => [] as string[]);
+
+          if (step.skipUsed) run.remember.add(name);
+          else run.remember.delete(name);
+
+          // Earlier rounds of this run count as used too, not just earlier runs: a value is
+          // only written to the store once its round finishes, so without this two rounds in
+          // a row would pick the same post, and a round that keeps failing would be retried
+          // to the last one. Both halves hang off `skipUsed`, which is the one switch for
+          // "do not pick this again" -- a pick without it is free to find the same thing
+          // every round, which is what one naming a control on the page does.
+          const used = step.skipUsed
+            ? [
+                ...(hooks.usedValues?.(name) ?? []),
+                ...[...run.taken]
+                  .filter((k) => k.startsWith(`${name} `))
+                  .map((k) => k.slice(name.length + 1)),
+              ]
+            : undefined;
+          const { values, found, skipped } = narrowCollected(raw, {
+            selector,
+            pattern: step.pattern,
+            used,
+          });
+
+          if (!values.length) {
+            // Nothing new on the page is a quiet end to the loop, not a failure: it is what
+            // a job that has already replied to everything on the front page should look like
+            run.exhausted = true;
+            log.outcome = `nothing left to pick: all ${found} value(s) on the page have been used`;
+            break;
+          }
+
+          const value =
+            (step.choose ?? "first") === "random"
+              ? values[Math.floor(Math.random() * values.length)]
+              : values[0];
+          run.current.set(name, value);
+          run.picked.set(name, value);
+          if (step.skipUsed) run.taken.add(`${name} ${value}`);
+          // Sharpen the round's label, so every step after this one says which post it is on
+          if (run.round) run.round = `${run.round.split(" ")[0]} ${value}`;
+
+          log.outcome =
+            `picked ${value} for {${name}}, out of ${values.length} to choose from` +
+            (skipped ? ` (${skipped} of ${found} already used)` : "");
+          break;
+        }
+
+        case "web_read": {
+          const selector = fillVars(step.selector, run.current).trim();
+          if (!selector) throw new Error("no CSS selector given");
+          const name = step.varName.trim();
+          if (!name) throw new Error("no name given to hold the text under");
+
+          const text = await page
+            .evaluate(
+              (sel: string) => (document.querySelector(sel) as HTMLElement | null)?.innerText ?? "",
+              selector,
+            )
+            .catch(() => "");
+          const trimmed = text.trim().replace(/\s+\n/g, "\n");
+          if (!trimmed)
+            throw new Error(`nothing matching \`${selector}\` has any text on the page`);
+
+          const max = step.maxChars && step.maxChars > 0 ? step.maxChars : WEB_READ_CHARS;
+          const kept = trimmed.slice(0, max);
+          run.current.set(name, kept);
+          log.outcome = `read ${kept.length} character(s) into {${name}}: ${oneLine(kept).slice(0, 120)}`;
+          break;
+        }
+
+        case "web_if": {
+          if (nest.depth >= MAX_WEB_DEPTH)
+            throw new Error(`conditions cannot be nested more than ${MAX_WEB_DEPTH} deep`);
+
+          const waitMs = step.waitMs && step.waitMs > 0 ? step.waitMs : 5_000;
+          const selector = fillVars(step.selector ?? "", run.current).trim();
+          const wanted = fillVars(step.text ?? "", run.current).trim();
+
+          let look: () => Promise<boolean>;
+          let what: string;
+          if (step.check === "element") {
+            if (!selector) throw new Error("no CSS selector given to look for");
+            what = `\`${selector}\``;
+            // Same test as `web_wait_element`: a hidden login form is not a login form
+            look = () =>
+              page
+                .evaluate((sel: string) => {
+                  const el = document.querySelector(sel) as HTMLElement | null;
+                  if (!el) return false;
+                  const r = el.getBoundingClientRect();
+                  return r.width > 0 && r.height > 0;
+                }, selector)
+                .catch(() => false);
+          } else if (step.check === "text") {
+            if (!wanted) throw new Error("no words given to look for");
+            what = `"${wanted}" in the page text`;
+            look = () =>
+              page
+                .evaluate(() => document.body?.innerText ?? "")
+                .then((body: string) => body.toLowerCase().includes(wanted.toLowerCase()))
+                .catch(() => false);
+          } else {
+            if (!wanted) throw new Error("no words given to look for");
+            what = `"${wanted}" in the address`;
+            look = async () => page.url().toLowerCase().includes(wanted.toLowerCase());
+          }
+
+          // Held open for the whole wait: something the page has yet to draw is the case this
+          // wait exists for, and calling it absent too early takes the wrong branch
+          const until = Math.min(Date.now() + waitMs, deadline);
+          let met = false;
+          for (;;) {
+            met = await look();
+            if (met || Date.now() >= until) break;
+            await sleep(Math.min(tune.readyPollMs, Math.max(50, until - Date.now())), until);
+          }
+
+          const took = step.negate ? !met : met;
+          const branch = took ? (step.then ?? []) : (step.otherwise ?? []);
+          const which = took ? "then" : "else";
+          const saw = met ? `${what} is there` : `${what} is not there`;
+
+          if (!branch.length) {
+            log.outcome = `${saw}, and there are no ${which} steps to run`;
+            break;
+          }
+
+          log.outcome = `${saw}, running the ${branch.length} ${which} step(s)`;
+          const branchFailure = await runStepList(page, branch, run, {
+            depth: nest.depth + 1,
+            inLoop: nest.inLoop,
+          });
+          if (branchFailure) throw new Error(branchFailure);
+          break;
+        }
+
+        case "web_repeat": {
+          if (nest.inLoop) throw new Error("a loop cannot be put inside another loop");
+          if (nest.depth >= MAX_WEB_DEPTH)
+            throw new Error(`steps cannot be nested more than ${MAX_WEB_DEPTH} deep`);
+          const inner = step.steps ?? [];
+          if (!inner.length) throw new Error("the loop has no steps to run");
+          const times = Math.floor(step.times || 0);
+          if (times < 1) throw new Error("no number of rounds given");
+
+          const carryOn = step.continueOnError ?? true;
+          const between = Math.max(0, step.betweenMs || 0);
+          let done = 0;
+          const failures: string[] = [];
+
+          for (let n = 1; n <= times; n++) {
+            if (msLeft(deadline) <= 0) {
+              failures.push(`ran out of time after ${done} of ${times}`);
+              break;
+            }
+            // Each round starts clean: it loads the list itself and picks its own value
+            run.current.clear();
+            run.picked.clear();
+            run.round = `${n}/${times}`;
+            const roundFailure = await runStepList(page, inner, run, {
+              depth: nest.depth + 1,
+              inLoop: true,
+            });
+            const label = run.round;
+            run.round = undefined;
+
+            if (run.exhausted) break;
+            if (roundFailure) {
+              failures.push(`${label}: ${roundFailure}`);
+              if (!carryOn) break;
+            } else {
+              done++;
+              // Only a clean round counts as used. A round that fell over halfway may not
+              // have got as far as doing anything, and the post is worth another go.
+              for (const [pickedName, value] of run.picked)
+                if (run.remember.has(pickedName)) hooks.markUsed?.(pickedName, value);
+            }
+            if (between && n < times) await sleep(between, deadline);
+          }
+          run.current.clear();
+          run.picked.clear();
+
+          const summary = `${done} of ${times} round(s) got through`;
+          if (run.exhausted) {
+            log.outcome = `${summary}; nothing left to pick`;
+            break;
+          }
+          if (!done) throw new Error(`${summary} (${failures[0] ?? "no round ran"})`);
+          log.outcome = failures.length
+            ? `${summary}; ${failures.length} failed (${failures[0]})`
+            : summary;
+          break;
+        }
+
+        case "web_goto": {
+          const url = fillVars(step.url, run.current).trim();
+          if (!url) throw new Error("no address given");
+          if (!/^https?:\/\//i.test(url))
+            throw new Error(`the address must start with http:// or https:// (got "${url}")`);
+          const waitMs = step.waitMs && step.waitMs > 0 ? step.waitMs : 30_000;
+          const from = page.url();
+
+          let navError: string | undefined;
+          await page
+            .goto(url, {
+              waitUntil: "domcontentloaded",
+              timeout: Math.max(5_000, capped(waitMs, deadline)),
+            })
+            .catch((err: any) => {
+              navError = err?.message ?? String(err);
+            });
+          // A page that never moved is a genuine failure; one that moved and merely took
+          // an odd route there (a challenge redirect aborts the first load) is not
+          if (navError && page.url() === from)
+            throw new Error(`could not open ${url} (${navError})`);
+          await waitForPageReady(page, Math.min(Date.now() + waitMs, deadline));
+
+          // Navigating is what makes a site raise a challenge, so it is worked here rather
+          // than left for the steps that follow to run into
+          if ((await run.hooks.solveChallenge?.()) === false)
+            throw new Error("a Cloudflare challenge on the new page could not be passed");
+
+          log.outcome =
+            `opened ${page.url()}` + (navError ? ` (navigation warning: ${navError})` : "");
+          break;
+        }
+
+        case "web_back": {
+          const waitMs = step.waitMs && step.waitMs > 0 ? step.waitMs : 30_000;
+          const from = page.url();
+          let navError: string | undefined;
+          await page
+            .goBack({
+              waitUntil: "domcontentloaded",
+              timeout: Math.max(5_000, capped(waitMs, deadline)),
+            })
+            .catch((err: any) => {
+              navError = err?.message ?? String(err);
+            });
+          if (page.url() === from)
+            throw new Error(
+              navError
+                ? `could not go back (${navError})`
+                : "there was no previous page to go back to",
+            );
+          await waitForPageReady(page, Math.min(Date.now() + waitMs, deadline));
+          if ((await run.hooks.solveChallenge?.()) === false)
+            throw new Error("a Cloudflare challenge on the previous page could not be passed");
+          log.outcome = `went back to ${page.url()}`;
+          break;
+        }
+
         case "ai_web_button":
         case "ai_web_input": {
           if (!hooks.aiLocate) throw new Error("no AI model is configured for this step");
@@ -2101,7 +2554,14 @@ export async function runWebSteps(
           if (!marked) throw new Error("the page could not be captured for the AI");
 
           const wantText = wantInput && !step.text?.trim();
-          const prompt = buildWebAiPrompt(step, marks, wantText);
+          // A hint takes the round's values, so it can hand the model the post being replied
+          // to as text -- what a `web_read` put in `{postText}` -- rather than leaving it to
+          // make the wording out in a screenshot of the page
+          const prompt = buildWebAiPrompt(
+            { ...step, hint: fillVars(step.hint ?? "", run.current) },
+            marks,
+            wantText,
+          );
           log.aiPrompt = prompt;
           const reply = await hooks.aiLocate(marked, prompt);
           log.aiResponse = reply;
@@ -2121,7 +2581,7 @@ export async function runWebSteps(
             break;
           }
 
-          const typed = step.text?.trim() ? step.text : aiText;
+          const typed = step.text?.trim() ? fillVars(step.text, run.current) : aiText;
           if (!typed) throw new Error("the AI did not say what to type, and no text was configured");
           if (!(await typeInto(page, selector, typed)))
             throw new Error(`marker ${mark} (${what}) could not be typed into`);
@@ -2218,37 +2678,58 @@ export async function runWebSteps(
       }
     } catch (err: any) {
       log.error = err?.message ?? String(err);
-      failure = `${log.label}: ${log.error}`;
     }
 
-    // The page as it stands after the step, whether it worked or not -- a failed step is
-    // exactly the one whose screenshot is worth having
-    await sleep(tune.inAppStepMs, deadline);
-    if (logs.length <= MAX_WEB_SHOTS) log.screenshot = await screenshotOf(page);
-    if (marked) await clearWebMarkBadges(page);
-    if (failure) break;
+    if (!container) {
+      // The page as it stands after the step, whether it worked or not. A failed step is
+      // exactly the one whose screenshot is worth having, so those keep a small allowance
+      // of their own past the cap -- a loop's rounds would otherwise spend it all.
+      await sleep(tune.inAppStepMs, deadline);
+      if (run.shots < MAX_WEB_SHOTS || (log.error && run.shots < MAX_WEB_SHOTS + 8)) {
+        log.screenshot = await screenshotOf(page);
+        if (log.screenshot) run.shots++;
+      }
+      if (marked) await clearWebMarkBadges(page);
+    }
+    if (log.error) return `${log.label}: ${log.error}`;
   }
 
-  // Let the last step's request round-trip before the page text is read
-  if (logs.length) await sleep(tune.inAppSettleMs, deadline);
-  return { logs, ok: !failure, failure };
+  return undefined;
 }
 
 /** What the step is trying to do, for the log line. */
-function describeWebStep(step: WebStep): string {
+function describeWebStep(step: WebStep, run: WebStepRun): string {
+  const fill = (text: string) => fillVars(text, run.current);
   switch (step.type) {
     case "web_button":
-      return `Press \`${step.selector}\``;
+      return `Press \`${fill(step.selector)}\``;
     case "web_input":
-      return `Type into \`${step.selector}\``;
+      return `Type into \`${fill(step.selector)}\``;
     case "web_delay":
       return `Wait ${Math.round((step.waitMs || 0) / 1000)}s`;
     case "web_scroll":
       return `Scroll ${Math.round(step.x || 0)},${Math.round(step.y || 0)}px`;
     case "web_wait_element":
-      return `Wait for \`${step.selector}\``;
+      return `Wait for \`${fill(step.selector)}\``;
     case "web_turnstile":
       return "Press the Turnstile checkbox";
+    case "web_pick":
+      return `Pick one \`${fill(step.selector)}\`${step.attribute?.trim() ? ` [${step.attribute.trim()}]` : ""} into {${step.varName}}`;
+    case "web_read":
+      return `Read \`${fill(step.selector)}\` into {${step.varName}}`;
+    case "web_repeat":
+      return `Repeat ${step.steps?.length ?? 0} step(s) ${Math.floor(step.times || 0)} time(s)`;
+    case "web_if": {
+      const what =
+        step.check === "element"
+          ? `\`${fill(step.selector ?? "")}\``
+          : `"${fill(step.text ?? "")}" in the ${step.check === "url" ? "address" : "page text"}`;
+      return `If ${what} is ${step.negate ? "not " : ""}there, run ${step.then?.length ?? 0} step(s), else ${step.otherwise?.length ?? 0}`;
+    }
+    case "web_goto":
+      return `Go to ${fill(step.url)}`;
+    case "web_back":
+      return "Go back";
     case "ai_web_button":
       return `AI presses a control${step.hint?.trim() ? ` (${step.hint.trim()})` : ""}`;
     case "ai_web_input":
@@ -2278,8 +2759,9 @@ function buildWebAiPrompt(
     "",
     wantText
       ? 'Reply with ONLY a JSON object: {"mark": <number>, "text": "<the text to type>"}. ' +
-        "Work out the text from the page itself, for example the answer to a question it asks " +
-        "or the characters shown in a captcha image."
+        "Work out the text from the page itself: the answer to a question it asks, the " +
+        "characters shown in a captcha image, or whatever the description above asks for -- " +
+        "a description can say both which field to use and what belongs in it."
       : 'Reply with ONLY a JSON object: {"mark": <number>}.',
     "No explanation, no code fences.",
   ].join("\n");
@@ -2635,7 +3117,7 @@ async function attemptLoad(
   try {
     // The clock and language of the exit are launch flags, so this settles them before
     // anything on the target is loaded
-    launched = await launchAlignedBrowser(proxyUrl, budgetDeadline);
+    launched = await launchAlignedBrowser(proxyUrl, budgetDeadline, opts.profileScope);
     launchOk = true;
     browserTier = launched.tier;
     const page = launched.page;
@@ -2762,6 +3244,12 @@ async function attemptLoad(
     if (opts.webSteps?.length && solved) {
       const run = await runWebSteps(page, opts.webSteps, budgetDeadline, {
         aiLocate: opts.aiLocate,
+        usedValues: opts.usedValues,
+        markUsed: opts.markUsed,
+        // A `web_goto` lands on a page that may have its own challenge, and the solver for
+        // this attempt is right here -- so the steps work it through rather than the run
+        // only noticing once every step has already failed against an interstitial
+        solveChallenge,
       });
       webSteps = run.logs;
       webFailure = run.failure;

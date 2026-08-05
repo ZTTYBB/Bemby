@@ -470,6 +470,8 @@ export type CustomAction =
       proxyId?: string;
       /** Work through the rest of the proxy list when an exit is refused. */
       tryAllProxies?: boolean;
+      /** Give this job its own browser profile, so its cookies (a login) are private to it. */
+      ownProfile?: boolean;
     }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
 
@@ -481,6 +483,35 @@ export type WebStep =
   | { type: "web_scroll"; x?: number; y?: number }
   | { type: "web_wait_element"; selector: string; waitMs?: number }
   | { type: "web_turnstile" }
+  | {
+      type: "web_if";
+      check: "element" | "text" | "url";
+      selector?: string;
+      text?: string;
+      negate?: boolean;
+      waitMs?: number;
+      then?: WebStep[];
+      otherwise?: WebStep[];
+    }
+  | {
+      type: "web_repeat";
+      times: number;
+      steps?: WebStep[];
+      continueOnError?: boolean;
+      betweenMs?: number;
+    }
+  | {
+      type: "web_pick";
+      selector: string;
+      varName: string;
+      attribute?: string;
+      pattern?: string;
+      choose?: "first" | "random";
+      skipUsed?: boolean;
+    }
+  | { type: "web_read"; selector: string; varName: string; maxChars?: number }
+  | { type: "web_goto"; url: string; waitMs?: number }
+  | { type: "web_back"; waitMs?: number }
   | { type: "ai_web_button"; hint?: string }
   | { type: "ai_web_click_xy"; hint?: string }
   | { type: "ai_web_input"; hint?: string; text?: string };
@@ -489,6 +520,8 @@ export type WebStep =
 export type WebStepLog = {
   type: WebStep["type"];
   label: string;
+  /** Which round of a `web_for_each` this step belongs to, e.g. `2/5 859148`. */
+  iteration?: string;
   outcome?: string;
   error?: string;
   screenshot?: string;

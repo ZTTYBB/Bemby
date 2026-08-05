@@ -256,6 +256,15 @@ export type CustomAction =
       proxyId?: string;
       /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
       tryAllProxies?: boolean;
+      /**
+       * Give this job its own browser profile, rather than sharing the one every job on this
+       * exit uses. Cookies live in the profile, so this is what keeps a login to itself: two
+       * accounts going out through the same exit would otherwise share one session and
+       * overwrite each other. On for anything that logs in; off (the default) shares the
+       * exit's profile, which is better for a `cf_clearance` that is worth pooling and keeps
+       * the number of profiles on disk down.
+       */
+      ownProfile?: boolean;
     }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
 
@@ -268,6 +277,18 @@ export type CustomAction =
  * on a real element. `ai_web_click_xy` asks for a position instead, for what that cannot
  * reach: a control inside a cross-origin iframe or a closed shadow root (a Turnstile
  * checkbox), or one painted on a canvas, none of which any selector can number.
+ *
+ * `web_if` branches on what is on the page, which is what lets a job log in only when it has
+ * to. The browser keeps one profile per exit, so the session cookie a login leaves behind is
+ * still there on the next run -- and a site that rations logins does not want another one.
+ *
+ * `web_repeat` and `web_pick` are the pair that works a list the way a person does. The loop
+ * runs a set number of rounds, and each round loads the list afresh and picks one value off
+ * it -- rather than reading the whole list once at the start and working down a copy. That is
+ * the point: a forum's front page moves while the job is on it, so a list collected up front
+ * goes stale, and a round that falls over does not cost the post it was working on. `web_pick`
+ * leaves out what has already been replied to, both on earlier runs and earlier rounds of
+ * this one, and `{name}` in any later field of the round stands for what it chose.
  */
 export type WebStep =
   | {
@@ -309,6 +330,118 @@ export type WebStep =
       waitMs?: number;
     }
   | {
+      /**
+       * Run one set of steps or another, going on what the page shows. The obvious use is a
+       * login: ask whether the site still knows this browser, and only fill the form in when
+       * it does not.
+       */
+      type: "web_if";
+      /**
+       * What to look at: an element the page holds, the words on it, or the address the
+       * browser is on.
+       */
+      check: "element" | "text" | "url";
+      /** CSS selector, for `element`. It must have a box on screen to count as there. */
+      selector?: string;
+      /** Words to look for, for `text` and `url`. Case is ignored. */
+      text?: string;
+      /** Run `then` when the condition is *not* met instead, e.g. "if not logged in". */
+      negate?: boolean;
+      /**
+       * How long to give the condition before calling it unmet. Blank/0 waits 5s. Worth
+       * having: a page that has only just loaded may not have drawn the thing being looked
+       * for yet, and calling it absent too early takes the wrong branch.
+       */
+      waitMs?: number;
+      /** Steps run when the condition holds. */
+      then?: WebStep[];
+      /** Steps run when it does not. Blank simply carries on with the steps after the `if`. */
+      otherwise?: WebStep[];
+    }
+  | {
+      /**
+       * Run the sub-steps a set number of times. Nothing is iterated over: each round is a
+       * fresh pass, which is what lets a round load the list again and pick off it. A loop
+       * cannot go inside another loop, though it may go inside an `if`.
+       */
+      type: "web_repeat";
+      /** How many rounds to run. */
+      times: number;
+      /** Steps run per round, in order. */
+      steps?: WebStep[];
+      /** Carry on with the next round when one fails. Defaults to true. */
+      continueOnError?: boolean;
+      /** Wait between rounds, so the site is not hit as fast as the browser can go. */
+      betweenMs?: number;
+    }
+  | {
+      /**
+       * Pick one value off the page and hold it under a name for the rest of the round,
+       * written `{name}` in any field of the steps that follow. Run inside a `web_repeat`,
+       * against a list that has just been loaded: what it chooses is what the round works on.
+       */
+      type: "web_pick";
+      /** Matches every candidate, e.g. `.post-list-item .post-title a`. */
+      selector: string;
+      /** Name to hold the chosen value under. */
+      varName: string;
+      /** Attribute to read from each match, e.g. `href`. Blank reads the element's text. */
+      attribute?: string;
+      /**
+       * Regular expression narrowing each value down to the part worth keeping, e.g.
+       * `/post-(\d+)` against an href. Capture group 1 is kept when there is one, otherwise
+       * the whole match; a value the expression does not match is dropped. Blank keeps the
+       * value as read.
+       */
+      pattern?: string;
+      /**
+       * Which of the usable candidates to take. `first` is the top of the list and is
+       * predictable; `random` spreads the choice about, which is both more like a person
+       * reading a forum and less likely to keep retrying whatever sits at the top.
+       * Defaults to `first`.
+       */
+      choose?: "first" | "random";
+      /**
+       * Leave out what this job has already been through, and remember the chosen value once
+       * the round finishes cleanly. Kept per job, so another account's copy of the job still
+       * has the whole page to choose from. Rounds earlier in this same run are left out too,
+       * which is what stops two of them landing on the same post before either has been
+       * written down. Off, the pick is free to find the same value every round -- which is
+       * what one naming a control on the page rather than a post wants.
+       */
+      skipUsed?: boolean;
+    }
+  | {
+      /**
+       * Read text off the page and hold it under a name, written `{name}` in any later field
+       * of the round -- an AI hint, most usefully, so the model is given the post it is
+       * replying to as text rather than having to make it out in a screenshot.
+       */
+      type: "web_read";
+      /** Matches what to read; the first match is used, e.g. `.post-content`. */
+      selector: string;
+      /** Name to hold the text under. */
+      varName: string;
+      /** Cut the text to this many characters. Blank/0 keeps 1000. */
+      maxChars?: number;
+    }
+  | {
+      /**
+       * Go to another address in the same browser, so whatever the page steps have already
+       * logged into stays logged in. `{name}` is filled in from the loop's current value.
+       */
+      type: "web_goto";
+      url: string;
+      /** How long to wait for the page. Blank/0 waits 30s. */
+      waitMs?: number;
+    }
+  | {
+      /** Go back to the previous page, as the browser's back button does. */
+      type: "web_back";
+      /** How long to wait for the page to come back. Blank/0 waits 30s. */
+      waitMs?: number;
+    }
+  | {
       /** AI reads a screenshot and decides which control to press. */
       type: "ai_web_button";
       /** Optional steer, e.g. "the login button". Blank lets the AI judge on its own. */
@@ -347,6 +480,8 @@ export type WebStepLog = {
   type: WebStep["type"];
   /** What was attempted, e.g. `web_button css: #login`. */
   label: string;
+  /** Which round of a `web_for_each` this step belongs to, e.g. `2/5 859148`. */
+  iteration?: string;
   /** What happened, e.g. the element pressed or the text typed. */
   outcome?: string;
   error?: string;

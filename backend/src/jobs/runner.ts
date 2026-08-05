@@ -147,7 +147,7 @@ export async function runJob(
   let lastError: unknown;
   // Browser exits refused during this run, shared by every attempt below: retrying a
   // proxy Cloudflare has already turned down only replays the refusal
-  const cfRun = newCfRunState();
+  const cfRun = newCfRunState(job.id);
 
   for (let attempt = 1; attempt <= job.retryMax; attempt++) {
     if (signal?.aborted) throw new Error("Job cancelled");

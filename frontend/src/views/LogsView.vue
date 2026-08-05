@@ -712,6 +712,9 @@
                           >
                             <div class="web-shot-head">
                               <span class="web-shot-num">{{ wi + 1 }}</span>
+                              <span v-if="w.iteration" class="web-shot-loop">{{
+                                w.iteration
+                              }}</span>
                               <span class="web-shot-type">{{
                                 t("jobs.web.type." + w.type)
                               }}</span>
@@ -1906,6 +1909,17 @@ function hasWarning(l: Log): boolean {
 
 .web-shot-type {
   font-weight: 600;
+}
+
+/* Which round of a loop the step belongs to, e.g. "2/5 859148" */
+.web-shot-loop {
+  padding: 0 5px;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 10px;
+  font-weight: 600;
+  flex: none;
 }
 
 .dev-block-pre {

@@ -34,8 +34,10 @@ describe("verifyPortalChoice", () => {
   });
 
   it("presses nothing on a page with a whole site around the widget", () => {
-    const nodeseek = ["日常", "技术", "情报", "测评", "交易", "发送验证码", "登录", "注册"];
-    expect(verifyPortalChoice(nodeseek)).toBeNull();
+    // A site's own nav, and one of its controls names verification -- so this is the case
+    // where having too many controls to be a portal has to win over a matching label
+    const siteNav = ["首页", "分类", "标签", "关于", "发送验证码", "登录", "注册"];
+    expect(verifyPortalChoice(siteNav)).toBeNull();
   });
 
   it("presses nothing when a small page names no verify control", () => {

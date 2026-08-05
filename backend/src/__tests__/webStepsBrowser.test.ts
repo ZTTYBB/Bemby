@@ -199,6 +199,178 @@ describe.skipIf(!exe)("page steps in a real browser", () => {
     60_000,
   );
 
+  // A forum index, cut down to the shape that matters: post links to read ids off, one link
+  // that is not a post, a control per post standing in for its reply form, and the body of
+  // the post a round would be replying to.
+  const LIST = `
+    <ul>
+      <li class="post-list-item"><div class="post-title"><a href="/post-859148-1">one</a></div></li>
+      <li class="post-list-item"><div class="post-title"><a href="/post-859149-1">two</a></div></li>
+      <li class="post-list-item"><div class="post-title"><a href="/user/1234">a profile</a></div></li>
+    </ul>
+    <div class="post-content">Has anyone tried this on a small VPS?</div>
+    <button id="reply-859148" onclick="window.__hits=(window.__hits||[]).concat('859148')">r1</button>
+    <button id="reply-859149" onclick="window.__hits=(window.__hits||[]).concat('859149')">r2</button>`;
+
+  const PICK_POST = {
+    type: "web_pick" as const,
+    selector: ".post-list-item a",
+    varName: "postId",
+    attribute: "href",
+    pattern: "/post-(\\d+)",
+    skipUsed: true,
+  };
+
+  it(
+    "picks a post per round and fills {postId} into the steps that follow",
+    async () => {
+      const p = await open(LIST);
+      const used: string[] = [];
+      const run = await runWebSteps(
+        p,
+        [
+          {
+            type: "web_repeat",
+            times: 2,
+            steps: [PICK_POST, { type: "web_button", selector: "#reply-{postId}" }],
+          },
+        ],
+        Date.now() + 30_000,
+        { usedValues: () => used.slice(), markUsed: (_name, value) => used.push(value) },
+      );
+
+      expect(run.ok).toBe(true);
+      // The profile link matched the selector but not the pattern, so it is not an id
+      const picks = run.logs.filter((l) => l.type === "web_pick");
+      expect(picks[0].outcome).toContain("picked 859148 for {postId}, out of 2 to choose from");
+      expect(await p.evaluate(() => (window as any).__hits)).toEqual(["859148", "859149"]);
+      // A round's steps log under it, labelled with the round and the post it settled on
+      const presses = run.logs.filter((l) => l.type === "web_button");
+      expect(presses.map((l) => l.iteration)).toEqual(["1/2 859148", "2/2 859149"]);
+      expect(presses[0].label).toBe("Press `#reply-859148`");
+      expect(used).toEqual(["859148", "859149"]);
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
+    "leaves out an id the job has already been through",
+    async () => {
+      const p = await open(LIST);
+      const used: string[] = [];
+      const run = await runWebSteps(
+        p,
+        [
+          {
+            type: "web_repeat",
+            times: 1,
+            steps: [PICK_POST, { type: "web_button", selector: "#reply-{postId}" }],
+          },
+        ],
+        Date.now() + 30_000,
+        { usedValues: () => ["859148"], markUsed: (_name, value) => used.push(value) },
+      );
+
+      expect(run.ok).toBe(true);
+      expect(run.logs[1].outcome).toContain("1 of 2 already used");
+      expect(await p.evaluate(() => (window as any).__hits)).toEqual(["859149"]);
+      expect(used).toEqual(["859149"]);
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
+    "carries on after a round that fails, and does not remember that post as used",
+    async () => {
+      // The first post picked has nothing to press, so that round cannot finish
+      const p = await open(LIST.replace(`<button id="reply-859148"`, `<button id="gone-859148"`));
+      const used: string[] = [];
+      const run = await runWebSteps(
+        p,
+        [
+          {
+            type: "web_repeat",
+            times: 2,
+            steps: [PICK_POST, { type: "web_button", selector: "#reply-{postId}" }],
+          },
+        ],
+        Date.now() + 30_000,
+        { usedValues: () => used.slice(), markUsed: (_name, value) => used.push(value) },
+      );
+
+      // One round short is not the action failing: the other post still got its reply
+      expect(run.ok).toBe(true);
+      const loop = run.logs.find((l) => l.type === "web_repeat")!;
+      expect(loop.error).toBeUndefined();
+      expect(loop.outcome).toContain("1 of 2");
+      expect(loop.outcome).toContain("1 failed");
+      expect(await p.evaluate(() => (window as any).__hits)).toEqual(["859149"]);
+      expect(used).toEqual(["859149"]);
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
+    "reads the post body off the page for a later step to quote",
+    async () => {
+      const p = await open(LIST);
+      const run = await runWebSteps(
+        p,
+        [{ type: "web_read", selector: ".post-content", varName: "postText" }],
+        Date.now() + 30_000,
+        {},
+      );
+      expect(run.ok).toBe(true);
+      expect(run.logs[0].outcome).toContain("Has anyone tried this on a small VPS?");
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
+    "refuses a loop inside a loop rather than recursing",
+    async () => {
+      const p = await open(LIST);
+      const run = await runWebSteps(
+        p,
+        [
+          {
+            type: "web_repeat",
+            times: 2,
+            steps: [{ type: "web_repeat", times: 2, steps: [{ type: "web_back" }] }],
+          },
+        ],
+        Date.now() + 30_000,
+        { usedValues: () => [] },
+      );
+
+      expect(run.ok).toBe(false);
+      expect(run.failure).toMatch(/cannot be put inside another loop/);
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
+    "fails a pick whose pattern matches none of the elements it found",
+    async () => {
+      const p = await open(LIST);
+      const run = await runWebSteps(
+        p,
+        [{ ...PICK_POST, pattern: "/thread-(\\d+)" }],
+        Date.now() + 30_000,
+        {},
+      );
+      expect(run.ok).toBe(false);
+      expect(run.logs[0].error).toContain("none of them matched");
+      await p.close();
+    },
+    60_000,
+  );
+
   it(
     "fails the step when the ruler cannot be drawn, instead of asking for a blind guess",
     async () => {
