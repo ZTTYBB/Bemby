@@ -1,80 +1,12 @@
 import { Router } from "express";
-import { db, getDefaultTgApiCredentials } from "../db/database";
-import { decryptAccountRow } from "../db/secretColumns";
-import { runJob, type JobDetailLog } from "../jobs/runner";
-import { collectRunWarnings, completedMessage } from "../jobs/runWarnings";
-import {
-  notifyJobEvent,
-  buildFailureMessage,
-  buildSuccessMessage,
-} from "../jobs/notify";
+import { db } from "../db/database";
 import { refreshScheduler } from "../scheduler";
-import type { Job, TgAccount } from "../types";
-import { registerJob, unregisterJob, registerLiveDetail, clearLiveDetail } from "../jobs/cancellation";
+import { startManualJobRun } from "../jobs/manualRun";
+import { rowToJob, type JobRow } from "../jobs/jobRows";
 import { testEmbyConnection } from "../jobs/embywatch";
 import { parsePaging, parseSort, textParam, escapeLike } from "./list-query";
 
 const router = Router();
-
-type JobRow = {
-  id: number;
-  name: string;
-  account_id: number | null;
-  job_type: string;
-  bot_username: string;
-  schedule_window_start: number;
-  schedule_window_end: number;
-  timezone: string;
-  reply_timeout_ms: number;
-  retry_max: number;
-  enabled: number;
-  created_at: string;
-  config: string | null;
-  start_command: string;
-  checkin_button: string;
-  template_id: number | null;
-  run_every_days: number;
-  run_every_days_max: number | null;
-  retired: string | null;
-  last_success_at: string | null;
-  account_name?: string;
-};
-
-type AccountRow = {
-  id: number;
-  name: string;
-  phone_number: string;
-  api_id: number | null;
-  api_hash: string | null;
-  session_string: string | null;
-  auth_status: string;
-  proxy_id: string | null;
-  disabled: number;
-  app_client_id: string | null;
-  created_at: string;
-};
-
-/** Credentials are resolved as a pair: the account's own if complete, else the global defaults. */
-function rowToAccount(row: AccountRow): TgAccount {
-  const ownCredentials =
-    row.api_id && row.api_hash
-      ? { apiId: row.api_id, apiHash: row.api_hash }
-      : null;
-  const credentials = ownCredentials ?? getDefaultTgApiCredentials();
-  return {
-    id: row.id,
-    name: row.name,
-    phoneNumber: row.phone_number,
-    apiId: credentials?.apiId ?? null,
-    apiHash: credentials?.apiHash ?? null,
-    sessionString: row.session_string,
-    authStatus: row.auth_status as TgAccount["authStatus"],
-    proxyId: row.proxy_id ?? null,
-    disabled: Boolean(row.disabled),
-    appClientId: row.app_client_id ?? null,
-    createdAt: row.created_at,
-  };
-}
 
 // Normalise a run-every-days range: min is clamped to >= 1; max is kept only
 // when it is a valid integer strictly greater than min, otherwise null (fixed).
@@ -83,32 +15,6 @@ export function normalizeRunEvery(min: unknown, max: unknown): { min: number; ma
   const hiNum = max == null || max === "" ? NaN : Math.floor(Number(max));
   const hi = Number.isFinite(hiNum) && hiNum > lo ? hiNum : null;
   return { min: lo, max: hi };
-}
-
-function rowToJob(row: JobRow): Job & { accountName?: string } {
-  return {
-    id: row.id,
-    name: row.name,
-    accountId: row.account_id ?? null,
-    accountName: row.account_name,
-    jobType: row.job_type as Job["jobType"],
-    botUsername: row.bot_username,
-    scheduleWindowStart: row.schedule_window_start,
-    scheduleWindowEnd: row.schedule_window_end,
-    timezone: row.timezone,
-    replyTimeoutMs: row.reply_timeout_ms,
-    retryMax: row.retry_max,
-    enabled: Boolean(row.enabled),
-    createdAt: row.created_at,
-    config: row.config ?? null,
-    startCommand: row.start_command || "/start",
-    checkinButton: row.checkin_button || "签到",
-    templateId: row.template_id ?? null,
-    runEveryDays: row.run_every_days ?? 1,
-    runEveryDaysMax: row.run_every_days_max ?? null,
-    retired: row.retired ?? null,
-    lastSuccessAt: row.last_success_at ?? null,
-  };
 }
 
 const JOB_SORTS: Record<string, string> = {
@@ -418,100 +324,15 @@ router.delete("/:id", (req, res) => {
   res.status(204).send();
 });
 
-// Manual trigger
+// Manual trigger. The run itself continues in the background; startManualJobRun
+// is shared with the background bulk runner.
 router.post("/:id/run", async (req, res) => {
-  const jobRow = db
-    .prepare("SELECT * FROM jobs WHERE id = ?")
-    .get(req.params.id) as JobRow | undefined;
-  if (!jobRow) {
-    res.status(404).json({ error: "Not found" });
+  const started = startManualJobRun(req.params.id);
+  if (!started.ok) {
+    res.status(started.status).json({ error: started.error });
     return;
   }
-
-  const job = rowToJob(jobRow);
-  let account: TgAccount | null = null;
-
-  if (job.jobType === "checkin" || job.jobType === "custom" || job.jobType === "autoreg") {
-    const accountRow = db
-      .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-      .get(jobRow.account_id) as AccountRow | undefined;
-    if (accountRow) decryptAccountRow(accountRow);
-    if (!accountRow?.session_string) {
-      res.status(400).json({ error: "Account is not authenticated" });
-      return;
-    }
-    account = rowToAccount(accountRow);
-    if (!account.apiId || !account.apiHash) {
-      res.status(400).json({
-        error:
-          "No API credentials available for this account. Add credentials to the account or configure global defaults in Settings.",
-      });
-      return;
-    }
-  } else if (job.accountId) {
-    // Optional linked account (e.g. embywatch) — used for notifications only; don't block if not authenticated
-    const accountRow = db
-      .prepare("SELECT * FROM tg_accounts WHERE id = ?")
-      .get(job.accountId) as AccountRow | undefined;
-    if (accountRow) decryptAccountRow(accountRow);
-    if (accountRow?.session_string) {
-      account = rowToAccount(accountRow);
-    }
-  }
-
-  const ranAt = new Date().toISOString();
-  const logResult = db
-    .prepare(
-      "INSERT INTO job_logs (job_id, ran_at, status, message, source) VALUES (?, ?, 'running', 'Manual run', 'manual')",
-    )
-    .run(job.id, ranAt);
-  const logId = logResult.lastInsertRowid;
-
-  res.json({ message: "Job triggered", logId });
-
-  const detailLogs: JobDetailLog[] = [];
-  const signal = registerJob(Number(logId));
-  registerLiveDetail(Number(logId), detailLogs);
-  runJob(job, account, detailLogs, signal)
-    .then(() => {
-      const detail = detailLogs.length ? JSON.stringify(detailLogs) : null;
-      const warnings = collectRunWarnings(job.jobType, detailLogs);
-      db.prepare(
-        "UPDATE job_logs SET status = 'success', message = ?, detail = ? WHERE id = ?",
-      ).run(completedMessage(warnings), detail, logId);
-      // Durable stamp; job_logs is pruned by log_retention_days. Only moves
-      // forward so a slow run finishing after a later one can't rewind it.
-      // Isolated: a failure here must not demote an otherwise successful run.
-      try {
-        db.prepare(
-          `UPDATE jobs SET last_success_at = ?
-           WHERE id = ? AND (last_success_at IS NULL OR last_success_at < ?)`,
-        ).run(ranAt, job.id, ranAt);
-      } catch (e) {
-        console.warn(`[jobs] "${job.name}" last_success_at stamp failed:`, e);
-      }
-      void notifyJobEvent(
-        "success",
-        buildSuccessMessage(job.name, job.jobType),
-        account,
-      );
-    })
-    .catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      const isCancelled = message === "Job cancelled";
-      const detail = detailLogs.length ? JSON.stringify(detailLogs) : null;
-      db.prepare(
-        "UPDATE job_logs SET status = 'failed', message = ?, detail = ? WHERE id = ?",
-      ).run(isCancelled ? "Cancelled" : message, detail, logId);
-      if (!isCancelled) {
-        void notifyJobEvent(
-          "failed",
-          buildFailureMessage(job.name, job.jobType, message),
-          account,
-        );
-      }
-    })
-    .finally(() => { unregisterJob(Number(logId)); clearLiveDetail(Number(logId)); });
+  res.json({ message: "Job triggered", logId: started.logId });
 });
 
 export default router;

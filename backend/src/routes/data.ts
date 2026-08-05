@@ -85,6 +85,12 @@ type AccountRow = {
   session_string: string | null;
   auth_status: string;
   proxy_id: string | null;
+  app_client_id: string | null;
+  disabled: number;
+  sort_order: number;
+  tg_display_name: string | null;
+  tg_username: string | null;
+  notes: string | null;
   passkey: string | null;
   additional_attributes: string | null;
 };
@@ -105,6 +111,10 @@ type JobRow = {
   config: string | null;
   start_command: string;
   checkin_button: string;
+  run_every_days: number;
+  run_every_days_max: number | null;
+  retired: string | null;
+  last_success_at: string | null;
 };
 
 type TemplateRow = {
@@ -115,9 +125,12 @@ type TemplateRow = {
   timezone: string;
   reply_timeout_ms: number;
   retry_max: number;
+  enabled: number;
   config: string | null;
   start_command: string;
   checkin_button: string;
+  run_every_days: number;
+  run_every_days_max: number | null;
 };
 
 type SettingRow = { key: string; value: string };
@@ -148,6 +161,12 @@ export type ExportPayload = {
     sessionString: string | null;
     authStatus: string;
     proxyId?: string | null;
+    appClientId?: string | null;
+    disabled?: boolean;
+    sortOrder?: number | null;
+    tgDisplayName?: string | null;
+    tgUsername?: string | null;
+    notes?: string | null;
     // Passkey secret and generic flags travel inline with the account so nothing needs
     // remapping on import (a raw settings blob would keep stale, detached account ids).
     passkey?: StoredPasskey | null;
@@ -160,9 +179,12 @@ export type ExportPayload = {
     timezone: string;
     replyTimeoutMs: number;
     retryMax: number;
+    enabled?: boolean;
     config: string | null;
     startCommand: string;
     checkinButton: string;
+    runEveryDays?: number;
+    runEveryDaysMax?: number | null;
   }>;
   jobs: Array<{
     /** Index into the accounts array; null for jobs that don't require an account */
@@ -181,6 +203,12 @@ export type ExportPayload = {
     config: string | null;
     startCommand: string;
     checkinButton: string;
+    runEveryDays?: number;
+    runEveryDaysMax?: number | null;
+    /** ISO timestamp when the job was retired (archived); null for live jobs. */
+    retired?: string | null;
+    /** Last successful run, which the run-every-days spacing is measured from. */
+    lastSuccessAt?: string | null;
   }>;
   aiSuppliers?: Array<{
     name: string;
@@ -279,6 +307,12 @@ router.post('/export', (req, res) => {
       sessionString: a.session_string,
       authStatus: a.auth_status,
       proxyId: a.proxy_id ?? null,
+      appClientId: a.app_client_id ?? null,
+      disabled: Boolean(a.disabled),
+      sortOrder: a.sort_order ?? 0,
+      tgDisplayName: a.tg_display_name ?? null,
+      tgUsername: a.tg_username ?? null,
+      notes: a.notes ?? null,
       passkey: parseStoredPasskey(a.passkey),
       additionalAttributes: parseAttributes(a.additional_attributes),
     })),
@@ -289,9 +323,12 @@ router.post('/export', (req, res) => {
       timezone: t.timezone,
       replyTimeoutMs: t.reply_timeout_ms,
       retryMax: t.retry_max,
+      enabled: t.enabled === 1,
       config: t.config,
       startCommand: t.start_command,
       checkinButton: t.checkin_button,
+      runEveryDays: t.run_every_days ?? 1,
+      runEveryDaysMax: t.run_every_days_max ?? null,
     })),
     jobs: jobs.map(j => ({
       accountIndex: j.account_id != null ? (accountIdToIndex.get(j.account_id) ?? null) : null,
@@ -308,6 +345,10 @@ router.post('/export', (req, res) => {
       config: j.config,
       startCommand: j.start_command,
       checkinButton: j.checkin_button,
+      runEveryDays: j.run_every_days ?? 1,
+      runEveryDaysMax: j.run_every_days_max ?? null,
+      retired: j.retired ?? null,
+      lastSuccessAt: j.last_success_at ?? null,
     })),
     aiSuppliers: aiSuppliers.map(s => ({
       name: s.name,
@@ -428,13 +469,21 @@ router.post('/import', async (req, res) => {
       }
 
       const result = db.prepare(
-        `INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tg_accounts
+           (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id,
+            app_client_id, disabled, sort_order, tg_display_name, tg_username, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         a.name, a.phoneNumber, a.apiId, encryptSecret(a.apiHash),
         encryptSecret(forceReauth ? null : (a.sessionString ?? null)),
         forceReauth ? 'unauthenticated' : (a.authStatus ?? 'unauthenticated'),
         a.proxyId ?? null,
+        a.appClientId ?? null,
+        a.disabled ? 1 : 0,
+        Number.isFinite(Number(a.sortOrder)) ? Number(a.sortOrder) : 0,
+        a.tgDisplayName ?? null,
+        a.tgUsername ?? null,
+        a.notes ?? null,
       );
 
       const newAccountId = result.lastInsertRowid as number;
@@ -466,8 +515,9 @@ router.post('/import', async (req, res) => {
 
         const result = db.prepare(
           `INSERT INTO job_templates
-             (name, job_type, bot_username, timezone, reply_timeout_ms, retry_max, config, start_command, checkin_button)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (name, job_type, bot_username, timezone, reply_timeout_ms, retry_max, enabled, config,
+              start_command, checkin_button, run_every_days, run_every_days_max)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           t.name,
           t.jobType ?? 'checkin',
@@ -475,9 +525,13 @@ router.post('/import', async (req, res) => {
           t.timezone ?? '',
           t.replyTimeoutMs ?? 40000,
           t.retryMax ?? 5,
+          // Older backups carry no template enabled flag; those templates were usable
+          t.enabled === false ? 0 : 1,
           t.config ?? null,
           t.startCommand ?? '/start',
           t.checkinButton ?? '签到',
+          t.runEveryDays ?? 1,
+          t.runEveryDaysMax ?? null,
         );
 
         templateIndexToId.set(i, result.lastInsertRowid as number);
@@ -493,8 +547,9 @@ router.post('/import', async (req, res) => {
       db.prepare(
         `INSERT INTO jobs
            (account_id, template_id, name, job_type, bot_username, schedule_window_start, schedule_window_end,
-            timezone, reply_timeout_ms, retry_max, enabled, config, start_command, checkin_button)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            timezone, reply_timeout_ms, retry_max, enabled, config, start_command, checkin_button,
+            run_every_days, run_every_days_max, retired, last_success_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         resolvedAccountId,
         resolvedTemplateId,
@@ -510,6 +565,11 @@ router.post('/import', async (req, res) => {
         j.config ?? null,
         j.startCommand ?? '/start',
         j.checkinButton ?? '签到',
+        j.runEveryDays ?? 1,
+        j.runEveryDaysMax ?? null,
+        // A retired job must not come back live; older backups have no such jobs
+        j.retired ?? null,
+        j.lastSuccessAt ?? null,
       );
       results.jobsImported++;
     }

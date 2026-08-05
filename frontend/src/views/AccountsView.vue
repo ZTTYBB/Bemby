@@ -1846,7 +1846,7 @@
         </h3>
 
         <!-- Config step -->
-        <template v-if="!bulkEmailRunning && !bulkEmailDoneAll">
+        <template v-if="!bulkEmailTask">
           <div v-if="!bulkEmailTargets.length" class="warn-box">
             {{ t("accounts.bulkEmail.noTargets") }}
           </div>
@@ -1970,59 +1970,8 @@
           </div>
         </template>
 
-        <!-- Progress step -->
-        <template v-else>
-          <div class="bulk-add-progress-head">
-            <span>
-              {{ t("accounts.bulkEmail.progressLabel") }}:
-              {{ bulkEmailDoneCount }} / {{ bulkEmailTargets.length }}
-            </span>
-            <span v-if="bulkEmailRunning" class="bulk-add-running">
-              <i class="fa-solid fa-spinner fa-spin"></i>
-              {{ t("accounts.bulkEmail.running") }}
-            </span>
-            <span v-else class="bulk-add-finished">
-              <i class="fa-solid fa-circle-check"></i>
-              {{ t("accounts.bulkAdd.finished") }}
-            </span>
-          </div>
-          <div class="bulk-add-list">
-            <div
-              v-for="item in bulkEmailProgress"
-              :key="item.id"
-              class="bulk-add-item"
-            >
-              <span
-                class="bulk-add-status-dot"
-                :class="`status-${item.status}`"
-              ></span>
-              <div class="bulk-add-item-body">
-                <div class="bulk-add-item-top">
-                  <strong>{{ item.name }}</strong>
-                  <span class="bulk-add-item-status">
-                    {{ t(`accounts.bulkEmail.status.${item.status}`) }}
-                  </span>
-                </div>
-                <div
-                  v-if="item.message"
-                  class="bulk-add-item-msg"
-                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
-                >
-                  {{ item.message }}
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button
-              class="btn btn-primary"
-              :disabled="bulkEmailRunning"
-              @click="closeBulkEmail"
-            >
-              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
-            </button>
-          </div>
-        </template>
+        <!-- Progress step -- rendered from the server-side task -->
+        <BulkTaskProgress v-else :task="bulkEmailTask" @close="closeBulkEmail" />
       </div>
     </div>
 
@@ -2035,7 +1984,7 @@
         </h3>
 
         <!-- Config step -->
-        <template v-if="!bulkCredRunning && !bulkCredDoneAll">
+        <template v-if="!bulkCredTask">
           <div v-if="!bulkCredTargets.length" class="warn-box">
             {{ t("accounts.bulkCred.noTargets") }}
           </div>
@@ -2147,59 +2096,8 @@
           </div>
         </template>
 
-        <!-- Progress step -->
-        <template v-else>
-          <div class="bulk-add-progress-head">
-            <span>
-              {{ t("accounts.bulkCred.progressLabel") }}:
-              {{ bulkCredDoneCount }} / {{ bulkCredTargets.length }}
-            </span>
-            <span v-if="bulkCredRunning" class="bulk-add-running">
-              <i class="fa-solid fa-spinner fa-spin"></i>
-              {{ t("accounts.bulkCred.running") }}
-            </span>
-            <span v-else class="bulk-add-finished">
-              <i class="fa-solid fa-circle-check"></i>
-              {{ t("accounts.bulkAdd.finished") }}
-            </span>
-          </div>
-          <div class="bulk-add-list">
-            <div
-              v-for="item in bulkCredProgress"
-              :key="item.id"
-              class="bulk-add-item"
-            >
-              <span
-                class="bulk-add-status-dot"
-                :class="`status-${item.status}`"
-              ></span>
-              <div class="bulk-add-item-body">
-                <div class="bulk-add-item-top">
-                  <strong>{{ item.name }}</strong>
-                  <span class="bulk-add-item-status">
-                    {{ t(`accounts.bulkCred.status.${item.status}`) }}
-                  </span>
-                </div>
-                <div
-                  v-if="item.message"
-                  class="bulk-add-item-msg"
-                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
-                >
-                  {{ item.message }}
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button
-              class="btn btn-primary"
-              :disabled="bulkCredRunning"
-              @click="closeBulkCred"
-            >
-              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
-            </button>
-          </div>
-        </template>
+        <!-- Progress step -- rendered from the server-side task -->
+        <BulkTaskProgress v-else :task="bulkCredTask" @close="closeBulkCred" />
       </div>
     </div>
 
@@ -2212,7 +2110,7 @@
         </h3>
 
         <!-- Config step -->
-        <template v-if="!bulkPasskeyRunning && !bulkPasskeyDoneAll">
+        <template v-if="!bulkPasskeyTask">
           <div v-if="!bulkPasskeyTargets.length" class="warn-box">
             {{ t("accounts.bulkPasskey.noTargets") }}
           </div>
@@ -2261,59 +2159,12 @@
           </div>
         </template>
 
-        <!-- Progress step -->
-        <template v-else>
-          <div class="bulk-add-progress-head">
-            <span>
-              {{ t("accounts.bulkCred.progressLabel") }}:
-              {{ bulkPasskeyDoneCount }} / {{ bulkPasskeyTargets.length }}
-            </span>
-            <span v-if="bulkPasskeyRunning" class="bulk-add-running">
-              <i class="fa-solid fa-spinner fa-spin"></i>
-              {{ t("accounts.bulkCred.running") }}
-            </span>
-            <span v-else class="bulk-add-finished">
-              <i class="fa-solid fa-circle-check"></i>
-              {{ t("accounts.bulkAdd.finished") }}
-            </span>
-          </div>
-          <div class="bulk-add-list">
-            <div
-              v-for="item in bulkPasskeyProgress"
-              :key="item.id"
-              class="bulk-add-item"
-            >
-              <span
-                class="bulk-add-status-dot"
-                :class="`status-${item.status}`"
-              ></span>
-              <div class="bulk-add-item-body">
-                <div class="bulk-add-item-top">
-                  <strong>{{ item.name }}</strong>
-                  <span class="bulk-add-item-status">
-                    {{ t(`accounts.bulkCred.status.${item.status}`) }}
-                  </span>
-                </div>
-                <div
-                  v-if="item.message"
-                  class="bulk-add-item-msg"
-                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
-                >
-                  {{ item.message }}
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button
-              class="btn btn-primary"
-              :disabled="bulkPasskeyRunning"
-              @click="closeBulkPasskey"
-            >
-              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
-            </button>
-          </div>
-        </template>
+        <!-- Progress step -- rendered from the server-side task -->
+        <BulkTaskProgress
+          v-else
+          :task="bulkPasskeyTask"
+          @close="closeBulkPasskey"
+        />
       </div>
     </div>
 
@@ -2376,7 +2227,7 @@
         </h3>
 
         <!-- Confirm step -->
-        <template v-if="!bulkCleanRunning && !bulkCleanDoneAll">
+        <template v-if="!bulkCleanTask">
           <div v-if="!bulkCleanTargets.length" class="warn-box">
             {{ t("accounts.bulkClean.noTargets") }}
           </div>
@@ -2438,59 +2289,8 @@
           </div>
         </template>
 
-        <!-- Progress step -->
-        <template v-else>
-          <div class="bulk-add-progress-head">
-            <span>
-              {{ t("accounts.bulkClean.progressLabel") }}:
-              {{ bulkCleanDoneCount }} / {{ bulkCleanTargets.length }}
-            </span>
-            <span v-if="bulkCleanRunning" class="bulk-add-running">
-              <i class="fa-solid fa-spinner fa-spin"></i>
-              {{ t("accounts.bulkClean.running") }}
-            </span>
-            <span v-else class="bulk-add-finished">
-              <i class="fa-solid fa-circle-check"></i>
-              {{ t("accounts.bulkAdd.finished") }}
-            </span>
-          </div>
-          <div class="bulk-add-list">
-            <div
-              v-for="item in bulkCleanProgress"
-              :key="item.id"
-              class="bulk-add-item"
-            >
-              <span
-                class="bulk-add-status-dot"
-                :class="`status-${item.status}`"
-              ></span>
-              <div class="bulk-add-item-body">
-                <div class="bulk-add-item-top">
-                  <strong>{{ item.name }}</strong>
-                  <span class="bulk-add-item-status">
-                    {{ t(`accounts.bulkClean.status.${item.status}`) }}
-                  </span>
-                </div>
-                <div
-                  v-if="item.message"
-                  class="bulk-add-item-msg"
-                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
-                >
-                  {{ item.message }}
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button
-              class="btn btn-primary"
-              :disabled="bulkCleanRunning"
-              @click="closeBulkClean"
-            >
-              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
-            </button>
-          </div>
-        </template>
+        <!-- Progress step -- rendered from the server-side task -->
+        <BulkTaskProgress v-else :task="bulkCleanTask" @close="closeBulkClean" />
       </div>
     </div>
 
@@ -2503,7 +2303,7 @@
         </h3>
 
         <!-- Confirm step -->
-        <template v-if="!bulkFetchRunning && !bulkFetchDoneAll">
+        <template v-if="!bulkFetchTask">
           <div v-if="!bulkFetchTargets.length" class="warn-box">
             {{ t("accounts.bulkFetch.noTargets") }}
           </div>
@@ -2552,59 +2352,8 @@
           </div>
         </template>
 
-        <!-- Progress step -->
-        <template v-else>
-          <div class="bulk-add-progress-head">
-            <span>
-              {{ t("accounts.bulkFetch.progressLabel") }}:
-              {{ bulkFetchDoneCount }} / {{ bulkFetchTargets.length }}
-            </span>
-            <span v-if="bulkFetchRunning" class="bulk-add-running">
-              <i class="fa-solid fa-spinner fa-spin"></i>
-              {{ t("accounts.bulkFetch.running") }}
-            </span>
-            <span v-else class="bulk-add-finished">
-              <i class="fa-solid fa-circle-check"></i>
-              {{ t("accounts.bulkAdd.finished") }}
-            </span>
-          </div>
-          <div class="bulk-add-list">
-            <div
-              v-for="item in bulkFetchProgress"
-              :key="item.id"
-              class="bulk-add-item"
-            >
-              <span
-                class="bulk-add-status-dot"
-                :class="`status-${item.status}`"
-              ></span>
-              <div class="bulk-add-item-body">
-                <div class="bulk-add-item-top">
-                  <strong>{{ item.name }}</strong>
-                  <span class="bulk-add-item-status">
-                    {{ t(`accounts.bulkFetch.status.${item.status}`) }}
-                  </span>
-                </div>
-                <div
-                  v-if="item.message"
-                  class="bulk-add-item-msg"
-                  :class="item.status === 'failed' ? 'bulk-add-item-error' : ''"
-                >
-                  {{ item.message }}
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button
-              class="btn btn-primary"
-              :disabled="bulkFetchRunning"
-              @click="closeBulkFetch"
-            >
-              <i class="fa-solid fa-check"></i> {{ t("common.close") }}
-            </button>
-          </div>
-        </template>
+        <!-- Progress step -- rendered from the server-side task -->
+        <BulkTaskProgress v-else :task="bulkFetchTask" @close="closeBulkFetch" />
       </div>
     </div>
 
@@ -2816,11 +2565,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from "vue";
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from "vue";
 import {
   accountsApi,
+  bulkTasksApi,
   settingsApi,
-  tgClientApi,
   type Account,
   type Proxy,
   type TgAppClient,
@@ -2838,7 +2587,15 @@ import { t, locale } from "../i18n";
 import { usePersistedRef } from "../composables/usePersistedRef";
 import { phoneCountry } from "../utils/phoneCountry";
 import { debounce } from "../composables/useDebounce";
+import {
+  onBulkTaskFinished,
+  runningTaskOfKind,
+  startBulkTaskPolling,
+  taskById,
+  trackStartedTask,
+} from "../composables/bulkTasks";
 import PaginationBar from "../components/PaginationBar.vue";
+import BulkTaskProgress from "../components/BulkTaskProgress.vue";
 
 const accounts = ref<Account[]>([]);
 
@@ -3129,9 +2886,13 @@ async function checkSpam(a: Account) {
   }
 }
 
-const spamBulkRunning = ref(false);
+// Bulk spam check runs as a background task; per-row badges are filled in from
+// its items as they land, so the list updates while the operator watches.
 const spamBulkGapSeconds = ref(30);
 const showBulkSpam = ref(false);
+const spamTaskId = ref<string | null>(null);
+const spamTask = computed(() => taskById(spamTaskId.value));
+const spamBulkRunning = computed(() => !!runningTaskOfKind("spam-check"));
 
 const bulkSpamTargetCount = computed(
   () =>
@@ -3147,103 +2908,90 @@ function openBulkSpam() {
   showBulkSpam.value = true;
 }
 
-function startBulkSpamCheck() {
-  showBulkSpam.value = false;
-  checkSpamBulk();
+async function startBulkSpamCheck() {
+  const ids = accounts.value
+    .filter(
+      (a) =>
+        selectedIds.value.has(a.id) &&
+        a.authStatus === "authenticated" &&
+        !a.disabled,
+    )
+    .map((a) => a.id);
+  if (!ids.length) return;
+  try {
+    const task = await bulkTasksApi.spamCheck(ids, spamBulkGapSeconds.value);
+    trackStartedTask(task);
+    spamTaskId.value = task.id;
+    showBulkSpam.value = false;
+  } catch (err: any) {
+    alert(err.response?.data?.error ?? t("bulkTasks.startFailed"));
+  }
 }
 
-async function checkSpamBulk() {
-  if (spamBulkRunning.value) return;
-  const targets = accounts.value.filter(
-    (a) =>
-      selectedIds.value.has(a.id) &&
-      a.authStatus === "authenticated" &&
-      !a.disabled,
-  );
-  if (!targets.length) return;
-  spamBulkRunning.value = true;
-  const gapMs = Math.max(0, spamBulkGapSeconds.value) * 1000;
-  // Run sequentially to avoid Telegram flood limits
-  for (let i = 0; i < targets.length; i++) {
-    await checkSpam(targets[i]);
-    if (i < targets.length - 1 && gapMs > 0) await sleep(gapMs);
-  }
-  spamBulkRunning.value = false;
-}
+// Mirror finished spam results onto the rows: the badge and the persisted
+// restriction flag, exactly as a single check does.
+watch(
+  () => spamTask.value?.items.map((i) => `${i.refId}:${i.status}`).join(","),
+  () => {
+    for (const item of spamTask.value?.items ?? []) {
+      if (item.status === "failed") {
+        spamStatuses.set(item.refId, {
+          spamStatus: "unknown",
+          rawMessage: item.error ?? t("bulkTasks.itemStatus.failed"),
+        });
+        continue;
+      }
+      if (item.status !== "done") continue;
+      const status = (item.data?.spamStatus ??
+        "unknown") as TgSpamStatus["spamStatus"];
+      spamStatuses.set(item.refId, { spamStatus: status, rawMessage: item.message });
+      const account = accounts.value.find((a) => a.id === item.refId);
+      if (!account) continue;
+      const attrs = { ...(account.attributes ?? {}) };
+      if (status === "free") delete attrs.restriction;
+      else if (status !== "unknown") attrs.restriction = status;
+      account.attributes = attrs;
+    }
+  },
+);
 
 // ── Bulk fetch attributes state ───────────────────────────────────────────────
 // Refreshes TG meta + extra attributes (name, username, hasEmail, hasPasskey) for
 // each selected authenticated account. Read-only; excludes the spam check.
-type BulkFetchStatus = "pending" | "fetching" | "done" | "failed";
-type BulkFetchItem = {
-  id: number;
-  name: string;
-  status: BulkFetchStatus;
-  message: string;
-};
-
 const showBulkFetch = ref(false);
-const bulkFetchRunning = ref(false);
-const bulkFetchDoneAll = ref(false);
 const bulkFetchTargets = ref<Account[]>([]);
-const bulkFetchProgress = ref<BulkFetchItem[]>([]);
 const bulkFetchGapSeconds = ref(5);
-
-const bulkFetchDoneCount = computed(
-  () =>
-    bulkFetchProgress.value.filter(
-      (i) => i.status === "done" || i.status === "failed",
-    ).length,
-);
+const bulkFetchTaskId = ref<string | null>(null);
+const bulkFetchTask = computed(() => taskById(bulkFetchTaskId.value));
+const bulkFetchRunning = computed(() => !!runningTaskOfKind("fetch-attributes"));
 
 function openBulkFetch() {
   bulkFetchTargets.value = accounts.value.filter(
     (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
   );
-  bulkFetchRunning.value = false;
-  bulkFetchDoneAll.value = false;
-  bulkFetchProgress.value = [];
+  // A batch still running from an earlier visit keeps showing its progress
+  bulkFetchTaskId.value = runningTaskOfKind("fetch-attributes")?.id ?? null;
   showBulkFetch.value = true;
 }
 
 function closeBulkFetch() {
-  if (bulkFetchRunning.value) return;
   showBulkFetch.value = false;
+  bulkFetchTaskId.value = null;
 }
 
 async function startBulkFetch() {
-  if (!bulkFetchTargets.value.length || bulkFetchRunning.value) return;
-  bulkFetchProgress.value = bulkFetchTargets.value.map((a) => ({
-    id: a.id,
-    name: a.name,
-    status: "pending",
-    message: "",
-  }));
-  bulkFetchRunning.value = true;
-  const gapMs = Math.max(0, bulkFetchGapSeconds.value) * 1000;
-  const items = bulkFetchProgress.value;
-  // Sequential to avoid Telegram flood limits, one account at a time
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    item.status = "fetching";
-    try {
-      const r = await accountsApi.fetchAttributes(item.id);
-      // Replace the row so the Extra Info badges refresh immediately.
-      const idx = accounts.value.findIndex((x) => x.id === item.id);
-      if (idx !== -1) accounts.value[idx] = r.account;
-      item.status = "done";
-      item.message = r.warnings.length
-        ? r.warnings.join("; ")
-        : t("accounts.bulkFetch.doneMsg");
-    } catch (e: any) {
-      item.status = "failed";
-      item.message =
-        e?.response?.data?.error ?? e?.message ?? t("accounts.bulkFetch.failed");
-    }
-    if (i < items.length - 1 && gapMs > 0) await sleep(gapMs);
+  const ids = bulkFetchTargets.value.map((a) => a.id);
+  if (!ids.length) return;
+  try {
+    const task = await bulkTasksApi.fetchAttributes(
+      ids,
+      bulkFetchGapSeconds.value,
+    );
+    trackStartedTask(task);
+    bulkFetchTaskId.value = task.id;
+  } catch (e: any) {
+    alert(e.response?.data?.error ?? t("bulkTasks.startFailed"));
   }
-  bulkFetchRunning.value = false;
-  bulkFetchDoneAll.value = true;
 }
 
 // ── Status check state ────────────────────────────────────────────────────────
@@ -3917,20 +3665,11 @@ async function cancelBulkTgRename() {
 }
 
 // ── Bulk change login email state ─────────────────────────────────────────────
-type BulkEmailStatus = "pending" | "working" | "done" | "failed";
-type BulkEmailItem = {
-  id: number;
-  name: string;
-  status: BulkEmailStatus;
-  message: string;
-};
-
 const showBulkEmail = ref(false);
-const bulkEmailRunning = ref(false);
-const bulkEmailDoneAll = ref(false);
 const bulkEmailError = ref("");
 const bulkEmailTargets = ref<Account[]>([]);
-const bulkEmailProgress = ref<BulkEmailItem[]>([]);
+const bulkEmailTaskId = ref<string | null>(null);
+const bulkEmailTask = computed(() => taskById(bulkEmailTaskId.value));
 const bulkEmailForm = reactive({
   gmail: "",
   appPassword: "",
@@ -3938,18 +3677,9 @@ const bulkEmailForm = reactive({
   gapSeconds: 30,
 });
 
-// Delay helper; used to space out bulk requests and avoid Telegram flood limits.
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const bulkEmailTesting = ref(false);
 const bulkEmailTestOk = ref<boolean | null>(null);
 const bulkEmailTestMsg = ref("");
-
-const bulkEmailDoneCount = computed(
-  () =>
-    bulkEmailProgress.value.filter(
-      (i) => i.status === "done" || i.status === "failed",
-    ).length,
-);
 
 // Deterministic sample alphabets so the preview reads as a concrete example
 // without flickering on every render.
@@ -4009,21 +3739,20 @@ function openBulkEmail() {
     (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
   );
   bulkEmailError.value = "";
-  bulkEmailRunning.value = false;
-  bulkEmailDoneAll.value = false;
-  bulkEmailProgress.value = [];
   bulkEmailForm.gmail = "";
   bulkEmailForm.appPassword = "";
   bulkEmailForm.tag = "{phoneNum}";
   bulkEmailTesting.value = false;
   bulkEmailTestOk.value = null;
   bulkEmailTestMsg.value = "";
+  // A batch still running from an earlier visit keeps showing its progress
+  bulkEmailTaskId.value = runningTaskOfKind("login-email")?.id ?? null;
   showBulkEmail.value = true;
 }
 
 function closeBulkEmail() {
-  if (bulkEmailRunning.value) return;
   showBulkEmail.value = false;
+  bulkEmailTaskId.value = null;
 }
 
 async function testBulkEmailGmail() {
@@ -4060,7 +3789,6 @@ async function testBulkEmailGmail() {
 }
 
 async function startBulkEmail() {
-  if (bulkEmailRunning.value) return;
   bulkEmailError.value = "";
   if (!bulkEmailForm.gmail.includes("@")) {
     bulkEmailError.value = t("accounts.bulkEmail.errors.gmailRequired");
@@ -4080,41 +3808,22 @@ async function startBulkEmail() {
   }
   if (!bulkEmailTargets.value.length) return;
 
-  bulkEmailProgress.value = bulkEmailTargets.value.map((a) => ({
-    id: a.id,
-    name: a.name,
-    status: "pending",
-    message: "",
-  }));
-  bulkEmailRunning.value = true;
-  const gapMs = Math.max(0, bulkEmailForm.gapSeconds) * 1000;
-  const items = bulkEmailProgress.value;
-  // Sequential: each account waits for its own code to arrive in Gmail
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    item.status = "working";
-    try {
-      const r = await accountsApi.autoLoginEmail(
-        item.id,
-        bulkEmailForm.gmail,
-        bulkEmailForm.appPassword,
-        bulkEmailForm.tag,
-      );
-      item.status = "done";
-      item.message = r.email;
-    } catch (e: any) {
-      item.status = "failed";
-      item.message =
-        e?.response?.data?.error ??
-        e?.message ??
-        t("accounts.bulkEmail.errors.failed");
-    }
-    // Space out requests to avoid Telegram flood limits (skip after the last).
-    if (i < items.length - 1 && gapMs > 0) await sleep(gapMs);
+  try {
+    const task = await bulkTasksApi.loginEmail(
+      bulkEmailTargets.value.map((a) => a.id),
+      {
+        gmail: bulkEmailForm.gmail,
+        appPassword: bulkEmailForm.appPassword,
+        tag: bulkEmailForm.tag,
+      },
+      bulkEmailForm.gapSeconds,
+    );
+    trackStartedTask(task);
+    bulkEmailTaskId.value = task.id;
+  } catch (e: any) {
+    bulkEmailError.value =
+      e.response?.data?.error ?? t("bulkTasks.startFailed");
   }
-  bulkEmailRunning.value = false;
-  bulkEmailDoneAll.value = true;
-  await load();
 }
 
 // Editing the credentials invalidates a prior successful test, forcing a re-test
@@ -4128,20 +3837,11 @@ watch(
 );
 
 // ── Bulk change credential state ──────────────────────────────────────────────
-type BulkCredStatus = "pending" | "working" | "done" | "failed";
-type BulkCredItem = {
-  id: number;
-  name: string;
-  status: BulkCredStatus;
-  message: string;
-};
-
 const showBulkCred = ref(false);
-const bulkCredRunning = ref(false);
-const bulkCredDoneAll = ref(false);
 const bulkCredError = ref("");
 const bulkCredTargets = ref<Account[]>([]);
-const bulkCredProgress = ref<BulkCredItem[]>([]);
+const bulkCredTaskId = ref<string | null>(null);
+const bulkCredTask = computed(() => taskById(bulkCredTaskId.value));
 const bulkCredForm = reactive({
   currentPassword: "",
   newPassword: "",
@@ -4152,38 +3852,29 @@ const bulkCredForm = reactive({
   gapSeconds: 30,
 });
 
-const bulkCredDoneCount = computed(
-  () =>
-    bulkCredProgress.value.filter(
-      (i) => i.status === "done" || i.status === "failed",
-    ).length,
-);
-
 // 2FA / device / passkey changes need a live (authenticated) session.
 function openBulkCred() {
   bulkCredTargets.value = accounts.value.filter(
     (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
   );
   bulkCredError.value = "";
-  bulkCredRunning.value = false;
-  bulkCredDoneAll.value = false;
-  bulkCredProgress.value = [];
   bulkCredForm.currentPassword = "";
   bulkCredForm.newPassword = "";
   bulkCredForm.repeatPassword = "";
   bulkCredForm.removeDevices = false;
   bulkCredForm.removePasskeys = false;
   bulkCredForm.notesAppend = "";
+  // A batch still running from an earlier visit keeps showing its progress
+  bulkCredTaskId.value = runningTaskOfKind("credentials")?.id ?? null;
   showBulkCred.value = true;
 }
 
 function closeBulkCred() {
-  if (bulkCredRunning.value) return;
   showBulkCred.value = false;
+  bulkCredTaskId.value = null;
 }
 
 async function startBulkCred() {
-  if (bulkCredRunning.value) return;
   bulkCredError.value = "";
   if (!bulkCredForm.newPassword) {
     bulkCredError.value = t("accounts.bulkCred.errors.newPasswordRequired");
@@ -4195,177 +3886,65 @@ async function startBulkCred() {
   }
   if (!bulkCredTargets.value.length) return;
 
-  const append = bulkCredForm.notesAppend.trim();
-  bulkCredProgress.value = bulkCredTargets.value.map((a) => ({
-    id: a.id,
-    name: a.name,
-    status: "pending",
-    message: "",
-  }));
-  bulkCredRunning.value = true;
-  const gapMs = Math.max(0, bulkCredForm.gapSeconds) * 1000;
-  const items = bulkCredProgress.value;
-  // Sequential to avoid Telegram flood limits
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    item.status = "working";
-    try {
-      await accountsApi.updateTwoFa(item.id, {
+  try {
+    const task = await bulkTasksApi.credentials(
+      bulkCredTargets.value.map((a) => a.id),
+      {
         currentPassword: bulkCredForm.currentPassword || undefined,
         newPassword: bulkCredForm.newPassword,
-      });
-      const hadPasskey = !!accounts.value.find((a) => a.id === item.id)
-        ?.hasPasskey;
-      const parts = [t("accounts.bulkCred.result.twoFaChanged")];
-      if (bulkCredForm.removeDevices) {
-        await accountsApi.terminateOtherSessions(item.id);
-        parts.push(t("accounts.bulkCred.result.devicesRemoved"));
-      }
-      if (bulkCredForm.removePasskeys || hadPasskey) {
-        // storedIds is server-pruned to passkeys that still exist on Telegram.
-        const { passkeys, storedIds } = await accountsApi.getPasskeys(item.id);
-        if (bulkCredForm.removePasskeys) {
-          // Keep passkeys Bemby manages; remove all others.
-          const toRemove = passkeys.filter((pk) => !storedIds.includes(pk.id));
-          for (const pk of toRemove) {
-            await accountsApi.deletePasskey(item.id, pk.id);
-          }
-          parts.push(
-            t("accounts.bulkCred.result.passkeysRemoved").replace(
-              "{n}",
-              String(toRemove.length),
-            ),
-          );
-        }
-        // A 2FA password change drops passkeys on Telegram's side; re-add Bemby's
-        // so it survives the credential change.
-        if (hadPasskey && storedIds.length === 0) {
-          await accountsApi.registerPasskey(item.id);
-          parts.push(t("accounts.bulkCred.result.passkeyReadded"));
-        }
-      }
-      if (append) {
-        const acct = accounts.value.find((a) => a.id === item.id);
-        const base = acct?.notes ? `${acct.notes}\n` : "";
-        await accountsApi.update(item.id, { notes: base + append });
-        parts.push(t("accounts.bulkCred.result.notesUpdated"));
-      }
-      item.status = "done";
-      item.message = parts.join(", ");
-    } catch (e: any) {
-      item.status = "failed";
-      item.message =
-        e?.response?.data?.error ??
-        e?.message ??
-        t("accounts.bulkCred.errors.failed");
-    }
-    if (i < items.length - 1 && gapMs > 0) await sleep(gapMs);
+        removeDevices: bulkCredForm.removeDevices,
+        removePasskeys: bulkCredForm.removePasskeys,
+        notesAppend: bulkCredForm.notesAppend,
+      },
+      bulkCredForm.gapSeconds,
+    );
+    trackStartedTask(task);
+    bulkCredTaskId.value = task.id;
+  } catch (e: any) {
+    bulkCredError.value = e.response?.data?.error ?? t("bulkTasks.startFailed");
   }
-  bulkCredRunning.value = false;
-  bulkCredDoneAll.value = true;
-  await load();
 }
 
 // ── Bulk add passkey state ────────────────────────────────────────────────────
 const showBulkPasskey = ref(false);
-const bulkPasskeyRunning = ref(false);
-const bulkPasskeyDoneAll = ref(false);
 const bulkPasskeyTargets = ref<Account[]>([]);
-const bulkPasskeyProgress = ref<BulkCredItem[]>([]);
 const bulkPasskeyGapSeconds = ref(30);
-
-const bulkPasskeyDoneCount = computed(
-  () =>
-    bulkPasskeyProgress.value.filter(
-      (i) => i.status === "done" || i.status === "failed",
-    ).length,
-);
+const bulkPasskeyTaskId = ref<string | null>(null);
+const bulkPasskeyTask = computed(() => taskById(bulkPasskeyTaskId.value));
 
 function openBulkPasskey() {
   bulkPasskeyTargets.value = accounts.value.filter(
     (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
   );
-  bulkPasskeyRunning.value = false;
-  bulkPasskeyDoneAll.value = false;
-  bulkPasskeyProgress.value = [];
+  // A batch still running from an earlier visit keeps showing its progress
+  bulkPasskeyTaskId.value = runningTaskOfKind("passkey")?.id ?? null;
   showBulkPasskey.value = true;
 }
 
 function closeBulkPasskey() {
-  if (bulkPasskeyRunning.value) return;
   showBulkPasskey.value = false;
+  bulkPasskeyTaskId.value = null;
 }
 
 async function startBulkPasskey() {
-  if (bulkPasskeyRunning.value || !bulkPasskeyTargets.value.length) return;
-  bulkPasskeyProgress.value = bulkPasskeyTargets.value.map((a) => ({
-    id: a.id,
-    name: a.name,
-    status: "pending",
-    message: "",
-  }));
-  bulkPasskeyRunning.value = true;
-  const gapMs = Math.max(0, bulkPasskeyGapSeconds.value) * 1000;
-  const items = bulkPasskeyProgress.value;
-  // Sequential to avoid Telegram flood limits.
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    item.status = "working";
-    try {
-      const { storedIds } = await accountsApi.getPasskeys(item.id);
-      if (storedIds.length) {
-        // Already has a Bemby-managed passkey -- do not add another; verify it.
-        const v = await accountsApi.verifyPasskey(item.id, storedIds[0]);
-        if (v.ok) {
-          item.status = "done";
-          item.message = t("accounts.bulkPasskey.result.skippedValid");
-        } else {
-          item.status = "failed";
-          item.message = t("accounts.bulkPasskey.result.existingInvalid");
-        }
-      } else {
-        await accountsApi.registerPasskey(item.id);
-        item.status = "done";
-        item.message = t("accounts.bulkPasskey.result.added");
-      }
-    } catch (e: any) {
-      item.status = "failed";
-      item.message =
-        e?.response?.data?.error ??
-        e?.message ??
-        t("accounts.bulkCred.errors.failed");
-    }
-    // Space out requests to avoid Telegram flood limits (skip after the last).
-    if (i < items.length - 1 && gapMs > 0) await sleep(gapMs);
+  const ids = bulkPasskeyTargets.value.map((a) => a.id);
+  if (!ids.length) return;
+  try {
+    const task = await bulkTasksApi.passkey(ids, bulkPasskeyGapSeconds.value);
+    trackStartedTask(task);
+    bulkPasskeyTaskId.value = task.id;
+  } catch (e: any) {
+    alert(e.response?.data?.error ?? t("bulkTasks.startFailed"));
   }
-  bulkPasskeyRunning.value = false;
-  bulkPasskeyDoneAll.value = true;
-  await load();
 }
 
 // ── Bulk clean state ──────────────────────────────────────────────────────────
-type BulkCleanStatus = "pending" | "cleaning" | "done" | "failed";
-type BulkCleanItem = {
-  id: number;
-  name: string;
-  status: BulkCleanStatus;
-  message: string;
-};
-
 const showBulkClean = ref(false);
 const bulkCleanConfirmChecked = ref(false);
-const bulkCleanRunning = ref(false);
-const bulkCleanDoneAll = ref(false);
 const bulkCleanTargets = ref<Account[]>([]);
-const bulkCleanProgress = ref<BulkCleanItem[]>([]);
 const bulkCleanGapSeconds = ref(30);
-
-const bulkCleanDoneCount = computed(
-  () =>
-    bulkCleanProgress.value.filter(
-      (i) => i.status === "done" || i.status === "failed",
-    ).length,
-);
+const bulkCleanTaskId = ref<string | null>(null);
+const bulkCleanTask = computed(() => taskById(bulkCleanTaskId.value));
 
 // Clean only applies to accounts with a live (authenticated) session.
 function openBulkClean() {
@@ -4373,55 +3952,28 @@ function openBulkClean() {
     (a) => selectedIds.value.has(a.id) && a.authStatus === "authenticated",
   );
   bulkCleanConfirmChecked.value = false;
-  bulkCleanRunning.value = false;
-  bulkCleanDoneAll.value = false;
-  bulkCleanProgress.value = [];
+  // A batch still running from an earlier visit keeps showing its progress
+  bulkCleanTaskId.value = runningTaskOfKind("clean")?.id ?? null;
   showBulkClean.value = true;
 }
 
 function closeBulkClean() {
-  if (bulkCleanRunning.value) return;
   showBulkClean.value = false;
+  bulkCleanTaskId.value = null;
 }
 
 async function startBulkClean() {
-  if (!bulkCleanTargets.value.length || bulkCleanRunning.value) return;
-  bulkCleanProgress.value = bulkCleanTargets.value.map((a) => ({
-    id: a.id,
-    name: a.name,
-    status: "pending",
-    message: "",
-  }));
-  bulkCleanRunning.value = true;
-  const gapMs = Math.max(0, bulkCleanGapSeconds.value) * 1000;
-  const items = bulkCleanProgress.value;
-  // Sequential to avoid Telegram flood limits, one account at a time
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    item.status = "cleaning";
-    try {
-      const r = await tgClientApi.cleanAccount(item.id);
-      let msg = t("tgc.clean.toastResult")
-        .replace("{left}", String(r.left))
-        .replace("{deleted}", String(r.deleted))
-        .replace("{contacts}", String(r.contacts))
-        .replace("{folders}", String(r.folders));
-      if (r.failed.length) {
-        msg += `, ${t("tgc.clean.toastFailedPart").replace("{n}", String(r.failed.length))}`;
-      }
-      item.status = "done";
-      item.message = msg;
-    } catch (e: any) {
-      item.status = "failed";
-      item.message =
-        e?.response?.data?.error ?? e?.message ?? t("tgc.clean.failed");
-    }
-    if (i < items.length - 1 && gapMs > 0) await sleep(gapMs);
+  const ids = bulkCleanTargets.value.map((a) => a.id);
+  if (!ids.length) return;
+  try {
+    const task = await bulkTasksApi.clean(ids, bulkCleanGapSeconds.value);
+    trackStartedTask(task);
+    bulkCleanTaskId.value = task.id;
+  } catch (e: any) {
+    alert(e.response?.data?.error ?? t("bulkTasks.startFailed"));
   }
-  bulkCleanRunning.value = false;
-  bulkCleanDoneAll.value = true;
-  await load();
 }
+
 
 // Lazy-load each tab's data the first time it is opened
 watch(editTab, (tab) => {
@@ -4473,6 +4025,14 @@ onMounted(async () => {
     }
   }
 });
+
+// Background bulk tasks keep running server-side, so the list is reloaded when one
+// ends rather than being patched row by row while it works.
+startBulkTaskPolling();
+const stopTaskFinishWatch = onBulkTaskFinished((task) => {
+  if (task.kind !== "run-jobs") void load();
+});
+onUnmounted(() => stopTaskFinishWatch());
 
 async function load() {
   const params = () => ({

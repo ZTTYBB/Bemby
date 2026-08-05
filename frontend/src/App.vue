@@ -62,6 +62,9 @@
     <main class="main" :class="{ 'main-flush': currentView === 'messenger' }">
       <component :is="currentComponent" />
     </main>
+
+    <!-- Progress for bulk work running on the server; survives page reloads -->
+    <BulkTaskDock />
   </div>
 
   <!-- Forced password change when default password is detected -->
@@ -100,6 +103,7 @@ import SettingsView from './views/SettingsView.vue';
 import HelpView from './views/HelpView.vue';
 import MessengerView from './views/MessengerView.vue';
 import ScheduleView from './views/ScheduleView.vue';
+import BulkTaskDock from './components/BulkTaskDock.vue';
 import {
   loadSchedulePageSetting,
   scheduleSeparatePage,

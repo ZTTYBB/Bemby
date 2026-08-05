@@ -178,7 +178,7 @@
                 <tr>
                   <td>批量操作</td>
                   <td>
-                    勾选多个账户后，操作收纳于<strong>批量操作</strong>菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免限流：<strong>批量重命名</strong>（按 <code>{index}</code> 递增序号，可补零、实时预览）、<strong>获取属性</strong>、<strong>批量修改登录邮箱</strong>（<code>+</code> 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行且不存储，开始前需"测试登录"）、<strong>批量修改凭据</strong>（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥）、<strong>批量添加通行密钥</strong>、<strong>批量修改资料</strong>（批量设置 Telegram 名字/姓氏/简介，每行对应一个账户、字段用制表符 Tab 分隔，可从表格直接粘贴，点击"生成随机名字"自动填充，或点击"AI 生成资料"按要求生成（例如"中国用户，简介用中文"，一次请求覆盖全部账户，可勾选"不生成简介"只生成名字；结果自动清理为单行、不含制表符并符合 Telegram 的长度上限）；作为后台批量任务运行，页面刷新不中断，失败账户自动重试）。设置环境变量 <code>BULK_ACCOUNT_MANAGEMENT=1</code> 后还提供<strong>批量添加账户</strong>（每行 <code>手机号----API网址</code>，自动创建并从各 API 网页读取验证码/2FA 完成认证）与<strong>批量清理</strong>。
+                    勾选多个账户后，操作收纳于<strong>批量操作</strong>菜单，各顺序操作共用"每个账户之间的间隔（秒）"以避免限流：<strong>批量重命名</strong>（按 <code>{index}</code> 递增序号，可补零、实时预览）、<strong>获取属性</strong>、<strong>批量修改登录邮箱</strong>（<code>+</code> 标签模板 + 变量，经 Gmail IMAP 读取确认码，应用专用密码仅用于本次运行且不存储，开始前需"测试登录"）、<strong>批量修改凭据</strong>（设置/轮换 2FA 密码，可选移除其他设备/其他通行密钥）、<strong>批量添加通行密钥</strong>、<strong>批量修改资料</strong>（批量设置 Telegram 名字/姓氏/简介，每行对应一个账户、字段用制表符 Tab 分隔，可从表格直接粘贴，点击"生成随机名字"自动填充，或点击"AI 生成资料"按要求生成（例如"中国用户，简介用中文"，一次请求覆盖全部账户，可勾选"不生成简介"只生成名字；结果自动清理为单行、不含制表符并符合 Telegram 的长度上限）；作为后台批量任务运行，页面刷新不中断，失败账户自动重试）。设置环境变量 <code>BULK_ACCOUNT_MANAGEMENT=1</code> 后还提供<strong>批量添加账户</strong>（每行 <code>手机号----API网址</code>，自动创建并从各 API 网页读取验证码/2FA 完成认证）与<strong>批量清理</strong>。所有批量操作都在服务器上按顺序执行，开始后可以关闭弹窗甚至整个页面；进度在右下角的<strong>后台任务</strong>面板中查看（也可重新打开对应弹窗查看），并可随时<strong>终止</strong>——当前账户处理完即停止，其余标记为已终止。
                   </td>
                 </tr>
                 <tr>
@@ -375,7 +375,13 @@
                     <strong>Bulk Add</strong> (one <code>phone----apiUrl</code>
                     per line, auto-creating and authenticating each account by
                     reading the code/2FA from its API page) and
-                    <strong>Bulk Clean</strong>.
+                    <strong>Bulk Clean</strong>. Every bulk action works through
+                    its accounts on the server, so once started the dialog -- or
+                    the whole page -- can be closed: follow it in the
+                    <strong>Background tasks</strong> panel at the bottom right
+                    (or by reopening the same dialog) and
+                    <strong>Terminate</strong> it there at any time, which stops
+                    after the account in flight and marks the rest terminated.
                   </td>
                 </tr>
                 <tr>
@@ -1293,6 +1299,7 @@
             <p class="help-para">
               勾选多个任务后，批量操作栏出现<strong>运行 (N)</strong> 按钮。
               点击后可设置任务间延迟时间（默认 70 秒），确认后任务按顺序依次执行。
+              队列在服务器上运行，可以关闭页面；进度在右下角的<strong>后台任务</strong>面板中查看，也可随时终止（正在运行的那个任务会被取消，其余不再执行）。
             </p>
 
             <div
@@ -1768,6 +1775,10 @@
               <strong>Run (N)</strong> in the bulk action bar. Set a delay
               between jobs (default 70 s) and confirm -- jobs run sequentially,
               each waiting for the previous one to finish before starting.
+              The queue runs on the server, so the page can be closed: watch it
+              in the <strong>Background tasks</strong> panel at the bottom right,
+              and terminate it there at any time (the run in flight is cancelled
+              and the rest are skipped).
             </p>
 
             <div

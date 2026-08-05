@@ -288,6 +288,11 @@ export type AccountExportItem = {
   proxyId: string | null;
   appClientId: string | null;
   disabled: boolean;
+  /** Operator-authored fields; absent in backups written before they were exported. */
+  notes?: string | null;
+  sortOrder?: number | null;
+  tgDisplayName?: string | null;
+  tgUsername?: string | null;
   passkey: PasskeySecret | null;
   additionalAttributes: Record<string, unknown> | null;
 };
@@ -2094,5 +2099,107 @@ export const debugApi = {
         response: string;
         durationMs: number;
       }>("/debug/ai", { images, prompt, maxTokens, model })
+      .then((r) => r.data),
+};
+
+// ── Background bulk tasks ─────────────────────────────────────────────────────
+// Long bulk actions run on the server, so the page can be closed while they
+// work. Progress is polled from here and any running task can be terminated.
+
+export type BulkTaskKind =
+  | "spam-check"
+  | "fetch-attributes"
+  | "login-email"
+  | "credentials"
+  | "passkey"
+  | "clean"
+  | "run-jobs"
+  /** Bulk add and bulk profile update: their own runners, surfaced in the same list. */
+  | "add"
+  | "profile";
+
+export type BulkTaskItemStatus =
+  | "pending"
+  | "waiting"
+  | "working"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export type BulkTaskState = "running" | "completed" | "cancelled";
+
+export type BulkTaskItem = {
+  index: number;
+  /** Account id, or job id for "run-jobs". */
+  refId: number;
+  refName: string;
+  status: BulkTaskItemStatus;
+  message: string;
+  error: string | null;
+  /** Op-specific result, rendered by the view in its own wording. */
+  data?: Record<string, any>;
+};
+
+export type BulkTask = {
+  id: string;
+  kind: BulkTaskKind;
+  createdAt: string;
+  finishedAt: string | null;
+  state: BulkTaskState;
+  cancelRequested: boolean;
+  gapSeconds: number;
+  total: number;
+  items: BulkTaskItem[];
+};
+
+export const bulkTasksApi = {
+  list: () =>
+    api.get<{ tasks: BulkTask[] }>("/bulk-tasks").then((r) => r.data.tasks),
+  get: (id: string) => api.get<BulkTask>(`/bulk-tasks/${id}`).then((r) => r.data),
+  cancel: (id: string) =>
+    api
+      .post<{ cancelled: boolean }>(`/bulk-tasks/${id}/cancel`)
+      .then((r) => r.data),
+  dismiss: (id: string) =>
+    api.delete<{ dismissed: boolean }>(`/bulk-tasks/${id}`).then((r) => r.data),
+  spamCheck: (ids: number[], gapSeconds?: number) =>
+    api
+      .post<BulkTask>("/bulk-tasks/spam-check", { ids, gapSeconds })
+      .then((r) => r.data),
+  fetchAttributes: (ids: number[], gapSeconds?: number) =>
+    api
+      .post<BulkTask>("/bulk-tasks/fetch-attributes", { ids, gapSeconds })
+      .then((r) => r.data),
+  loginEmail: (
+    ids: number[],
+    opts: { gmail: string; appPassword: string; tag: string },
+    gapSeconds?: number,
+  ) =>
+    api
+      .post<BulkTask>("/bulk-tasks/login-email", { ids, ...opts, gapSeconds })
+      .then((r) => r.data),
+  credentials: (
+    ids: number[],
+    opts: {
+      currentPassword?: string;
+      newPassword: string;
+      removeDevices?: boolean;
+      removePasskeys?: boolean;
+      notesAppend?: string;
+    },
+    gapSeconds?: number,
+  ) =>
+    api
+      .post<BulkTask>("/bulk-tasks/credentials", { ids, ...opts, gapSeconds })
+      .then((r) => r.data),
+  passkey: (ids: number[], gapSeconds?: number) =>
+    api
+      .post<BulkTask>("/bulk-tasks/passkey", { ids, gapSeconds })
+      .then((r) => r.data),
+  clean: (ids: number[], gapSeconds?: number) =>
+    api.post<BulkTask>("/bulk-tasks/clean", { ids, gapSeconds }).then((r) => r.data),
+  runJobs: (ids: number[], gapSeconds?: number) =>
+    api
+      .post<BulkTask>("/bulk-tasks/run-jobs", { ids, gapSeconds })
       .then((r) => r.data),
 };

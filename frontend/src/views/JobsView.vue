@@ -41,7 +41,7 @@
       <!-- Bulk action bar -->
       <div v-if="selectedJobIds.length" class="bulk-bar">
         <span class="bulk-count">{{ t('jobs.selectedCount').replace('{n}', String(selectedJobIds.length)) }}</span>
-        <button class="btn btn-sm btn-success" @click="showBulkRunModal = true"><i class="fa-solid fa-play"></i> {{ t('jobs.bulkRun').replace('{n}', String(selectedJobIds.length)) }}</button>
+        <button class="btn btn-sm btn-success" @click="openBulkRun"><i class="fa-solid fa-play"></i> {{ t('jobs.bulkRun').replace('{n}', String(selectedJobIds.length)) }}</button>
         <button class="btn btn-sm btn-secondary" @click="bulkEnableJobs"><i class="fa-solid fa-circle-check"></i> {{ t('jobs.bulkEnable').replace('{n}', String(selectedJobIds.length)) }}</button>
         <button class="btn btn-sm btn-secondary" @click="confirmBulkDisableJobs = true"><i class="fa-solid fa-ban"></i> {{ t('jobs.bulkDisable').replace('{n}', String(selectedJobIds.length)) }}</button>
         <button class="btn btn-sm btn-danger" @click="confirmBulkRetireJobs = true"><i class="fa-solid fa-box-archive"></i> {{ t('jobs.bulkRetire').replace('{n}', String(selectedJobIds.length)) }}</button>
@@ -1028,18 +1028,23 @@
 
     <!-- Bulk run modal -->
     <div v-if="showBulkRunModal" class="modal-backdrop">
-      <div class="modal" style="width:380px">
+      <div class="modal" :style="bulkRunTask ? 'width:520px' : 'width:380px'">
         <h3 class="modal-title">{{ t('jobs.bulkRunTitle') }}</h3>
-        <div class="modal-body">
-          <div class="form-group">
-            <label class="form-label">{{ t('jobs.bulkRunDelayLabel') }}</label>
-            <input v-model.number="bulkRunDelay" type="number" min="0" class="form-input" style="width:120px" @keyup.enter="bulkRunJobsSequential" />
+        <template v-if="!bulkRunTask">
+          <div class="modal-body">
+            <div class="form-group">
+              <label class="form-label">{{ t('jobs.bulkRunDelayLabel') }}</label>
+              <input v-model.number="bulkRunDelay" type="number" min="0" class="form-input" style="width:120px" @keyup.enter="startBulkRun" />
+            </div>
+            <p class="form-hint">{{ t('bulkTasks.serverNote') }}</p>
           </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-ghost" @click="showBulkRunModal = false"><i class="fa-solid fa-xmark"></i> {{ t('common.cancel') }}</button>
-          <button class="btn btn-success" @click="bulkRunJobsSequential"><i class="fa-solid fa-play"></i> {{ t('jobs.bulkRunStart') }}</button>
-        </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="closeBulkRun"><i class="fa-solid fa-xmark"></i> {{ t('common.cancel') }}</button>
+            <button class="btn btn-success" @click="startBulkRun"><i class="fa-solid fa-play"></i> {{ t('jobs.bulkRunStart') }}</button>
+          </div>
+        </template>
+        <!-- Progress step -- rendered from the server-side task -->
+        <BulkTaskProgress v-else :task="bulkRunTask" @close="closeBulkRun" />
       </div>
     </div>
 
@@ -1127,7 +1132,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
-import { jobsApi, accountsApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig, type CheckinConfig } from '../api/client';
+import { jobsApi, accountsApi, bulkTasksApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig, type CheckinConfig } from '../api/client';
 import { t, locale } from '../i18n';
 import { regexValid } from '../utils/regexCheck';
 import { usePersistedRef } from '../composables/usePersistedRef';
@@ -1138,6 +1143,14 @@ import { debounce } from '../composables/useDebounce';
 import PaginationBar from '../components/PaginationBar.vue';
 import WebStepsEditor from '../components/WebStepsEditor.vue';
 import { webStepsFromConfig, webStepsToConfig, type WebStepForm } from '../composables/webSteps';
+import {
+  onBulkTaskFinished,
+  runningTaskOfKind,
+  startBulkTaskPolling,
+  taskById,
+  trackStartedTask,
+} from '../composables/bulkTasks';
+import BulkTaskProgress from '../components/BulkTaskProgress.vue';
 
 type CustomActionForm = {
   type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'enter_captcha' | 'join_group' | 'subscribe_channel' | 'open_mini_app' | 'open_mini_app_url' | 'open_bot_menu_app' | 'open_url';
@@ -1221,6 +1234,8 @@ const confirmBulkDisableJobs = ref(false);
 const confirmBulkRetireJobs = ref(false);
 const showBulkRunModal = ref(false);
 const bulkRunDelay = ref(70);
+const bulkRunTaskId = ref<string | null>(null);
+const bulkRunTask = computed(() => taskById(bulkRunTaskId.value));
 const showBulkWindowModal = ref(false);
 const bulkWindowStart = ref(1400);
 const bulkWindowEnd = ref(1600);
@@ -2337,26 +2352,6 @@ function schedulePoll(jobId: number, logId: number) {
   pollTimers.set(jobId, timer);
 }
 
-function waitForJobCompletion(id: number, logId: number): Promise<void> {
-  return new Promise((resolve) => {
-    const check = async () => {
-      try {
-        const log = await logsApi.getOne(logId);
-        if (log.status === 'running') {
-          setTimeout(check, 3000);
-        } else {
-          stopRunning(id);
-          resolve();
-        }
-      } catch {
-        stopRunning(id);
-        resolve();
-      }
-    };
-    setTimeout(check, 3000);
-  });
-}
-
 const bulkRunToast = ref('');
 let bulkRunToastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -2366,28 +2361,30 @@ function showBulkRunToast(msg: string) {
   bulkRunToastTimer = setTimeout(() => { bulkRunToast.value = ''; }, 3000);
 }
 
-async function bulkRunJobsSequential() {
+// Runs on the server, one job at a time with the chosen delay between them, so
+// the queue survives the page being closed.
+async function startBulkRun() {
   const ids = [...selectedJobIds.value];
-  showBulkRunModal.value = false;
-  selectedJobIds.value = [];
-
-  for (let i = 0; i < ids.length; i++) {
-    const id = ids[i];
-    running.value.add(id);
-    running.value = new Set(running.value);
-    try {
-      const { logId } = await jobsApi.run(id);
-      await waitForJobCompletion(id, logId);
-    } catch (err: any) {
-      // Non-blocking toast so the queue always continues to the next job
-      showBulkRunToast(err.response?.data?.error ?? t('common.triggerFailed'));
-      stopRunning(id);
-    }
-    // Wait delay seconds before triggering the next job
-    if (i < ids.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, bulkRunDelay.value * 1000));
-    }
+  if (!ids.length) return;
+  try {
+    const task = await bulkTasksApi.runJobs(ids, bulkRunDelay.value);
+    trackStartedTask(task);
+    bulkRunTaskId.value = task.id;
+    selectedJobIds.value = [];
+  } catch (err: any) {
+    showBulkRunToast(err.response?.data?.error ?? t('bulkTasks.startFailed'));
   }
+}
+
+function openBulkRun() {
+  // A queue still running from an earlier visit keeps showing its progress
+  bulkRunTaskId.value = runningTaskOfKind('run-jobs')?.id ?? null;
+  showBulkRunModal.value = true;
+}
+
+function closeBulkRun() {
+  showBulkRunModal.value = false;
+  bulkRunTaskId.value = null;
 }
 
 async function runNow(id: number) {
@@ -2402,8 +2399,15 @@ async function runNow(id: number) {
   }
 }
 
+// A background job queue finishing changes last-run info, so reload the list then
+startBulkTaskPolling();
+const stopTaskFinishWatch = onBulkTaskFinished((task) => {
+  if (task.kind === 'run-jobs') void loadJobs();
+});
+
 onUnmounted(() => {
   for (const timer of pollTimers.values()) clearTimeout(timer);
+  stopTaskFinishWatch();
 });
 </script>
 

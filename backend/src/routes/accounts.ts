@@ -7,32 +7,43 @@ import {
   submitPassword,
   checkAccountStatus,
   resendCodeAsSms,
-  updateTwoFa,
   getProfile,
   updateProfile,
   getSessions,
   terminateSession,
-  terminateOtherSessions,
   getPasswordInfo,
   sendLoginEmailCode,
   verifyLoginEmail,
-  getPasskeys,
-  deletePasskey,
-  registerPasskey,
   verifyPasskeyLogin,
   startPasskeyLogin,
   getSessionDc,
   type PasswordInfo,
 } from "../auth/tgAuth";
-import { checkSpamStatus } from "../jobs/checkin";
 import { generateProfiles } from "../jobs/profileGen";
+import {
+  accountOpContext,
+  changeLoginEmailForAccount,
+  checkSpamForAccount,
+  deletePasskeyForAccount,
+  fetchAttributesForAccount,
+  listPasskeysForAccount,
+  loadAccount,
+  registerPasskeyForAccount,
+  resolveApiCredentials,
+  resolveProxyUrl,
+  saveTgMeta,
+  statusNeedsReauth,
+  terminateOtherSessionsForAccount,
+  updateTwoFaForAccount,
+  type AccountRow,
+} from "../jobs/accountOps";
 import {
   startBulkAdd,
   getBulkAddStatus,
   cancelBulkAdd,
-  isBulkAccountManagementEnabled,
   type BulkAddOptions,
 } from "../jobs/bulkAdd";
+import { bulkMgmtGuard } from "../middleware/bulkMgmt";
 import {
   startBulkProfile,
   getBulkProfileStatus,
@@ -40,24 +51,17 @@ import {
   type BulkProfileEntry,
   type BulkProfileOptions,
 } from "../jobs/bulkProfile";
-import {
-  changeLoginEmailViaGmail,
-  testGmailImap,
-} from "../jobs/bulkLoginEmail";
-import type { AuthStatus } from "../types";
+import { testGmailImap } from "../jobs/bulkLoginEmail";
 import { parseTgProxy } from "../jobs/runner";
 import { resolveAppClientParams, previewDeviceModel } from "../tg/appClient";
 import { isAuthError, markSessionExpired } from "../tg/liveClient";
 import {
   savePasskeySecret,
   getPasskeySecret,
-  deletePasskeySecret,
-  storedPasskeyIdsForAccount,
   accountPasskeySecrets,
   parseStoredPasskey,
   importedPasskeyFor,
   setAccountPasskeyDc,
-  pruneAccountPasskeySecrets,
 } from "../tg/passkeyStore";
 import {
   parseAttributes,
@@ -74,22 +78,6 @@ import {
 } from "../db/exportCrypto";
 import { decryptAccountRow, encryptSecret } from "../db/secretColumns";
 
-// Reasons set by checkAccountStatus for frozen/revoked sessions that need re-auth
-const REAUTH_REASONS = new Set([
-  "auth_key_duplicated",
-  "session_revoked",
-  "auth_key_unregistered",
-  "account_frozen",
-]);
-
-function statusNeedsReauth(
-  status: import("../auth/tgAuth").TgAccountStatus,
-): boolean {
-  return status.restrictions.some((r) =>
-    REAUTH_REASONS.has(r.reason.toLowerCase()),
-  );
-}
-
 function internalError(res: import('express').Response, err: unknown, context: string): void {
   console.error(`[accounts] ${context}:`, err);
   res.status(500).json({ error: 'An internal error occurred' });
@@ -105,74 +93,6 @@ function rpcBadRequest(res: import('express').Response, err: any, context: strin
 }
 
 const router = Router();
-
-type AccountRow = {
-  id: number;
-  name: string;
-  phone_number: string;
-  api_id: number | null;
-  api_hash: string | null;
-  session_string: string | null;
-  auth_status: AuthStatus;
-  proxy_id: string | null;
-  disabled: number;
-  app_client_id: string | null;
-  created_at: string;
-  sort_order: number;
-  tg_display_name: string | null;
-  tg_username: string | null;
-  notes: string | null;
-  passkey: string | null;
-  additional_attributes: string | null;
-};
-
-/**
- * Loads one account with its credential columns decrypted. Every handler below goes through
- * this rather than querying directly, so the decryption cannot be forgotten at a call site
- * (see db/secretColumns for why the columns are encrypted at all).
- */
-function loadAccount(id: string | number | bigint): AccountRow | undefined {
-  const row = db.prepare("SELECT * FROM tg_accounts WHERE id = ?").get(id) as
-    | AccountRow
-    | undefined;
-  return row ? decryptAccountRow(row) : undefined;
-}
-
-/** Resolves effective API credentials, falling back to global defaults. Throws if neither is set. */
-function resolveApiCredentials(account: AccountRow): {
-  apiId: number;
-  apiHash: string;
-} {
-  const ownCredentials =
-    account.api_id && account.api_hash
-      ? { apiId: account.api_id, apiHash: account.api_hash }
-      : null;
-  const credentials = ownCredentials ?? getDefaultTgApiCredentials();
-  const apiId = credentials?.apiId;
-  const apiHash = credentials?.apiHash;
-  if (!apiId || !apiHash) {
-    throw new Error(
-      "No API credentials available. Add credentials to this account or configure global defaults in Settings.",
-    );
-  }
-  return { apiId, apiHash };
-}
-
-function resolveProxyUrl(
-  proxyId: string | null | undefined,
-): string | undefined {
-  if (!proxyId) return undefined;
-  try {
-    const row = db
-      .prepare("SELECT value FROM settings WHERE key = ?")
-      .get("proxies") as { value: string } | undefined;
-    if (!row?.value) return undefined;
-    const list = JSON.parse(row.value) as Array<{ id: string; url: string }>;
-    return list.find((p) => p.id === proxyId)?.url;
-  } catch {
-    return undefined;
-  }
-}
 
 function toJson(row: AccountRow) {
   return {
@@ -203,18 +123,6 @@ function toJson(row: AccountRow) {
     // Whether Bemby holds a stored passkey usable for login (its home DC is known).
     hasBembyPasskey: parseStoredPasskey(row.passkey)?.dcId != null,
   };
-}
-
-function saveTgMeta(
-  id: number,
-  firstName: string,
-  lastName: string | undefined,
-  username: string | undefined,
-) {
-  const displayName = [firstName, lastName].filter(Boolean).join(" ");
-  db.prepare(
-    "UPDATE tg_accounts SET tg_display_name = ?, tg_username = ? WHERE id = ?",
-  ).run(displayName || null, username || null, id);
 }
 
 const ACCOUNT_SORTS: Record<string, string> = {
@@ -323,15 +231,6 @@ router.post("/", (req, res) => {
 
 // POST /bulk-add -- create accounts from "phone----apiUrl" lines, then
 // authenticate them one by one using codes/2FA served by each API page
-// Reject bulk-management requests unless enabled via BULK_ACCOUNT_MANAGEMENT
-const bulkMgmtGuard: import("express").RequestHandler = (_req, res, next) => {
-  if (!isBulkAccountManagementEnabled()) {
-    res.status(403).json({ error: "Bulk account management is not enabled" });
-    return;
-  }
-  next();
-};
-
 router.post("/bulk-add", bulkMgmtGuard, (req, res) => {
   const { text, options } = req.body as {
     text?: string;
@@ -491,6 +390,11 @@ type AccountImportItem = {
   proxyId?: string | null;
   appClientId?: string | null;
   disabled?: boolean;
+  /** Operator-authored fields; absent in backups written before they were exported. */
+  notes?: string | null;
+  sortOrder?: number | null;
+  tgDisplayName?: string | null;
+  tgUsername?: string | null;
   // Passkey secret and generic flags travel inline with the account. `passkey` is the
   // current shape; `passkeys` (array) from interim builds is still tolerated on import.
   passkey?: unknown;
@@ -530,6 +434,13 @@ router.post("/export", (req, res) => {
       proxyId: a.proxy_id ?? null,
       appClientId: a.app_client_id ?? null,
       disabled: Boolean(a.disabled),
+      // Operator-authored notes and the arranged list order, so a restore reads the
+      // same way the original did.
+      notes: a.notes ?? null,
+      sortOrder: a.sort_order ?? 0,
+      // Cached Telegram identity, so the restored list is not blank until it refreshes.
+      tgDisplayName: a.tg_display_name ?? null,
+      tgUsername: a.tg_username ?? null,
       // Passkey secret (incl. private key + home DC) so the account can still log in
       // after import, even when force-reauth clears the session string.
       passkey: parseStoredPasskey(a.passkey),
@@ -616,7 +527,10 @@ router.post("/import", (req, res) => {
       }
       const info = db
         .prepare(
-          "INSERT INTO tg_accounts (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id, app_client_id, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          `INSERT INTO tg_accounts
+             (name, phone_number, api_id, api_hash, session_string, auth_status, proxy_id,
+              app_client_id, disabled, notes, sort_order, tg_display_name, tg_username)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           a.name || a.phoneNumber,
@@ -628,6 +542,10 @@ router.post("/import", (req, res) => {
           a.proxyId ?? null,
           a.appClientId ?? null,
           a.disabled ? 1 : 0,
+          a.notes ?? null,
+          Number.isFinite(Number(a.sortOrder)) ? Number(a.sortOrder) : 0,
+          a.tgDisplayName ?? null,
+          a.tgUsername ?? null,
         );
       const newId = Number(info.lastInsertRowid);
       // Restore the passkey secret under the newly assigned account id. The passkey (with
@@ -841,27 +759,8 @@ router.post("/:id/check-spam", async (req, res) => {
   }
 
   try {
-    const { apiId, apiHash } = resolveApiCredentials(account);
-    const proxyUrl = resolveProxyUrl(account.proxy_id);
-    const proxy = parseTgProxy(proxyUrl);
-    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
-    const result = await checkSpamStatus(
-      apiId,
-      apiHash,
-      account.session_string,
-      proxy,
-      deviceParams,
-    );
-    // Persist the restriction for the account-list badge: store the status when the
-    // account is restricted, clear it when confirmed free, leave it on an unknown result.
-    if (result.spamStatus === "free") {
-      patchAttributes(account.id, { restriction: undefined });
-    } else if (result.spamStatus !== "unknown") {
-      patchAttributes(account.id, { restriction: result.spamStatus });
-    }
-    res.json(result);
+    res.json(await checkSpamForAccount(account.id));
   } catch (err: any) {
-    if (isAuthError(err?.message ?? "")) markSessionExpired(account.id);
     internalError(res, err, 'check-spam');
   }
 });
@@ -874,80 +773,16 @@ router.post("/:id/fetch-attributes", async (req, res) => {
   const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
 
-  let apiId!: number;
-  let apiHash!: string;
-  let proxy!: ReturnType<typeof parseTgProxy>;
-  let deviceParams!: ReturnType<typeof resolveAppClientParams>;
+  let result: { warnings: string[]; authExpired: boolean };
   try {
-    ({ apiId, apiHash } = resolveApiCredentials(account));
-    proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
-    deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+    result = await fetchAttributesForAccount(account.id);
   } catch (err: any) {
     internalError(res, err, "fetch-attributes");
     return;
   }
 
-  const warnings: string[] = [];
-  let authExpired = false;
-  // Skip remaining steps once the session is known dead; they would only fail too.
-  const runStep = async (label: string, fn: () => Promise<void>) => {
-    if (authExpired) return;
-    try {
-      await fn();
-    } catch (err: any) {
-      if (isAuthError(err?.message ?? "")) {
-        markSessionExpired(account.id);
-        authExpired = true;
-      }
-      warnings.push(
-        `${label}: ${err?.errorMessage ?? err?.message ?? "failed"}`,
-      );
-    }
-  };
-
-  await runStep("status", async () => {
-    const status = await checkAccountStatus(
-      apiId,
-      apiHash,
-      account.session_string,
-      proxy,
-      deviceParams,
-    );
-    if (statusNeedsReauth(status)) {
-      markSessionExpired(account.id);
-      authExpired = true;
-    }
-    saveTgMeta(account.id, status.firstName, status.lastName, status.username);
-  });
-  await runStep("password-info", async () => {
-    const info = await getPasswordInfo(
-      apiId,
-      apiHash,
-      account.session_string,
-      proxy,
-      deviceParams,
-    );
-    patchAttributes(account.id, {
-      hasEmail: info.loginEmailPattern ? true : undefined,
-    });
-  });
-  await runStep("passkeys", async () => {
-    const passkeys = await getPasskeys(
-      apiId,
-      apiHash,
-      account.session_string,
-      proxy,
-      deviceParams,
-    );
-    pruneAccountPasskeySecrets(
-      account.id,
-      passkeys.map((p) => p.id),
-    );
-    patchAttributes(account.id, { hasPasskey: passkeys.length > 0 });
-  });
-
   const row = loadAccount(account.id) as AccountRow;
-  res.json({ account: toJson(row), warnings, authExpired });
+  res.json({ account: toJson(row), ...result });
 });
 
 // POST /:id/update-2fa -- set, change, or remove the account's 2FA password
@@ -967,21 +802,13 @@ router.post("/:id/update-2fa", async (req, res) => {
     hint?: string;
   };
   try {
-    const { apiId, apiHash } = resolveApiCredentials(account);
-    const proxyUrl = resolveProxyUrl(account.proxy_id);
-    const proxy = parseTgProxy(proxyUrl);
-    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
-    await updateTwoFa(
-      apiId,
-      apiHash,
-      account.session_string,
-      { currentPassword, newPassword, hint },
-      proxy,
-      deviceParams,
-    );
+    await updateTwoFaForAccount(account.id, {
+      currentPassword,
+      newPassword,
+      hint,
+    });
     res.json({ success: true });
   } catch (err: any) {
-    if (isAuthError(err?.message ?? "")) markSessionExpired(account.id);
     internalError(res, err, 'update-2fa');
   }
 });
@@ -1143,20 +970,9 @@ router.post("/:id/terminate-other-sessions", async (req, res) => {
     return;
   }
   try {
-    const { apiId, apiHash } = resolveApiCredentials(account);
-    const proxyUrl = resolveProxyUrl(account.proxy_id);
-    const proxy = parseTgProxy(proxyUrl);
-    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
-    await terminateOtherSessions(
-      apiId,
-      apiHash,
-      account.session_string,
-      proxy,
-      deviceParams,
-    );
+    await terminateOtherSessionsForAccount(account.id);
     res.json({ success: true });
   } catch (err: any) {
-    if (isAuthError(err?.message ?? "")) markSessionExpired(account.id);
     internalError(res, err, 'terminate-other-sessions');
   }
 });
@@ -1245,24 +1061,13 @@ router.post("/:id/login-email/auto", bulkMgmtGuard, async (req, res) => {
     return;
   }
   try {
-    const { apiId, apiHash } = resolveApiCredentials(account);
-    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
-    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
-    const result = await changeLoginEmailViaGmail({
-      apiId,
-      apiHash,
-      sessionString: account.session_string,
-      phoneNumber: account.phone_number,
-      accountId: account.id,
-      proxy,
-      deviceParams,
+    const result = await changeLoginEmailForAccount(account.id, {
       gmail: gmail.trim(),
       appPassword,
       tag: (tag ?? "").trim(),
     });
     res.json(result);
   } catch (err: any) {
-    if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
     if (rpcBadRequest(res, err, "login-email/auto")) return;
     internalError(res, err, "login-email/auto");
   }
@@ -1295,19 +1100,8 @@ router.get("/:id/passkeys", async (req, res) => {
   const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   try {
-    const { apiId, apiHash } = resolveApiCredentials(account);
-    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
-    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
-    const passkeys = await getPasskeys(apiId, apiHash, account.session_string, proxy, deviceParams);
-    // Telegram is authoritative: drop stored keys for passkeys that no longer
-    // exist there (e.g. removed when the 2FA password was changed), so storedIds
-    // stay accurate.
-    pruneAccountPasskeySecrets(account.id, passkeys.map((p) => p.id));
-    // Record whether the account has ANY passkey (any device/origin) for the list flag.
-    patchAttributes(account.id, { hasPasskey: passkeys.length > 0 });
-    res.json({ passkeys, storedIds: storedPasskeyIdsForAccount(account.id) });
+    res.json(await listPasskeysForAccount(account.id));
   } catch (err: any) {
-    if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
     if (rpcBadRequest(res, err, "passkeys/list")) return;
     internalError(res, err, "passkeys/list");
   }
@@ -1318,35 +1112,9 @@ router.post("/:id/passkeys", async (req, res) => {
   const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   try {
-    const { apiId, apiHash } = resolveApiCredentials(account);
-    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
-    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
     const origin = typeof req.body?.origin === "string" ? req.body.origin : undefined;
-    const result = await registerPasskey(
-      apiId,
-      apiHash,
-      account.session_string,
-      origin,
-      proxy,
-      deviceParams,
-    );
-    // Persist the private key so the passkey can later be used/verified for login.
-    const dc = getSessionDc(account.session_string) ?? {};
-    savePasskeySecret({
-      accountId: account.id,
-      telegramPasskeyId: result.passkey.id,
-      credentialId: result.credentialId,
-      privateKeyPem: result.privateKeyPem,
-      rpId: result.rpId,
-      userHandle: result.userHandle,
-      createdDate: result.passkey.date,
-      ...dc,
-    });
-    // The account now has a passkey (this one, created by Bemby).
-    patchAttributes(account.id, { hasPasskey: true });
-    res.json({ passkey: result.passkey });
+    res.json(await registerPasskeyForAccount(account.id, origin));
   } catch (err: any) {
-    if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
     if (rpcBadRequest(res, err, "passkeys/register")) return;
     internalError(res, err, "passkeys/register");
   }
@@ -1362,18 +1130,16 @@ router.post("/:id/passkeys/:passkeyId/verify", async (req, res) => {
     return;
   }
   try {
-    const { apiId, apiHash } = resolveApiCredentials(account);
-    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
-    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
+    const ctx = accountOpContext(account!.id);
     const origin = typeof req.body?.origin === "string" ? req.body.origin : undefined;
     const result = await verifyPasskeyLogin(
-      apiId,
-      apiHash,
-      account.session_string,
+      ctx.apiId,
+      ctx.apiHash,
+      ctx.account.session_string,
       secret,
       origin,
-      proxy,
-      deviceParams,
+      ctx.proxy,
+      ctx.deviceParams,
     );
     res.json(result);
   } catch (err: any) {
@@ -1387,21 +1153,8 @@ router.delete("/:id/passkeys/:passkeyId", async (req, res) => {
   const account = loadAccount(req.params.id) as AccountRow | undefined;
   if (!requireAuth(account, res)) return;
   try {
-    const { apiId, apiHash } = resolveApiCredentials(account);
-    const proxy = parseTgProxy(resolveProxyUrl(account.proxy_id));
-    const deviceParams = resolveAppClientParams(account.id, account.app_client_id);
-    const ok = await deletePasskey(
-      apiId,
-      apiHash,
-      account.session_string,
-      req.params.passkeyId,
-      proxy,
-      deviceParams,
-    );
-    if (ok) deletePasskeySecret(req.params.passkeyId);
-    res.json({ ok });
+    res.json(await deletePasskeyForAccount(account.id, req.params.passkeyId));
   } catch (err: any) {
-    if (isAuthError(err?.message ?? "")) markSessionExpired(account!.id);
     if (rpcBadRequest(res, err, "passkeys/delete")) return;
     internalError(res, err, "passkeys/delete");
   }
