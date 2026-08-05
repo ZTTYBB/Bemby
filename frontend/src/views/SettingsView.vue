@@ -129,6 +129,9 @@
             <p style="font-size: 12px; color: #888; margin: 4px 0 0">
               {{ t("settings.notifyBotTargetHint") }}
             </p>
+            <p style="font-size: 12px; color: #888; margin: 4px 0 0">
+              {{ t("settings.notifyBotTopicHint") }}
+            </p>
             <button
               class="btn btn-ghost btn-sm"
               style="margin-top: 6px"
@@ -151,13 +154,13 @@
             <div v-if="notifyChats.length" style="margin-top: 6px">
               <button
                 v-for="c in notifyChats"
-                :key="c.id"
+                :key="c.target"
                 class="btn btn-ghost btn-sm"
                 style="display: block; width: 100%; text-align: left"
-                @click="notifyForm.botTarget = String(c.id)"
+                @click="notifyForm.botTarget = c.target"
               >
                 {{ c.title }}
-                <span style="color: #888">— {{ c.id }} ({{ c.type }})</span>
+                <span style="color: #888">— {{ c.target }} ({{ c.type }})</span>
               </button>
             </div>
           </div>

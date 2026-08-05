@@ -1104,9 +1104,11 @@ const zh = {
     notifyBotOk: "机器人",
     notifyBotBad: "Telegram 拒绝了该 Token",
     labelNotifyBotTarget: "默认目标",
-    notifyBotTargetPlaceholder: "123456789 或 @频道名",
+    notifyBotTargetPlaceholder: "123456789、@频道名 或 -1001234567890/12",
     notifyBotTargetHint:
       "机器人无法主动发起对话：请先给机器人发送任意消息，再点击“查找会话”选择你的 Chat ID。频道或群组请先将机器人加入，然后填写其 @名称。",
+    notifyBotTopicHint:
+      "若只想发送到群组中的某个话题（Topic），在会话后面加上话题 ID：-1001234567890/12 或 @群组名/12，也可直接粘贴复制的话题链接。先在该话题内给机器人发一条消息，“查找会话”便会列出它。",
     notifyFindChatsBtn: "查找会话",
     notifyChatsLoading: "查找中…",
     notifyNoChats: "没有最近的会话 — 请先给机器人发送消息后重试。",
@@ -2523,9 +2525,11 @@ const en: typeof zh = {
     notifyBotOk: "Bot",
     notifyBotBad: "Token rejected by Telegram",
     labelNotifyBotTarget: "Default target",
-    notifyBotTargetPlaceholder: "123456789 or @channelname",
+    notifyBotTargetPlaceholder: "123456789, @channelname or -1001234567890/12",
     notifyBotTargetHint:
       "A bot cannot message you first, so send your bot any message, then use Find chats to pick your chat ID. For a channel or group, add the bot to it and use its @name.",
+    notifyBotTopicHint:
+      "To send into one topic of a group, add the topic id after the chat: -1001234567890/12 or @groupname/12. Pasting a copied topic link works too. Message the bot inside that topic first and Find chats will list it.",
     notifyFindChatsBtn: "Find chats",
     notifyChatsLoading: "Looking…",
     notifyNoChats: "No recent chats — send your bot a message, then try again.",

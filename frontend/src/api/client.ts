@@ -1345,7 +1345,15 @@ export type NotifyBotInfo = {
   error?: string;
 };
 
-export type NotifyBotChat = { id: number; type: string; title: string };
+export type NotifyBotChat = {
+  id: number;
+  type: string;
+  title: string;
+  /** Set when the chat was seen inside a forum topic. */
+  threadId?: number;
+  /** Target string to store for this chat, topic included. */
+  target: string;
+};
 
 /** A stored CloakBrowser licence key as the server will show it: never the raw value. */
 export type CfKeyView = { label: string; masked: string };

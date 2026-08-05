@@ -31,6 +31,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   normaliseNotifyTarget,
   normaliseBotTarget,
+  parseBotTarget,
   maskBotToken,
   getNotifyConfig,
   notifyJobEvent,
@@ -110,6 +111,51 @@ describe("normaliseBotTarget", () => {
     expect(normaliseBotTarget("mychannel")).toBe("@mychannel");
     expect(normaliseBotTarget("https://t.me/mychannel")).toBe("@mychannel");
   });
+
+  it("keeps a forum topic id on the target it was written with", () => {
+    expect(normaliseBotTarget("-1001234567890/12")).toBe("-1001234567890/12");
+    expect(normaliseBotTarget("mygroup/12")).toBe("@mygroup/12");
+    expect(normaliseBotTarget("https://t.me/mygroup/12")).toBe("@mygroup/12");
+  });
+});
+
+describe("parseBotTarget", () => {
+  it("splits a chat id from its topic id", () => {
+    expect(parseBotTarget("-1001234567890/12")).toEqual({
+      chatId: "-1001234567890",
+      threadId: 12,
+    });
+  });
+
+  it("reads a copied private topic link", () => {
+    expect(parseBotTarget("https://t.me/c/1234567890/12")).toEqual({
+      chatId: "-1001234567890",
+      threadId: 12,
+    });
+  });
+
+  it("ignores the message id in a link copied from inside a topic", () => {
+    expect(parseBotTarget("t.me/c/1234567890/12/345")).toEqual({
+      chatId: "-1001234567890",
+      threadId: 12,
+    });
+  });
+
+  it("reads a public group topic link", () => {
+    expect(parseBotTarget("https://t.me/mygroup/12")).toEqual({
+      chatId: "@mygroup",
+      threadId: 12,
+    });
+  });
+
+  it("leaves a plain target without a topic", () => {
+    expect(parseBotTarget("42")).toEqual({ chatId: "42" });
+    expect(parseBotTarget("@mychannel")).toEqual({ chatId: "@mychannel" });
+  });
+
+  it("drops a zero topic id rather than sending it", () => {
+    expect(parseBotTarget("-1001234567890/0")).toEqual({ chatId: "-1001234567890" });
+  });
 });
 
 // Deliberately shorter than a real token's 35-character secret: a fixture shaped like the
@@ -172,6 +218,26 @@ describe("sendBotNotify", () => {
     });
   });
 
+  it("sends into the forum topic the target names", async () => {
+    undiciFetch.mockResolvedValue(botOk({ message_id: 1 }));
+    await sendBotNotify("123:abc", "-1001234567890/12", "hello");
+
+    expect(JSON.parse(undiciFetch.mock.calls[0][1].body)).toMatchObject({
+      chat_id: "-1001234567890",
+      message_thread_id: 12,
+      text: "hello",
+    });
+  });
+
+  it("omits message_thread_id when no topic is named", async () => {
+    undiciFetch.mockResolvedValue(botOk({ message_id: 1 }));
+    await sendBotNotify("123:abc", "-1001234567890", "hello");
+
+    expect(JSON.parse(undiciFetch.mock.calls[0][1].body)).not.toHaveProperty(
+      "message_thread_id",
+    );
+  });
+
   it("rejects with the Bot API's own description", async () => {
     undiciFetch.mockResolvedValue({
       status: 400,
@@ -202,8 +268,60 @@ describe("recentBotChats", () => {
     const res = await recentBotChats("123:abc");
     expect(res.ok).toBe(true);
     expect(res.ok && res.result).toEqual([
-      { id: 42, type: "private", title: "Sam @sam" },
-      { id: -100, type: "channel", title: "Alerts" },
+      { id: 42, type: "private", title: "Sam @sam", target: "42" },
+      { id: -100, type: "channel", title: "Alerts", target: "-100" },
+    ]);
+  });
+
+  it("lists a forum group once per topic, named where Telegram names it", async () => {
+    undiciFetch.mockResolvedValue(
+      botOk([
+        {
+          update_id: 1,
+          message: {
+            chat: { id: -1001234567890, type: "supergroup", title: "Ops" },
+            is_topic_message: true,
+            message_thread_id: 12,
+            reply_to_message: { forum_topic_created: { name: "Alerts" } },
+          },
+        },
+        {
+          update_id: 2,
+          message: {
+            chat: { id: -1001234567890, type: "supergroup", title: "Ops" },
+            is_topic_message: true,
+            message_thread_id: 34,
+          },
+        },
+        // General topic: no thread id, so it stands for the group itself.
+        {
+          update_id: 3,
+          message: { chat: { id: -1001234567890, type: "supergroup", title: "Ops" } },
+        },
+      ]),
+    );
+    const res = await recentBotChats("123:abc");
+    expect(res.ok && res.result).toEqual([
+      {
+        id: -1001234567890,
+        type: "supergroup",
+        title: "Ops / Alerts",
+        threadId: 12,
+        target: "-1001234567890/12",
+      },
+      {
+        id: -1001234567890,
+        type: "supergroup",
+        title: "Ops / topic 34",
+        threadId: 34,
+        target: "-1001234567890/34",
+      },
+      {
+        id: -1001234567890,
+        type: "supergroup",
+        title: "Ops",
+        target: "-1001234567890",
+      },
     ]);
   });
 

@@ -36,20 +36,54 @@ export function normaliseNotifyTarget(raw: string): string {
   return `@${stripped}`;
 }
 
-/**
- * Normalises a Bot API chat target. A bot cannot look a user up by @username -- only a
- * numeric chat id reaches a person, and @name only reaches a public channel or group -- so
- * a numeric id is passed through untouched and everything else is treated as a @name.
- */
-export function normaliseBotTarget(raw: string): string {
+/** A Bot API destination: the chat, plus the forum topic within it when there is one. */
+export type BotTarget = { chatId: string; threadId?: number };
+
+/** A bare chat peer: a numeric id passes through, anything else becomes a @name. */
+function normaliseBotChat(raw: string): string {
   const s = raw.trim();
   if (/^-?\d+$/.test(s)) return s;
   return normaliseNotifyTarget(s);
 }
 
-/** True when the target is a numeric chat id rather than a public @name. */
+/**
+ * Splits a Bot API target into the chat it names and, for a forum group, the topic inside
+ * it. A bot cannot look a user up by @username -- only a numeric chat id reaches a person,
+ * and @name only reaches a public channel or group -- so a numeric id is kept as-is and
+ * everything else is treated as a @name.
+ *
+ * A topic is written as a trailing `/<topic id>`, which is also the shape of the links
+ * Telegram itself copies: `t.me/c/<internal id>/<topic id>` for a private group and
+ * `t.me/<name>/<topic id>` for a public one.
+ */
+export function parseBotTarget(raw: string): BotTarget {
+  const s = raw.trim();
+
+  // Private group/channel link. The segment after the internal id is the topic; a copied
+  // message link inside a topic adds the message id after that, which is not needed here.
+  const priv = s.match(/(?:https?:\/\/)?t\.me\/c\/(\d+)(?:\/(\d+))?/);
+  if (priv) return withThread(`-100${priv[1]}`, priv[2]);
+
+  // Everything else -- id, @name or t.me/name -- may carry a trailing topic id.
+  const topic = s.match(/^(.*?)\/(\d+)$/);
+  if (topic) return withThread(normaliseBotChat(topic[1]), topic[2]);
+  return { chatId: normaliseBotChat(s) };
+}
+
+function withThread(chatId: string, thread?: string): BotTarget {
+  const id = thread ? Number(thread) : 0;
+  return id > 0 ? { chatId, threadId: id } : { chatId };
+}
+
+/** The canonical stored form of a target: `<chat>` or `<chat>/<topic>`. */
+export function normaliseBotTarget(raw: string): string {
+  const { chatId, threadId } = parseBotTarget(raw);
+  return threadId ? `${chatId}/${threadId}` : chatId;
+}
+
+/** True when the target's chat is a numeric chat id rather than a public @name. */
 export function isChatId(target: string): boolean {
-  return /^-?\d+$/.test(target.trim());
+  return /^-?\d+$/.test(parseBotTarget(target).chatId);
 }
 
 export function getNotifyConfig(): NotifyConfig {
@@ -124,12 +158,18 @@ export type BotChat = {
   id: number;
   type: string;
   title: string;
+  /** Set when the update came from a forum topic rather than the chat itself. */
+  threadId?: number;
+  /** The target to store to reach this chat -- and topic, when there is one. */
+  target: string;
 };
 
 /**
  * Chats the bot has heard from recently, via getUpdates. This is how an operator finds the
- * numeric chat id to notify: message the bot, then read the id back off this list. Only
- * works while no webhook is set and only covers updates Telegram still holds (~24h).
+ * numeric chat id to notify: message the bot, then read the id back off this list. A forum
+ * group is listed once per topic the bot has seen, so messaging it inside the wanted topic
+ * is enough to pick that topic up. Only works while no webhook is set and only covers
+ * updates Telegram still holds (~24h).
  */
 export async function recentBotChats(token: string): Promise<BotApiResult<BotChat[]>> {
   const res = await botApi<Array<Record<string, unknown>>>(token, "getUpdates", {
@@ -138,14 +178,24 @@ export async function recentBotChats(token: string): Promise<BotApiResult<BotCha
   });
   if (!res.ok) return res;
 
-  const chats = new Map<number, BotChat>();
+  const chats = new Map<string, BotChat>();
   for (const update of res.result) {
     // Every update that carries a chat -- message, edited_message, channel_post,
     // my_chat_member -- holds it under the same `chat` key one level down.
     for (const value of Object.values(update)) {
-      const chat = (value as { chat?: RawChat } | null)?.chat;
-      if (!chat || typeof chat.id !== "number" || chats.has(chat.id)) continue;
-      chats.set(chat.id, { id: chat.id, type: chat.type, title: chatTitle(chat) });
+      const msg = value as RawMessage | null;
+      const chat = msg?.chat;
+      if (!chat || typeof chat.id !== "number") continue;
+      const threadId = topicId(msg);
+      const key = `${chat.id}:${threadId ?? 0}`;
+      if (chats.has(key)) continue;
+      chats.set(key, {
+        id: chat.id,
+        type: chat.type,
+        title: threadId ? `${chatTitle(chat)} / ${topicName(msg, threadId)}` : chatTitle(chat),
+        ...(threadId ? { threadId } : {}),
+        target: threadId ? `${chat.id}/${threadId}` : String(chat.id),
+      });
     }
   }
   return { ok: true, result: [...chats.values()] };
@@ -159,6 +209,27 @@ type RawChat = {
   first_name?: string;
 };
 
+type RawMessage = {
+  chat?: RawChat;
+  is_topic_message?: boolean;
+  message_thread_id?: number;
+  forum_topic_created?: { name?: string };
+  reply_to_message?: { forum_topic_created?: { name?: string } };
+};
+
+/** The forum topic a message belongs to, or undefined outside a topic. */
+function topicId(msg: RawMessage): number | undefined {
+  if (!msg.is_topic_message || typeof msg.message_thread_id !== "number") return undefined;
+  return msg.message_thread_id;
+}
+
+/** Telegram only names the topic on the service message that opened it, or a reply to it. */
+function topicName(msg: RawMessage, threadId: number): string {
+  const name =
+    msg.forum_topic_created?.name ?? msg.reply_to_message?.forum_topic_created?.name;
+  return name || `topic ${threadId}`;
+}
+
 function chatTitle(chat: RawChat): string {
   const name = [chat.first_name, chat.username ? `@${chat.username}` : null]
     .filter(Boolean)
@@ -166,16 +237,21 @@ function chatTitle(chat: RawChat): string {
   return chat.title || name || String(chat.id);
 }
 
-/** Sends a message as the bot. Rejects with the Bot API's own description on failure. */
+/**
+ * Sends a message as the bot, into a forum topic when the target names one.
+ * Rejects with the Bot API's own description on failure.
+ */
 export async function sendBotNotify(
   token: string,
   target: string,
   message: string,
 ): Promise<void> {
+  const { chatId, threadId } = parseBotTarget(target);
   const res = await botApi(token, "sendMessage", {
-    chat_id: normaliseBotTarget(target),
+    chat_id: chatId,
     text: message,
     disable_web_page_preview: true,
+    ...(threadId ? { message_thread_id: threadId } : {}),
   });
   if (!res.ok) throw new Error(res.error);
 }
