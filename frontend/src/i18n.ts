@@ -94,6 +94,9 @@ const zh = {
     apiHashOptional: "API Hash（可选）",
     labelProxy: "代理",
     proxyNone: "不使用代理",
+    proxyNoTelegram: "不支持 Telegram",
+    proxyNoTelegramHint:
+      "Telegram 的 MTProto 仅支持 SOCKS 代理，HTTP 代理（Webshare 同步得到的即为 HTTP）无法承载账户连接，因此在此不可选。此类代理仍可作为任务/模板代理用于浏览器（Cloudflare 验证 / 小程序）。",
     labelAppClient: "TG 客户端",
     appClientDefault: "默认",
     appClientRandom: "随机 (自动)",
@@ -1098,6 +1101,9 @@ const zh = {
     uaPresetDeleteTip: "删除",
     proxiesSection: "代理服务器",
     proxiesHint: "在模板中选择代理，用于无法直连的 Emby 服务器。",
+    proxyBrowserOnly: "仅浏览器",
+    proxyBrowserOnlyTip:
+      "HTTP 代理只能用于浏览器（Cloudflare 验证 / 小程序），无法用于 Telegram 账户连接（MTProto 仅支持 SOCKS）。",
     proxyName: "名称",
     proxyUrl: "socks5://user:pass@host:1080",
     proxyHost: "地址（或粘贴完整 URL 自动填写）",
@@ -1624,6 +1630,9 @@ const en: typeof zh = {
     apiHashOptional: "API Hash (optional)",
     labelProxy: "Proxy",
     proxyNone: "No proxy",
+    proxyNoTelegram: "unusable for Telegram",
+    proxyNoTelegramHint:
+      "Telegram's MTProto only speaks SOCKS, so an HTTP proxy (which is what a Webshare sync produces) cannot carry an account connection and is not selectable here. Such proxies still work as a job or template proxy for the browser side (Cloudflare checks / Mini Apps).",
     labelAppClient: "TG Client",
     appClientDefault: "Default",
     appClientRandom: "Random (auto)",
@@ -2662,6 +2671,9 @@ const en: typeof zh = {
     proxiesSection: "Proxies",
     proxiesHint:
       "Select a proxy on a template to reach Emby servers that are blocked from direct access.",
+    proxyBrowserOnly: "browser only",
+    proxyBrowserOnlyTip:
+      "An HTTP proxy serves the browser side only (Cloudflare checks / Mini Apps); it cannot carry a Telegram account connection, since MTProto only speaks SOCKS.",
     proxyName: "Name",
     proxyUrl: "socks5://user:pass@host:1080",
     proxyHost: "Host (or paste a full URL to auto-fill)",

@@ -191,11 +191,37 @@ router.get("/", (req, res) => {
   });
 });
 
+/**
+ * An account's proxy is its Telegram exit, and MTProto only speaks SOCKS. parseTgProxy drops
+ * anything else, so an HTTP proxy here (what a Webshare sync produces) would leave the account
+ * connecting direct with nothing said about it. Refuse the assignment; HTTP exits are still
+ * usable for the browser side as a job or template proxy.
+ *
+ * Returns the offending scheme, or null when the proxy is fine (or unknown, which says nothing).
+ */
+function proxySchemeUnusableForTelegram(
+  proxyId: string | null | undefined,
+): string | null {
+  if (!proxyId) return null;
+  const url = resolveProxyUrl(proxyId);
+  if (!url || parseTgProxy(url)) return null;
+  return url.match(/^([a-z][a-z0-9+.-]*):\/\//i)?.[1].toLowerCase() ?? "unknown";
+}
+
+const tgProxyError = (scheme: string) =>
+  `Proxy uses ${scheme}://, which Telegram cannot use — an account proxy must be socks5:// or socks4://. ` +
+  `Keep this one for the browser side by setting it as a job or template proxy instead.`;
+
 router.post("/", (req, res) => {
   const { name, phoneNumber, apiId, apiHash, proxyId, appClientId, notes } =
     req.body as Record<string, string>;
   if (!name || !phoneNumber) {
     res.status(400).json({ error: "name and phoneNumber are required" });
+    return;
+  }
+  const badScheme = proxySchemeUnusableForTelegram(proxyId);
+  if (badScheme) {
+    res.status(400).json({ error: tgProxyError(badScheme) });
     return;
   }
   // API credentials required unless global defaults are configured
@@ -580,7 +606,15 @@ router.put("/:id", (req, res) => {
 
   // undefined = not in payload (keep existing), null/'' = clear
   const newProxyId =
-    proxyId !== undefined ? proxyId || null : existing.proxy_id;
+    proxyId !== undefined ? (proxyId as string | null) || null : existing.proxy_id;
+  // Only a change is judged: an account already carrying an HTTP proxy stays editable
+  if (newProxyId !== existing.proxy_id) {
+    const badScheme = proxySchemeUnusableForTelegram(newProxyId);
+    if (badScheme) {
+      res.status(400).json({ error: tgProxyError(badScheme) });
+      return;
+    }
+  }
   const newDisabled =
     disabled !== undefined ? (disabled ? 1 : 0) : existing.disabled;
   const newAppClientId =

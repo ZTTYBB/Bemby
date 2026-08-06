@@ -540,11 +540,19 @@ function createAccounts(
 ): BulkAddItem[] {
   // Restrict the random pools to the user-selected candidates; an empty
   // selection means "any configured entry".
-  const allProxies = readSettingList<{ id: string }>("proxies");
+  // These become account proxies, i.e. Telegram exits, so HTTP entries (what a Webshare
+  // sync produces) are no use here -- assigning one would leave the account connecting direct.
+  const allProxies = readSettingList<{ id: string; url?: string }>("proxies").filter(
+    (p) => !!parseTgProxy(p.url),
+  );
   const allClients = readSettingList<{ id: string }>("tg_app_clients");
   const proxies = config.proxyIds.length
     ? allProxies.filter((p) => config.proxyIds.includes(p.id))
     : allProxies;
+  if (config.proxyIds.length && !proxies.length)
+    console.warn(
+      "[bulkAdd] None of the selected proxies can carry Telegram (SOCKS only); accounts are created without one",
+    );
   const clients = config.deviceIds.length
     ? allClients.filter((c) => config.deviceIds.includes(c.id))
     : allClients;

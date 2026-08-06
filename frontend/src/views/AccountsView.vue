@@ -187,7 +187,9 @@
                 >
                 <span
                   v-if="a.proxyId"
-                  class="badge badge-purple"
+                  class="badge"
+                  :class="accountProxyUsable(a.proxyId) ? 'badge-purple' : 'badge-red'"
+                  :title="accountProxyUsable(a.proxyId) ? undefined : t('accounts.proxyNoTelegramHint')"
                   style="margin-left: 4px; font-size: 10px"
                   ><i
                     class="fa-solid fa-shield-halved"
@@ -722,10 +724,23 @@
             <label class="form-label">{{ t("accounts.labelProxy") }}</label>
             <select v-model="form.proxyId" class="form-select">
               <option value="">{{ t("accounts.proxyNone") }}</option>
-              <option v-for="p in proxiesList" :key="p.id" :value="p.id">
-                {{ p.name }}
+              <option
+                v-for="p in proxiesList"
+                :key="p.id"
+                :value="p.id"
+                :disabled="!proxySupportsTelegram(p.url)"
+              >
+                {{ p.name
+                }}{{
+                  proxySupportsTelegram(p.url)
+                    ? ""
+                    : ` (${proxyScheme(p.url) ?? "?"} — ${t("accounts.proxyNoTelegram")})`
+                }}
               </option>
             </select>
+            <div v-if="hasNonTgProxies" class="form-hint">
+              {{ t("accounts.proxyNoTelegramHint") }}
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label">{{ t("accounts.labelAppClient") }}</label>
@@ -1406,7 +1421,7 @@
                   class="form-select bulk-add-multiselect"
                 >
                   <option
-                    v-for="p in proxiesList"
+                    v-for="p in tgProxiesList"
                     :key="p.id"
                     :value="p.id"
                   >
@@ -1415,6 +1430,9 @@
                 </select>
                 <div class="form-hint">
                   {{ t("accounts.bulkAdd.candidateHint") }}
+                  <template v-if="hasNonTgProxies">
+                    {{ t("accounts.proxyNoTelegramHint") }}
+                  </template>
                 </div>
               </div>
             </div>
@@ -2586,6 +2604,7 @@ import {
 import { t, locale } from "../i18n";
 import { usePersistedRef } from "../composables/usePersistedRef";
 import { phoneCountry } from "../utils/phoneCountry";
+import { proxyScheme, proxySupportsTelegram } from "../utils/proxy";
 import { debounce } from "../composables/useDebounce";
 import {
   onBulkTaskFinished,
@@ -2704,6 +2723,19 @@ const proxiesList = computed<Proxy[]>(() => {
     return [];
   }
 });
+
+// An account proxy is the Telegram exit, so only SOCKS entries can serve as one
+const tgProxiesList = computed(() =>
+  proxiesList.value.filter((p) => proxySupportsTelegram(p.url)),
+);
+const hasNonTgProxies = computed(
+  () => tgProxiesList.value.length < proxiesList.value.length,
+);
+const accountProxyUsable = (proxyId: string): boolean => {
+  const p = proxiesList.value.find((x) => x.id === proxyId);
+  // An id with no matching entry says nothing about the scheme; don't cry wolf
+  return !p || proxySupportsTelegram(p.url);
+};
 
 const appClientsList = computed<TgAppClient[]>(() => {
   try {

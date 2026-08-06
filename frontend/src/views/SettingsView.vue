@@ -924,6 +924,13 @@
             <div v-else class="ua-preset-row">
               <span class="ua-preset-name">{{ p.name }}</span>
               <span class="ua-preset-value">{{ p.url }}</span>
+              <span
+                v-if="!proxySupportsTelegram(p.url)"
+                class="badge badge-red"
+                style="font-size: 10px"
+                :title="t('settings.proxyBrowserOnlyTip')"
+                >{{ t("settings.proxyBrowserOnly") }}</span
+              >
               <button
                 class="btn btn-sm btn-ghost btn-icon"
                 :title="t('common.edit')"
@@ -2022,6 +2029,7 @@ import type {
   NotifyBotChat,
 } from "../api/client";
 import { t } from "../i18n";
+import { proxySupportsTelegram } from "../utils/proxy";
 import { setAccountDisplayWithTgName } from "../composables/accountDisplay";
 import { setSchedulePageSeparate } from "../composables/schedulePage";
 
