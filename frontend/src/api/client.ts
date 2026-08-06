@@ -497,6 +497,7 @@ export type WebStep =
   | { type: "web_button"; selector: string }
   | { type: "web_delay"; waitMs: number }
   | { type: "web_scroll"; x?: number; y?: number }
+  | { type: "web_scroll_to"; selector: string; waitMs?: number }
   | { type: "web_wait_element"; selector: string; waitMs?: number }
   | { type: "web_turnstile" }
   | {
@@ -1254,6 +1255,11 @@ export type Settings = {
   cf_profile_count?: string;
   /** Locale the browser reports; blank follows the country its exit comes out in. */
   cf_browser_lang?: string;
+  /** x11vnc, needed to show a hand-driven browser. */
+  vnc_installed?: string;
+  vnc_source?: string;
+  vnc_version?: string;
+  vnc_bytes?: string;
   cf_profile_id?: string;
   /** Server-computed: "true" when the CJK/emoji faces are in the data dir. */
   cf_fonts_installed?: string;
@@ -1295,10 +1301,64 @@ export type CfBrowserTest = {
   exitCountry?: string;
 };
 
+/** A browser opened on a job's own profile, for signing in by hand. */
+export type ManualSession = {
+  id: string;
+  kind: "drive" | "watch";
+  jobId: number;
+  runId?: string;
+  jobName: string;
+  profileKey: string;
+  vncPort: number;
+  startedAt: number;
+  lastSeenAt: number;
+  url: string;
+};
+
+/** A job run that has a screen up, which a viewer can attach to. */
+export type RunDisplay = {
+  runId: string;
+  jobId?: number;
+  jobName?: string;
+  display: string;
+  startedAt: number;
+};
+
+export const manualBrowserApi = {
+  status: () =>
+    api
+      .get<{ session: ManualSession | null; runs: RunDisplay[] }>("/manual-browser")
+      .then((r) => r.data),
+  /** Attaches to a job already running, instead of opening a browser. */
+  watch: (runId: string) =>
+    api
+      .post<{ session: ManualSession; ticket: string }>("/manual-browser/watch", { runId })
+      .then((r) => r.data),
+  start: (jobId: number, url?: string) =>
+    api
+      .post<{ session: ManualSession; ticket: string }>("/manual-browser/start", { jobId, url })
+      .then((r) => r.data),
+  /** A viewer that reconnects needs a fresh ticket: they are single-use. */
+  ticket: () =>
+    api
+      .post<{ session: ManualSession; ticket: string }>("/manual-browser/ticket")
+      .then((r) => r.data),
+  /** Sends the open browser to an address; there is no address bar inside it. */
+  goto: (url: string) =>
+    api.post<{ url: string }>("/manual-browser/goto", { url }).then((r) => r.data),
+  stop: () => api.post("/manual-browser/stop").then((r) => r.data),
+};
+
 export const settingsApi = {
   get: () => api.get<Settings>("/settings").then((r) => r.data),
   update: (data: Partial<Settings>) =>
     api.put<Settings>("/settings", data).then((r) => r.data),
+  /** Fetches x11vnc into the data dir, where it survives an upgrade. */
+  installVnc: () =>
+    api
+      .post<{ ok: boolean; error?: string; log?: string[] }>("/settings/vnc/install")
+      .then((r) => r.data),
+  removeVnc: () => api.post("/settings/vnc/remove").then((r) => r.data),
   testProxy: (url: string) =>
     api
       .post<{ ok: boolean; error?: string }>("/settings/test-proxy", { url })

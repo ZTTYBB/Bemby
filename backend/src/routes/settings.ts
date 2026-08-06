@@ -44,6 +44,7 @@ import {
   removeAllCfBuilds,
   stopAllCfBrowsers,
 } from "../jobs/cfBrowser";
+import { installVnc, removeVnc, vncInstallLog, vncStatus } from "../jobs/vncInstall";
 import {
   providersForClient,
   saveProviders,
@@ -229,6 +230,15 @@ function getClientSettings(): Record<string, string> {
     : "false";
   // Whether the on-demand Cloudflare-solver browser is present, and which build
   result.cf_chromium_installed = isChromiumInstalled() ? "true" : "false";
+  // x11vnc, which the hand-driven browser needs to show its screen. Installed on demand
+  // into the data dir, so an image without it is a button press away rather than a rebuild.
+  {
+    const vnc = vncStatus();
+    result.vnc_installed = vnc.available ? "true" : "false";
+    result.vnc_source = vnc.source;
+    result.vnc_version = vnc.version ?? "";
+    result.vnc_bytes = vnc.bytes ? String(vnc.bytes) : "";
+  }
   result.cf_chromium_version = chromiumVersion() ?? "";
   // Which build is on disk, and whether a configured key unlocks one that is not yet
   // downloaded -- downloads are deliberate, so this is what surfaces the outstanding one
@@ -336,6 +346,32 @@ router.put("/", (req, res) => {
 //
 // The fonts are reported but do not decide `ok`: with the image's Latin fallback the
 // browser still works, so a blocked font download is a warning, not a failed install.
+// POST /vnc/install -- fetch x11vnc into the data dir. The app runs as `node`, so apt is
+// pointed at directories it owns and asked only what it would download; the .deb files are
+// then unpacked into the volume, which is what carries the install across an upgrade.
+router.post("/vnc/install", async (_req, res) => {
+  try {
+    const status = await installVnc();
+    res.json({ ok: true, status, log: vncInstallLog().log.slice(-40) });
+  } catch (e: any) {
+    res.status(400).json({
+      ok: false,
+      error: e?.message ?? String(e),
+      log: vncInstallLog().log.slice(-40),
+    });
+  }
+});
+
+/** Progress for a install still running, so the button can show what it is doing. */
+router.get("/vnc/install", (_req, res) => {
+  res.json({ ...vncInstallLog(), status: vncStatus() });
+});
+
+router.post("/vnc/remove", (_req, res) => {
+  removeVnc();
+  res.json({ ok: true, status: vncStatus() });
+});
+
 let cfInstalling = false;
 router.post("/cf-solver/install", async (req, res) => {
   const force = req.body?.force === true || req.query.force === "1";

@@ -13,6 +13,7 @@ import path from "path";
 import authRouter from "./routes/auth";
 import accountsRouter from "./routes/accounts";
 import jobsRouter from "./routes/jobs";
+import manualBrowserRouter from "./routes/manual-browser";
 import logsRouter from "./routes/logs";
 import statusRouter from "./routes/status";
 import settingsRouter from "./routes/settings";
@@ -27,7 +28,8 @@ import webviewSiteRouter from "./routes/webviewSite";
 import { isWebviewHost, webviewPublicOrigin } from "./tg/webviewTickets";
 import { requireAuth, getJwtSecret } from "./middleware/auth";
 import { startScheduler } from "./scheduler";
-import { attachWebSocket } from "./tg/wsHandler";
+import { createPanelWss } from "./tg/wsHandler";
+import { createVncWss } from "./tg/vncBridge";
 import { startMemoryMonitor, markCleanShutdown } from "./monitor/memory";
 
 // Validate critical env vars before accepting any requests
@@ -146,6 +148,7 @@ app.use("/api/auth", authRouter);
 // Protected API routes
 app.use("/api/accounts", requireAuth, accountsRouter);
 app.use("/api/jobs", requireAuth, jobsRouter);
+app.use("/api/manual-browser", requireAuth, manualBrowserRouter);
 app.use("/api/logs", requireAuth, logsRouter);
 app.use("/api/status", requireAuth, statusRouter);
 app.use("/api/settings", requireAuth, settingsRouter);
@@ -183,7 +186,21 @@ app.use(
 );
 
 const server = createServer(app);
-attachWebSocket(server);
+// One upgrade listener for every socket. A WebSocketServer bound directly to the HTTP
+// server answers all upgrades and destroys those whose path it does not know, so two of
+// them on one server kill each other's connections -- routing here is what keeps the
+// panel's socket and the manual browser's screen both reachable.
+const panelWss = createPanelWss();
+const vncWss = createVncWss();
+server.on("upgrade", (req, socket, head) => {
+  const pathname = new URL(req.url ?? "/", `http://${req.headers.host}`).pathname;
+  const target = pathname === "/ws" ? panelWss : pathname === "/ws/vnc" ? vncWss : undefined;
+  if (!target) {
+    socket.destroy();
+    return;
+  }
+  target.handleUpgrade(req, socket, head, (ws) => target.emit("connection", ws, req));
+});
 server.listen(PORT, BIND_HOST, () => {
   console.log(`Bemby admin: http://${DISPLAY_HOST}:${PORT}`);
   // Before the scheduler, so the "previous process died at NNN MB" line prints above the

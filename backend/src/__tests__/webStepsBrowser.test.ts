@@ -314,6 +314,99 @@ describe.skipIf(!exe)("page steps in a real browser", () => {
   );
 
   it(
+    "scrolls to an element rather than a distance, and reports where it landed",
+    async () => {
+      // The case pixels cannot serve: the target sits below content of unknown length
+      const p = await open(
+        `<div style="height:3000px">filler</div>` +
+          `<button id="reply" style="height:40px">reply</button>` +
+          `<div style="height:2000px">more</div>`,
+      );
+      const run = await runWebSteps(
+        p,
+        [{ type: "web_scroll_to", selector: "#reply" }],
+        Date.now() + 30_000,
+        {},
+      );
+
+      expect(run.ok).toBe(true);
+      expect(run.logs[0].outcome).toContain("scrolled to `#reply`");
+      // In view, and near the middle rather than just barely on screen
+      const box = await p.evaluate(() => {
+        const r = document.getElementById("reply")!.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, height: innerHeight };
+      });
+      expect(box.top).toBeGreaterThan(0);
+      expect(box.bottom).toBeLessThan(box.height);
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
+    "reaches a target inside a scrollable panel, not just the page",
+    async () => {
+      // A distance scrolls the page; the element here moves only if its own panel does
+      const p = await open(
+        `<div id="panel" style="height:200px;overflow:auto">` +
+          `<div style="height:1500px">filler</div>` +
+          `<button id="deep">deep</button></div>`,
+      );
+      const run = await runWebSteps(
+        p,
+        [{ type: "web_scroll_to", selector: "#deep" }],
+        Date.now() + 30_000,
+        {},
+      );
+
+      expect(run.ok).toBe(true);
+      expect(await p.evaluate(() => document.getElementById("panel")!.scrollTop)).toBeGreaterThan(0);
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
+    "waits for a target the page has yet to draw",
+    async () => {
+      const p = await open(`<div style="height:2000px">filler</div>`);
+      await p.evaluate(() => {
+        setTimeout(() => {
+          const b = document.createElement("button");
+          b.id = "late";
+          document.body.appendChild(b);
+        }, 400);
+      });
+      const run = await runWebSteps(
+        p,
+        [{ type: "web_scroll_to", selector: "#late", waitMs: 5000 }],
+        Date.now() + 30_000,
+        {},
+      );
+      expect(run.ok).toBe(true);
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
+    "fails when the target never appears, rather than scrolling somewhere arbitrary",
+    async () => {
+      const p = await open(`<div style="height:2000px">filler</div>`);
+      const run = await runWebSteps(
+        p,
+        [{ type: "web_scroll_to", selector: "#nope", waitMs: 300 }],
+        Date.now() + 30_000,
+        {},
+      );
+      expect(run.ok).toBe(false);
+      expect(run.logs[0].error).toMatch(/appeared to scroll to/);
+      await p.close();
+    },
+    60_000,
+  );
+
+  it(
     "reads the post body off the page for a later step to quote",
     async () => {
       const p = await open(LIST);

@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -13,7 +14,7 @@ import path from "node:path";
 import net from "node:net";
 import os from "node:os";
 import { createHash } from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { SocksClient } from "socks";
 import type { BrowserContext, Page } from "playwright-core";
 import { cfTuning } from "./cfTuning";
@@ -568,8 +569,9 @@ function warnIfWindowExceedsScreen(win?: { width: number; height: number }): voi
  * Starts one X server on a free display number. The socket appearing is what proves it
  * came up: a process that died is still an unreaped child that looks alive.
  */
-async function startXvfb(): Promise<string | undefined> {
-  for (let n = 99; n < 110; n++) {
+async function startXvfb(): Promise<{ display: string; proc: ChildProcess } | undefined> {
+  // Room for one display per concurrent run, not just the shared one
+  for (let n = 99; n < 200; n++) {
     const display = `:${n}`;
     if (existsSync(displaySocket(display))) continue;
 
@@ -608,7 +610,7 @@ async function startXvfb(): Promise<string | undefined> {
       process.once("exit", () => proc.kill());
       startedScreen = { width, height };
       console.log(`[cfBrowser] started Xvfb on ${display} at ${width}x${height}`);
-      return display;
+      return { display, proc };
     }
     proc.kill();
     if (missing) break; // trying other display numbers cannot help
@@ -633,10 +635,23 @@ async function ensureDisplay(): Promise<string | undefined> {
       );
       return undefined;
     }
-    process.env.DISPLAY = started;
-    return started;
+    process.env.DISPLAY = started.display;
+    return started.display;
   })();
   return displayPromise;
+}
+
+/**
+ * A display nothing else is drawing on, for a browser someone is going to watch: the shared
+ * one carries every job's browser at once, and a viewer pointed at that would show them all.
+ * The caller owns it and must end it -- `close` takes the X server down with it.
+ */
+export async function startPrivateDisplay(): Promise<
+  { display: string; close: () => void } | undefined
+> {
+  const started = await startXvfb();
+  if (!started) return undefined;
+  return { display: started.display, close: () => started.proc.kill() };
 }
 
 // ── Profiles ─────────────────────────────────────────────────────────────────
@@ -775,6 +790,64 @@ function pruneProfiles(root: string): void {
     }
   } catch {
     /* housekeeping only */
+  }
+}
+
+/**
+ * A profile's cookies, kept alongside it between runs.
+ *
+ * Chromium's own store cannot be relied on for this. A cookie with no expiry -- a session
+ * cookie, which is how a great many sites sign you in -- is dropped the moment the browser
+ * closes; a desktop browser only seems to keep you signed in because "continue where you
+ * left off" puts them back. And even the persistent ones are written through SQLite, which
+ * leaves them in a journal that a browser killed on the way out never commits, so a profile
+ * can come back with an empty cookie table.
+ *
+ * So the jar is written out in full when the browser closes and put back when it opens.
+ * Kept inside the profile, so it travels with it and is thrown away with it, and stamped so
+ * an ancient session is not replayed at a site that forgot it long ago.
+ */
+const COOKIE_FILE = "bemby-cookies.json";
+const COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
+
+type StoredCookies = { savedAt: number; cookies: unknown[] };
+
+async function saveCookies(context: BrowserContext, dir: string): Promise<number> {
+  try {
+    const cookies = await context.cookies();
+    const file = path.join(dir, COOKIE_FILE);
+    if (!cookies.length) {
+      rmSync(file, { force: true });
+      return 0;
+    }
+    writeFileSync(file, JSON.stringify({ savedAt: Date.now(), cookies }));
+    return cookies.length;
+  } catch {
+    // A browser already gone has nothing to hand over; whatever was saved last run stands
+    return 0;
+  }
+}
+
+async function restoreCookies(context: BrowserContext, dir: string): Promise<number> {
+  const file = path.join(dir, COOKIE_FILE);
+  try {
+    const stored = JSON.parse(readFileSync(file, "utf8")) as StoredCookies;
+    if (!stored?.cookies?.length) return 0;
+    if (Date.now() - (stored.savedAt ?? 0) > COOKIE_MAX_AGE_MS) {
+      rmSync(file, { force: true });
+      return 0;
+    }
+    // One that has since expired is not worth handing back, and Chromium would refuse it
+    const now = Date.now() / 1000;
+    type Stored = Parameters<BrowserContext["addCookies"]>[0][number];
+    const live = (stored.cookies as Stored[]).filter(
+      (c) => !c.expires || c.expires <= 0 || c.expires > now,
+    );
+    if (!live.length) return 0;
+    await context.addCookies(live);
+    return live.length;
+  } catch {
+    return 0;
   }
 }
 
@@ -996,6 +1069,11 @@ export async function launchCfBrowser(
      * ships as one profile per exit.
      */
     profile?: { template?: string; vars?: CfProfileVars };
+    /**
+     * Draw on this X display instead of the shared one. For a browser someone is about to
+     * watch over VNC: on its own display, the viewer sees this browser and nothing else.
+     */
+    display?: string;
   } = {},
 ): Promise<LaunchedBrowser> {
   const tune = cfTuning();
@@ -1010,7 +1088,7 @@ export async function launchCfBrowser(
   // the sort of thing a challenge scores against.
   applyCfFontEnv();
 
-  const display = await ensureDisplay();
+  const display = opts.display ?? (await ensureDisplay());
   const win = configuredWindow();
   warnIfWindowExceedsScreen(win);
   const key = exitKey(proxyUrl);
@@ -1123,7 +1201,15 @@ export async function launchCfBrowser(
           "--disable-renderer-backgrounding",
           "--disable-background-timer-throttling",
         ],
-        launchOptions: { timeout: tune.navTimeoutMs, executablePath: exe },
+        launchOptions: {
+          timeout: tune.navTimeoutMs,
+          executablePath: exe,
+          // A display of this browser's own goes to the child's environment rather than
+          // being set globally, so a job launching at the same moment is not dragged onto
+          // it. It has to ride here: CloakBrowser forwards `launchOptions` to Playwright
+          // but has no top-level `env` option of its own, and would drop one.
+          ...(opts.display ? { env: { ...process.env, DISPLAY: opts.display } } : {}),
+        },
       }),
     );
 
@@ -1164,6 +1250,12 @@ export async function launchCfBrowser(
     context.setDefaultTimeout(tune.protocolTimeoutMs);
     context.setDefaultNavigationTimeout(tune.navTimeoutMs);
 
+    // Put the jar back before anything loads. Without this a site that signs you in with a
+    // session cookie meets a signed-out visitor every run, however carefully the profile
+    // itself was kept.
+    const restored = await restoreCookies(context, profile.dir);
+    if (restored) console.log(`[cfBrowser] restored ${restored} cookie(s) for ${profileKey}`);
+
     const pages = context.pages();
     const page = pages[0] ?? (await context.newPage());
     // A reused profile reopens the tabs the last session left behind, and they pile up run
@@ -1183,6 +1275,13 @@ export async function launchCfBrowser(
       tier: usedTier,
       geo,
       close: async () => {
+        // Before the browser goes: its cookies, which its own store may not keep
+        await Promise.race([
+          saveCookies(context, profile.dir).then((n) => {
+            if (n) console.log(`[cfBrowser] saved ${n} cookie(s) for ${profileKey}`);
+          }),
+          new Promise((r) => setTimeout(r, 5_000)),
+        ]);
         // Bounded: a wedged renderer can leave close() pending, and everything below it --
         // the licence seat above all -- would then be held for the life of the process.
         await Promise.race([

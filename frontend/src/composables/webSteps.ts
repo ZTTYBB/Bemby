@@ -40,6 +40,7 @@ export const WEB_STEP_TYPES: WebStepType[] = [
   "web_wait_element",
   "web_delay",
   "web_scroll",
+  "web_scroll_to",
   "web_turnstile",
   "web_goto",
   "web_back",
@@ -125,6 +126,12 @@ export function webStepToConfig(s: WebStepForm): WebStep {
         ...(s.scrollX ? { x: s.scrollX } : {}),
         ...(s.scrollY ? { y: s.scrollY } : {}),
       };
+    case "web_scroll_to":
+      return {
+        type: "web_scroll_to",
+        selector: s.selector.trim(),
+        ...(s.waitMs > 0 ? { waitMs: s.waitMs } : {}),
+      };
     case "web_wait_element":
       return {
         type: "web_wait_element",
@@ -205,6 +212,8 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
       return { ...base, type: s.type };
     case "web_scroll":
       return { ...base, type: s.type, scrollX: s.x ?? 0, scrollY: s.y ?? 0 };
+    case "web_scroll_to":
+      return { ...base, type: s.type, selector: s.selector, waitMs: s.waitMs ?? 5000 };
     case "web_wait_element":
       return { ...base, type: s.type, selector: s.selector, waitMs: s.waitMs ?? 30000 };
     case "web_goto":

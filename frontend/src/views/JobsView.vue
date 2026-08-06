@@ -105,6 +105,18 @@
                   <button class="btn btn-sm btn-success btn-icon" :disabled="running.has(j.id)" :title="t('common.run')" @click="runNow(j.id)">
                     <i class="fa-solid fa-play"></i>
                   </button>
+                  <button
+                    v-if="watchableRun(j.id)"
+                    class="btn btn-sm btn-ghost btn-icon"
+                    style="color: #2e9e5b"
+                    :title="t('manualBrowser.watch')"
+                    @click="watchRun(watchableRun(j.id) as string)"
+                  >
+                    <i class="fa-solid fa-eye"></i>
+                  </button>
+                  <button v-else-if="j.jobType === 'custom'" class="btn btn-sm btn-ghost btn-icon" :title="t('manualBrowser.open')" @click="openManualBrowser(j.id)">
+                    <i class="fa-solid fa-desktop"></i>
+                  </button>
                   <button class="btn btn-sm btn-ghost btn-icon" :title="t('common.edit')" @click="openEdit(j)"><i class="fa-solid fa-pen"></i></button>
                   <button class="btn btn-sm btn-ghost btn-icon" :title="t('common.duplicate')" @click="openDuplicate(j)"><i class="fa-solid fa-copy"></i></button>
                   <button class="btn btn-sm btn-danger btn-icon" :title="t('common.retire')" @click="retire(j.id)"><i class="fa-solid fa-box-archive"></i></button>
@@ -1089,6 +1101,9 @@
     <div v-if="actionMenuJob" class="action-sheet-backdrop" @click="actionMenuJob = null">
       <div class="action-sheet" @click.stop>
         <div class="action-sheet-header">{{ actionMenuJob.name }}</div>
+        <button v-if="actionMenuJob.jobType === 'custom'" class="action-sheet-btn" @click="openManualBrowser(actionMenuJob.id); actionMenuJob = null">
+          <i class="fa-solid fa-desktop"></i> {{ t('manualBrowser.open') }}
+        </button>
         <button class="action-sheet-btn" :disabled="running.has(actionMenuJob.id)" @click="runNow(actionMenuJob.id); actionMenuJob = null">
           <i class="fa-solid fa-play"></i> {{ t('common.run') }}
         </button>
@@ -1114,11 +1129,17 @@
     <!-- Bulk run error toast -->
     <div v-if="bulkRunToast" class="job-toast">{{ bulkRunToast }}</div>
   </div>
+  <ManualBrowser
+    v-if="manualBrowserJobId || manualBrowserRunId"
+    :job-id="manualBrowserJobId ?? undefined"
+    :run-id="manualBrowserRunId ?? undefined"
+    @closed="manualBrowserJobId = null; manualBrowserRunId = null"
+  />
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
-import { jobsApi, accountsApi, bulkTasksApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig, type CheckinConfig } from '../api/client';
+import { jobsApi, accountsApi, bulkTasksApi, manualBrowserApi, settingsApi, logsApi, templatesApi, type Job, type JobFacets, type JobTemplate, type Account, type Settings, type UAPreset, type EmbywatchConfig, type CustomConfig, type AutoregConfig, type CheckinConfig } from '../api/client';
 import { t, locale } from '../i18n';
 import { regexValid } from '../utils/regexCheck';
 import { usePersistedRef } from '../composables/usePersistedRef';
@@ -1129,6 +1150,7 @@ import { debounce } from '../composables/useDebounce';
 import PaginationBar from '../components/PaginationBar.vue';
 import WebStepsEditor from '../components/WebStepsEditor.vue';
 import { webStepsFromConfig, webStepsToConfig, type WebStepForm } from '../composables/webSteps';
+import ManualBrowser from '../components/ManualBrowser.vue';
 import {
   onBulkTaskFinished,
   runningTaskOfKind,
@@ -1654,6 +1676,8 @@ const scheduleListRef = ref<{ reload: () => Promise<void> } | null>(null);
 // The panel owns its own data; job changes here just ask it to look again
 async function loadStatus() {
   await scheduleListRef.value?.reload();
+  // Which runs have a screen up, so the list can offer to watch one
+  await refreshLiveRuns();
 }
 
 function fmtWindow(start: number, end: number) {
@@ -2370,6 +2394,36 @@ function openBulkRun() {
 function closeBulkRun() {
   showBulkRunModal.value = false;
   bulkRunTaskId.value = null;
+}
+
+const manualBrowserJobId = ref<number | null>(null);
+const manualBrowserRunId = ref<string | null>(null);
+// Runs with a screen up, refreshed alongside the running-job poll
+const liveRuns = ref<Record<number, string>>({});
+
+/** The run to watch for a job, when it has one going. */
+function watchableRun(jobId: number): string | undefined {
+  return liveRuns.value[jobId];
+}
+
+function watchRun(runId: string) {
+  manualBrowserRunId.value = runId;
+}
+
+async function refreshLiveRuns() {
+  try {
+    const { runs } = await manualBrowserApi.status();
+    const map: Record<number, string> = {};
+    for (const r of runs ?? []) if (r.jobId) map[r.jobId] = r.runId;
+    liveRuns.value = map;
+  } catch {
+    liveRuns.value = {};
+  }
+}
+
+/** Opens the job's own browser to drive by hand, so a login lands on its profile. */
+function openManualBrowser(id: number) {
+  manualBrowserJobId.value = id;
 }
 
 async function runNow(id: number) {

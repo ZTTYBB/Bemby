@@ -336,6 +336,38 @@
               {{ t("settings.cfSolver.langHint") }}
             </div>
           </div>
+          <!-- x11vnc: only needed to watch a browser being driven by hand, so it is
+               fetched on demand rather than shipped in every image -->
+          <div class="form-group" style="margin: 0 0 12px; max-width: 560px">
+            <label class="form-label">{{ t("settings.cfSolver.vncLabel") }}</label>
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+              <span v-if="vncInstalled" style="font-size: 12px; color: #2e9e5b">
+                <i class="fa-solid fa-check"></i>
+                {{ vncVersion || t("settings.cfSolver.vncPresent") }}
+                <span style="color: #888">({{ vncSourceText }})</span>
+              </span>
+              <span v-else style="font-size: 12px; color: #c47f17">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                {{ t("settings.cfSolver.vncMissing") }}
+              </span>
+              <button class="btn btn-sm btn-primary" :disabled="vncInstalling" @click="installVnc">
+                <i class="fa-solid fa-download"></i>
+                {{ vncInstalling ? t("settings.cfSolver.vncInstalling") : t(vncInstalled ? "settings.cfSolver.vncReinstall" : "settings.cfSolver.vncInstall") }}
+              </button>
+              <button
+                v-if="vncFromDataDir"
+                class="btn btn-sm btn-ghost"
+                :disabled="vncInstalling"
+                @click="removeVnc"
+              >
+                {{ t("common.delete") }}
+              </button>
+            </div>
+            <div style="font-size: 11px; color: #888; margin-top: 3px">
+              {{ t("settings.cfSolver.vncHint") }}
+            </div>
+            <pre v-if="vncLog" class="vnc-log">{{ vncLog }}</pre>
+          </div>
           <div class="form-group" style="margin: 0 0 12px; max-width: 420px">
             <label class="form-label">{{ t("settings.cfSolver.profileIdLabel") }}</label>
             <input
@@ -2256,6 +2288,58 @@ const CF_LOCALES = [
 const cfBrowserLang = ref("");
 const cfProfileId = ref("");
 
+// x11vnc, for the browser someone drives by hand
+const vncInstalled = ref(false);
+const vncSource = ref("");
+const vncVersion = ref("");
+const vncInstalling = ref(false);
+const vncLog = ref("");
+const vncFromDataDir = computed(() => vncSource.value === "data-dir");
+const vncSourceText = computed(() =>
+  t(vncSource.value === "data-dir" ? "settings.cfSolver.vncFromData" : "settings.cfSolver.vncFromImage"),
+);
+
+async function installVnc() {
+  vncInstalling.value = true;
+  vncLog.value = "";
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  try {
+    const r = await settingsApi.installVnc();
+    vncLog.value = (r.log ?? []).join("\n");
+    if (r.ok) cfInstallMsg.value = t("settings.saved");
+    else cfInstallError.value = r.error ?? t("settings.saveFailed");
+  } catch (e: any) {
+    const data = e?.response?.data;
+    vncLog.value = (data?.log ?? []).join("\n");
+    cfInstallError.value = data?.error ?? e?.message ?? t("settings.saveFailed");
+  } finally {
+    vncInstalling.value = false;
+    await refreshVnc();
+  }
+}
+
+async function removeVnc() {
+  vncInstalling.value = true;
+  try {
+    await settingsApi.removeVnc();
+  } finally {
+    vncInstalling.value = false;
+    await refreshVnc();
+  }
+}
+
+async function refreshVnc() {
+  try {
+    const s = await settingsApi.get();
+    vncInstalled.value = s.vnc_installed === "true";
+    vncSource.value = s.vnc_source ?? "";
+    vncVersion.value = s.vnc_version ?? "";
+  } catch {
+    /* the panel shows the last known state */
+  }
+}
+
 /** Saved as it is chosen: one select is not worth its own save button. */
 async function saveCfBrowserLang() {
   cfInstallMsg.value = "";
@@ -2879,6 +2963,9 @@ onMounted(async () => {
     cfProfileCount.value = Number(s.cf_profile_count ?? 0);
     cfBrowserLang.value = s.cf_browser_lang ?? "";
     cfProfileId.value = s.cf_profile_id ?? "";
+    vncInstalled.value = s.vnc_installed === "true";
+    vncSource.value = s.vnc_source ?? "";
+    vncVersion.value = s.vnc_version ?? "";
     cfChromiumPath.value = s.cf_chromium_path ?? "";
     cfKeyedPending.value = s.cf_chromium_keyed_pending === "true";
     cfFontsInstalled.value = s.cf_fonts_installed === "true";
@@ -3543,6 +3630,17 @@ async function signOutEverywhere() {
 </script>
 
 <style scoped>
+.vnc-log {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #f6f7f9;
+  border-radius: 4px;
+  font-size: 11px;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
 .tg-client-mode-row {
   display: flex;
   align-items: center;

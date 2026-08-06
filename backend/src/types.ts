@@ -340,6 +340,19 @@ export type WebStep =
     }
   | {
       /**
+       * Scroll until the element a selector names is in view, rather than by a distance.
+       *
+       * Better than pixels whenever the target has a selector: a page whose length depends on
+       * its content puts it somewhere different every run, and a fixed distance then lands
+       * somewhere arbitrary. Works for a target inside a scrollable panel as well as the page.
+       */
+      type: "web_scroll_to";
+      selector: string;
+      /** How long to wait for it to appear before giving up. Blank/0 waits 5s. */
+      waitMs?: number;
+    }
+  | {
+      /**
        * Hold until a CSS selector is on the page and has a box, so the next step is not run
        * against a page that has not finished rendering what it needs.
        */

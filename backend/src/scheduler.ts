@@ -6,6 +6,7 @@ import {
 } from "./db/database";
 import { decryptSecret } from "./db/secretColumns";
 import { runJob, type JobDetailLog } from "./jobs/runner";
+import { manualSessionJobId } from "./jobs/manualBrowser";
 import {
   notifyJobEvent,
   buildFailureMessage,
@@ -295,6 +296,22 @@ export async function executeJob(
         runEveryDays: freshJob.run_every_days ?? 1,
         runEveryDaysMax: freshJob.run_every_days_max ?? null,
       };
+    }
+
+    // A browser open by hand holds that job's profile. Running anyway would hand this one a
+    // throwaway profile -- a logged-out visitor -- and quietly undo what the session is for.
+    const manualJobId = manualSessionJobId();
+    if (manualJobId === job.id) {
+      const ranAt = new Date().toISOString();
+      db.prepare(
+        "INSERT INTO job_logs (job_id, ran_at, status, message) VALUES (?, ?, 'failed', ?)",
+      ).run(
+        job.id,
+        ranAt,
+        "Skipped: a browser is open for this job. Close it to let the job run again.",
+      );
+      console.log(`[scheduler] skipping job ${job.id}: its browser is open for manual use`);
+      return;
     }
 
     const ranAt = new Date().toISOString();

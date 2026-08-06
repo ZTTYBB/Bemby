@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { BrowserContext, Page } from "playwright-core";
 import { cfTuning } from "./cfTuning";
 import {
@@ -186,6 +187,8 @@ export type CfRunState = {
   jobId?: number;
   templateId?: number;
   tgId?: number;
+  /** Unique to this execution, which is what a viewer attaches to. */
+  runId: string;
 };
 
 export function newCfRunState(
@@ -195,6 +198,7 @@ export function newCfRunState(
     refused: new Map(),
     deadlines: new Map(),
     lastFailure: new Map(),
+    runId: randomBytes(9).toString("base64url"),
     ...(identity.jobId ? { jobId: identity.jobId } : {}),
     ...(identity.templateId ? { templateId: identity.templateId } : {}),
     ...(identity.tgId ? { tgId: identity.tgId } : {}),
@@ -291,6 +295,11 @@ export type LoadOptions = {
    * everything on the exit.
    */
   profile?: { template?: string; vars?: CfProfileVars };
+  /**
+   * X display to draw on. A job run gets one of its own so it can be watched by itself;
+   * blank uses the shared one, which is what everything did before.
+   */
+  display?: string;
 };
 
 // Every timing and limit the browser side runs on lives in cfTuning, so it can be
@@ -454,8 +463,9 @@ async function launchAlignedBrowser(
   proxyUrl: string | undefined,
   deadline: number,
   profile?: { template?: string; vars?: CfProfileVars },
+  display?: string,
 ): Promise<LaunchedBrowser> {
-  const launched = await launchCfBrowser(proxyUrl, { profile });
+  const launched = await launchCfBrowser(proxyUrl, { profile, display });
   if (launched.geo) return launched;
 
   const geo = await probeExitGeo(launched.page, launched.key, deadline);
@@ -467,7 +477,7 @@ async function launchAlignedBrowser(
   // be refused, which the keyed build answers by quitting during startup. The seat is
   // already free locally; this is purely to let the far side catch up.
   await sleep(cfTuning().relaunchSettleMs, deadline);
-  return launchCfBrowser(proxyUrl, { profile });
+  return launchCfBrowser(proxyUrl, { profile, display });
 }
 
 /**
@@ -1309,9 +1319,28 @@ export function parseTurnstileStep(step: string | undefined): boolean {
  * (`scroll(y=500)`, `scroll(x:-120)`) move one. Negative figures scroll back. Returns null
  * for anything that is not a scroll step.
  */
-export function parseScrollStep(step: string | undefined): { x: number; y: number } | null {
+export type ScrollStep = { x: number; y: number } | { selector: string };
+
+/** Whether a parsed scroll step names an element rather than a distance. */
+export function isScrollToSelector(s: ScrollStep): s is { selector: string } {
+  return "selector" in s;
+}
+
+export function parseScrollStep(step: string | undefined): ScrollStep | null {
   const m = /^scroll\(([^)]*)\)$/i.exec(step?.trim() ?? "");
   if (!m) return null;
+
+  // `scroll(css:#reply)` scrolls to an element instead of by a distance. Written with the
+  // same `css:` prefix the other in-app steps use for a selector, so there is one way to
+  // say "this exact element" throughout the vocabulary. A selector may contain a comma,
+  // so this is settled before the argument is split on one.
+  const inner = m[1].trim();
+  const named = /^css\s*:\s*(.+)$/is.exec(inner);
+  if (named) {
+    const selector = named[1].trim();
+    return selector ? { selector } : null;
+  }
+
   const parts = m[1]
     .split(",")
     .map((p) => p.trim())
@@ -1460,6 +1489,56 @@ async function scrollPageBy(
  * rest against the end so a log can tell "moved 800px" from "there was nothing left to
  * move". Null means nothing on the page scrolls at all.
  */
+/**
+ * Brings the element a selector names into view, wherever it sits.
+ *
+ * Better than a distance whenever the target has one: a page whose length changes with its
+ * content -- a thread with more replies today than yesterday -- puts the thing being scrolled
+ * to somewhere different every run, and a fixed number of pixels lands somewhere arbitrary.
+ * `scrollIntoView` also handles a target inside a scrollable panel rather than the page.
+ *
+ * Waits for the element, since the usual reason one is not there yet is that the page is
+ * still filling in. Returns what happened, or null when it never appeared.
+ */
+async function scrollToSelector(
+  page: Page,
+  selector: string,
+  waitMs: number,
+  deadline: number,
+): Promise<string | null> {
+  const tune = cfTuning();
+  const until = Math.min(Date.now() + Math.max(0, waitMs), deadline);
+  for (;;) {
+    const moved = await page
+      .evaluate((sel: string) => {
+        const el = document.querySelector(sel) as HTMLElement | null;
+        if (!el) return null;
+        const before = { x: scrollX, y: scrollY };
+        el.scrollIntoView({ block: "center", inline: "nearest" });
+        const box = el.getBoundingClientRect();
+        return {
+          from: before,
+          to: { x: Math.round(scrollX), y: Math.round(scrollY) },
+          // Where it ended up on screen, which is what the next step acts on
+          at: { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) },
+          visible: box.width > 0 && box.height > 0,
+        };
+      }, selector)
+      .catch(() => null);
+
+    if (moved) {
+      const shifted = moved.from.x !== moved.to.x || moved.from.y !== moved.to.y;
+      return (
+        `scrolled to \`${selector}\`` +
+        (shifted ? `, page now at ${moved.to.x},${moved.to.y}` : " (already in view)") +
+        (moved.visible ? `, centre ${moved.at.x},${moved.at.y}` : " -- but it has no box on screen")
+      );
+    }
+    if (Date.now() >= until) return null;
+    await sleep(Math.min(tune.readyPollMs, Math.max(50, until - Date.now())), until);
+  }
+}
+
 async function scrollOutcome(page: Page, x: number, y: number): Promise<string | null> {
   const moved = await scrollPageBy(page, x, y);
   if (!moved) return null;
@@ -1505,8 +1584,13 @@ async function runInAppClicks(
     // and the step that wanted the control will say so itself.
     const scroll = parseScrollStep(step);
     if (scroll) {
-      const outcome = await scrollOutcome(page, scroll.x, scroll.y);
-      done.push(outcome ?? `scroll(${scroll.x}, ${scroll.y}) found nothing that scrolls`);
+      if (isScrollToSelector(scroll)) {
+        const outcome = await scrollToSelector(page, scroll.selector, 5_000, deadline);
+        done.push(outcome ?? `scroll(css:${scroll.selector}) found nothing to scroll to`);
+      } else {
+        const outcome = await scrollOutcome(page, scroll.x, scroll.y);
+        done.push(outcome ?? `scroll(${scroll.x}, ${scroll.y}) found nothing that scrolls`);
+      }
       await sleep(tune.inAppStepMs, deadline);
       continue;
     }
@@ -2240,6 +2324,16 @@ async function runStepList(
           break;
         }
 
+        case "web_scroll_to": {
+          const selector = fillVars(step.selector, run.current).trim();
+          if (!selector) throw new Error("no CSS selector given");
+          const waitMs = step.waitMs && step.waitMs > 0 ? step.waitMs : 5_000;
+          const outcome = await scrollToSelector(page, selector, waitMs, deadline);
+          if (!outcome) throw new Error(`nothing matching \`${selector}\` appeared to scroll to`);
+          log.outcome = outcome;
+          break;
+        }
+
         case "web_wait_element": {
           const selector = fillVars(step.selector, run.current).trim();
           if (!selector) throw new Error("no CSS selector given");
@@ -2734,6 +2828,8 @@ function describeWebStep(step: WebStep, run: WebStepRun): string {
       return `Wait ${Math.round((step.waitMs || 0) / 1000)}s`;
     case "web_scroll":
       return `Scroll ${Math.round(step.x || 0)},${Math.round(step.y || 0)}px`;
+    case "web_scroll_to":
+      return `Scroll to \`${fill(step.selector)}\``;
     case "web_wait_element":
       return `Wait for \`${fill(step.selector)}\``;
     case "web_turnstile":
@@ -3145,7 +3241,7 @@ async function attemptLoad(
   try {
     // The clock and language of the exit are launch flags, so this settles them before
     // anything on the target is loaded
-    launched = await launchAlignedBrowser(proxyUrl, budgetDeadline, opts.profile);
+    launched = await launchAlignedBrowser(proxyUrl, budgetDeadline, opts.profile, opts.display);
     launchOk = true;
     browserTier = launched.tier;
     profileKey = launched.profileKey;

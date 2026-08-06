@@ -42,8 +42,10 @@ ENV NODE_OPTIONS="--max-old-space-size=512"
 #
 # xvfb gives the browser a virtual display so it can run headed (far better challenge
 # pass rate than headless); the app starts one X server of its own on first launch and
-# every browser shares it. gosu lets the entrypoint fix data-dir ownership as root and
-# then drop to the non-root `node` user.
+# every browser shares it. x11vnc serves such a display to the panel, for the browser a
+# person drives by hand to log a job in once -- it listens on the loopback only, behind
+# the app's own ticketed bridge. gosu lets the entrypoint fix data-dir ownership as root
+# and then drop to the non-root `node` user.
 #
 # Only fonts-liberation ships here, as a Latin fallback that is always present: a browser
 # that cannot draw a glyph measures text unlike any real one. The three Noto packages this
@@ -63,6 +65,7 @@ RUN apt-get update \
       ca-certificates \
       gosu \
       xvfb \
+      x11vnc \
       libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
       libdrm2 libatspi2.0-0 libx11-6 libxcomposite1 libxdamage1 libxext6 \
       libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 \

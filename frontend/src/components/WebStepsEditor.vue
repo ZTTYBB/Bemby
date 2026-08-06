@@ -50,6 +50,7 @@
           s.type === 'web_input' ||
           s.type === 'web_button' ||
           s.type === 'web_wait_element' ||
+          s.type === 'web_scroll_to' ||
           s.type === 'web_pick' ||
           s.type === 'web_read'
         "
@@ -261,6 +262,7 @@
         v-if="
           s.type === 'web_delay' ||
           s.type === 'web_wait_element' ||
+          s.type === 'web_scroll_to' ||
           s.type === 'web_goto' ||
           s.type === 'web_back'
         "

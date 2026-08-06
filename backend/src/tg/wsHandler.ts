@@ -1,5 +1,4 @@
 import { WebSocketServer, WebSocket } from "ws";
-import type { Server } from "http";
 import type { IncomingMessage } from "http";
 import { verifySessionToken } from "../middleware/auth";
 import {
@@ -14,8 +13,14 @@ import {
 // How often (ms) to poll for new messages in the active chat as a GramJS event fallback
 const SYNC_INTERVAL_MS = 4_000;
 
-export function attachWebSocket(server: Server): void {
-  const wss = new WebSocketServer({ server, path: "/ws" });
+/**
+ * The panel's own socket. Built with `noServer` and handed to the router in server.ts:
+ * a WebSocketServer bound straight to the HTTP server answers *every* upgrade, and
+ * destroys the ones whose path it does not recognise -- which is how a second socket on
+ * the same server ends up dead before its own handler ever runs.
+ */
+export function createPanelWss(): WebSocketServer {
+  const wss = new WebSocketServer({ noServer: true });
 
   wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
@@ -58,6 +63,8 @@ export function attachWebSocket(server: Server): void {
       await setupConnection(ws, accountId);
     });
   });
+
+  return wss;
 }
 
 async function setupConnection(ws: WebSocket, accountId: number): Promise<void> {

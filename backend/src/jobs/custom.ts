@@ -42,6 +42,7 @@ import { resolvePeerTarget } from "../tg/peerTarget";
 import { cfMaxCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
 import { cfTuning } from "./cfTuning";
 import { rememberWebValue, usedWebValues } from "./webMemory";
+import { displayForRun } from "./runDisplays";
 
 import type { CustomAction, CustomConfig, CustomStepLog } from "../types";
 
@@ -2361,6 +2362,7 @@ export async function runCustom(
                   inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
                   maxWaitMs: budgetLeft,
                   profile: { template: action.profileId, vars: cfProfileVars(cfRun) },
+                  display: await displayForRun(cfRun),
                   // The browser side is invisible from here, so keep what it saw
                   screenshot: true,
                   solveQuestion: async (question) => {
@@ -2534,6 +2536,7 @@ export async function runCustom(
                   inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
                   maxWaitMs: budgetLeft,
                   profile: { template: action.profileId, vars: cfProfileVars(cfRun) },
+                  display: await displayForRun(cfRun),
                   screenshot: true,
                   solveQuestion: async (question) => {
                     const prompt =
@@ -2659,6 +2662,7 @@ export async function runCustom(
                     rememberWebValue(cfRun.jobId, varName, value),
                   // Which cookie jar this runs on, and so what a login here belongs to
                   profile: { template: action.profileId, vars: cfProfileVars(cfRun) },
+                  display: await displayForRun(cfRun),
                 });
                 step.cfHost = cf.finalHost;
                 step.cfChallenged = cf.challenged;

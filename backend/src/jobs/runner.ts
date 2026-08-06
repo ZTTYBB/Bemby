@@ -10,6 +10,7 @@ import type {
 import { runCheckin, CheckinError, type CheckinAttemptLog } from "./checkin";
 import { runEmbywatch } from "./embywatch";
 import { newCfRunState } from "./cloudflare";
+import { nameRun, releaseRunDisplay } from "./runDisplays";
 import { runCustom, CustomJobError, type CustomJobLog } from "./custom";
 import { runAutoreg, AutoregJobError, type AutoregJobLog } from "./autoreg";
 import { db } from "../db/database";
@@ -84,7 +85,7 @@ function resolveTgProxyUrl(
  * proxy when one is set, otherwise the account's. Cloudflare judges the exit IP, so this
  * one is meant to be chosen per job, and the browser holds no Telegram session.
  */
-function resolveWebProxyUrl(
+export function resolveWebProxyUrl(
   accountProxyId: string | null | undefined,
   job: Job,
 ): string | undefined {
@@ -153,6 +154,10 @@ export async function runJob(
     templateId: job.templateId ?? undefined,
     tgId: account?.id,
   });
+  // So a viewer's list of what is running says which job each screen belongs to
+  nameRun(cfRun.runId, job.id, job.name);
+
+  try {
 
   for (let attempt = 1; attempt <= job.retryMax; attempt++) {
     if (signal?.aborted) throw new Error("Job cancelled");
@@ -328,7 +333,12 @@ export async function runJob(
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
       }
     }
-  }
+    }
 
-  throw lastError;
+    throw lastError;
+  } finally {
+    // However the run ended, its screen goes with it: an X server left behind holds a
+    // display number, and there is nothing left to watch on it
+    releaseRunDisplay(cfRun.runId);
+  }
 }
