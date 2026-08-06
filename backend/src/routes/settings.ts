@@ -36,14 +36,19 @@ import {
   clearCfProfiles,
   chromiumExecutable,
   chromiumPath,
+  createCfProfile,
+  deleteCfProfiles,
+  listCfProfiles,
   CF_BROWSER_LANG_KEY,
   CF_PROFILE_ID_KEY,
+  CF_PROFILE_NAME_RE,
   installedBuildTier,
   installedCfBuilds,
   keyedBuildPending,
   removeAllCfBuilds,
   stopAllCfBrowsers,
 } from "../jobs/cfBrowser";
+import { exportCfProfiles, importCfProfiles } from "../jobs/cfProfileArchive";
 import { installVnc, removeVnc, vncInstallLog, vncStatus } from "../jobs/vncInstall";
 import {
   providersForClient,
@@ -491,6 +496,95 @@ router.post("/cf-solver/clear-profiles", (_req, res) => {
     return;
   }
   res.json({ ok: true, removed: result.removed });
+});
+
+// ── Browser profiles, one at a time ──────────────────────────────────────────
+// The counterpart of clear-profiles above: a profile that was signed in by hand, or brought
+// over from another instance, is worth keeping and moving rather than clearing wholesale.
+
+// GET /cf-solver/profiles -- every profile on disk with its size, last use and whether a
+// browser has it open.
+router.get("/cf-solver/profiles", (_req, res) => {
+  res.json({ profiles: listCfProfiles() });
+});
+
+// POST /cf-solver/profiles -- reserve a name a job's profile field can target. The browser
+// fills the directory in on first launch.
+router.post("/cf-solver/profiles", (req, res) => {
+  const { name } = req.body as { name?: string };
+  const result = createCfProfile(String(name ?? ""));
+  if (!result.ok) {
+    res.status(400).json({ ok: false, error: result.error });
+    return;
+  }
+  res.status(201).json({ ok: true, profiles: listCfProfiles() });
+});
+
+// POST /cf-solver/profiles/delete -- remove the named profiles. A body rather than DELETE
+// /:name so the settings page can clear a selection in one call.
+router.post("/cf-solver/profiles/delete", (req, res) => {
+  const { names } = req.body as { names?: unknown };
+  const list = Array.isArray(names) ? names.filter((n): n is string => typeof n === "string") : [];
+  if (!list.length) {
+    res.status(400).json({ ok: false, error: "names is required" });
+    return;
+  }
+  const result = deleteCfProfiles(list);
+  res.json({ ok: !result.refused.length, ...result, profiles: listCfProfiles() });
+});
+
+// POST /cf-solver/profiles/export -- stream the selected profiles as one .tar.gz. Caches are
+// left out; see cfProfileArchive. POST rather than GET because the selection is a list.
+router.post("/cf-solver/profiles/export", async (req, res) => {
+  const { names } = req.body as { names?: unknown };
+  const list = Array.isArray(names)
+    ? names.filter((n): n is string => typeof n === "string" && CF_PROFILE_NAME_RE.test(n))
+    : [];
+  if (!list.length) {
+    res.status(400).json({ error: "names is required" });
+    return;
+  }
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const file =
+    list.length === 1 ? `bemby-profile-${list[0]}-${stamp}.tar.gz` : `bemby-profiles-${stamp}.tar.gz`;
+  res.setHeader("Content-Type", "application/gzip");
+  res.setHeader("Content-Disposition", `attachment; filename="${file}"`);
+
+  const result = await exportCfProfiles(list, res);
+  if (!result.ok && !res.headersSent) {
+    res.status(500).json({ error: result.error });
+    return;
+  }
+  // Headers (and probably bytes) are already out by the time tar fails, so the truncated
+  // archive is all the caller gets -- ending the response is the only signal left.
+  res.end();
+});
+
+// POST /cf-solver/profiles/import -- read a .tar.gz off the request body and put its profiles
+// back on disk. The body is streamed straight into tar rather than buffered: a profile archive
+// is measured in megabytes and there is no reason to hold one in memory.
+router.post("/cf-solver/profiles/import", async (req, res) => {
+  const replace = req.query.replace === "1" || req.query.replace === "true";
+  // A cache-free profile archive is measured in megabytes, so anything of this order is a
+  // mistake rather than a profile, and extracting it would fill the data volume. Browsers send
+  // Content-Length for a file body; a chunked upload without one is let through and bounded by
+  // the disk instead.
+  const declared = Number(req.headers["content-length"] ?? 0);
+  if (declared > 200 * 1024 * 1024) {
+    res.status(413).json({ ok: false, error: "Archive is too large (limit 200MB)" });
+    return;
+  }
+  try {
+    const result = await importCfProfiles(req, { replace });
+    if (result.error) {
+      res.status(400).json({ ok: false, ...result });
+      return;
+    }
+    res.json({ ok: true, ...result, profiles: listCfProfiles() });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message ?? "Import failed" });
+  }
 });
 
 // POST /cf-solver/uninstall -- delete every downloaded browser build, reclaiming the

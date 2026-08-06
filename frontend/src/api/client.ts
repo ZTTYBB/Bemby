@@ -1353,6 +1353,33 @@ export const manualBrowserApi = {
   stop: () => api.post("/manual-browser/stop").then((r) => r.data),
 };
 
+/** A browser profile on disk: the cookies and site data a run carries over from the last. */
+export type CfProfile = {
+  name: string;
+  sizeBytes: number;
+  /** Epoch ms of the last run that opened it, or null when none ever has. */
+  lastUsedAt: number | null;
+  /** A browser has it open, so it cannot be deleted or overwritten right now. */
+  inUse: boolean;
+  /** Created or imported by hand, and so exempt from automatic trimming. */
+  managed: boolean;
+};
+
+export type CfProfileDeleteResult = {
+  ok: boolean;
+  removed: string[];
+  refused: Array<{ name: string; reason: string }>;
+  profiles?: CfProfile[];
+};
+
+export type CfProfileImportResult = {
+  ok?: boolean;
+  imported: string[];
+  skipped: Array<{ name: string; reason: string }>;
+  error?: string;
+  profiles?: CfProfile[];
+};
+
 export const settingsApi = {
   get: () => api.get<Settings>("/settings").then((r) => r.data),
   update: (data: Partial<Settings>) =>
@@ -1389,6 +1416,34 @@ export const settingsApi = {
     api
       .post<{ ok: boolean; removed?: number; message?: string }>(
         "/settings/cf-solver/clear-profiles",
+      )
+      .then((r) => r.data),
+  /** Every browser profile on disk, with size, last use and whether one is open. */
+  cfProfiles: () =>
+    api
+      .get<{ profiles: CfProfile[] }>("/settings/cf-solver/profiles")
+      .then((r) => r.data.profiles),
+  /** Reserves a profile name; the browser fills the directory in on first launch. */
+  createCfProfile: (name: string) =>
+    api
+      .post<{ ok: boolean; profiles?: CfProfile[] }>("/settings/cf-solver/profiles", { name })
+      .then((r) => r.data),
+  deleteCfProfiles: (names: string[]) =>
+    api
+      .post<CfProfileDeleteResult>("/settings/cf-solver/profiles/delete", { names })
+      .then((r) => r.data),
+  /** Downloads the selected profiles as one .tar.gz (caches excluded). */
+  exportCfProfiles: (names: string[]) =>
+    api
+      .post("/settings/cf-solver/profiles/export", { names }, { responseType: "blob" })
+      .then((r) => r.data as Blob),
+  /** Uploads a .tar.gz of profiles; the body is the file itself, streamed server-side. */
+  importCfProfiles: (file: File, replace: boolean) =>
+    api
+      .post<CfProfileImportResult>(
+        `/settings/cf-solver/profiles/import?replace=${replace ? 1 : 0}`,
+        file,
+        { headers: { "Content-Type": "application/gzip" } },
       )
       .then((r) => r.data),
   /** Deletes every downloaded browser build, reclaiming the space in the data dir. */

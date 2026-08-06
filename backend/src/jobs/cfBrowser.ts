@@ -65,7 +65,7 @@ export function cfBrowserLang(): string | undefined {
 }
 
 /** Data-dir subfolder holding one browser profile per exit. */
-function cfProfilesRoot(): string {
+export function cfProfilesRoot(): string {
   return path.join(dataDir(), "cf-profiles");
 }
 
@@ -449,6 +449,166 @@ export function cfProfileCount(): number {
   }
 }
 
+// ── Managing profiles by hand ────────────────────────────────────────────────
+//
+// A run makes its own profiles and pruneProfiles trims them, which is right for the pooled
+// per-exit ones: they are cheap to rebuild. A profile someone created or imported carries a
+// session that was set up deliberately -- signed in by hand through the VNC browser, or
+// brought over from another instance -- so it is marked on creation and left out of that
+// housekeeping. Otherwise the twelfth new exit would quietly evict it.
+
+/** Marks a profile as made or imported by hand, which keeps LRU trimming off it. */
+const MANAGED_MARKER = ".bemby-managed";
+
+/** What a profile directory may be called: the same alphabet cfProfileKey produces. */
+export const CF_PROFILE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+export type CfProfileInfo = {
+  name: string;
+  sizeBytes: number;
+  /** Epoch ms of the last run that opened it, or null when no run ever has. */
+  lastUsedAt: number | null;
+  /** A browser has it open right now, so it cannot be deleted or overwritten. */
+  inUse: boolean;
+  /** Created or imported by hand, and therefore exempt from LRU trimming. */
+  managed: boolean;
+};
+
+/** Path of a named profile, or undefined when the name is not one we would ever write. */
+export function cfProfileDir(name: string): string | undefined {
+  if (!CF_PROFILE_NAME_RE.test(name)) return undefined;
+  return path.join(cfProfilesRoot(), name);
+}
+
+/** Is a browser holding this profile open? Both scheduled runs and VNC sessions claim it. */
+export function cfProfileInUse(name: string): boolean {
+  return profilesInUse.has(name);
+}
+
+export function markCfProfileManaged(dir: string): void {
+  try {
+    writeFileSync(path.join(dir, MANAGED_MARKER), "");
+  } catch {
+    /* the profile still works unmanaged; it is only exempt from trimming */
+  }
+}
+
+const isManaged = (dir: string): boolean => existsSync(path.join(dir, MANAGED_MARKER));
+
+/** Bytes on disk, walked iteratively -- a profile is a deep tree, not a flat directory. */
+function dirSize(dir: string): number {
+  let total = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const next = stack.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(next, { withFileTypes: true });
+    } catch {
+      continue; // a directory that vanished mid-walk contributes nothing
+    }
+    for (const entry of entries) {
+      const full = path.join(next, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else if (entry.isFile()) {
+        try {
+          total += statSync(full).size;
+        } catch {
+          /* same */
+        }
+      }
+    }
+  }
+  return total;
+}
+
+/** Every profile on disk, for the settings page. Throwaways are not profiles. */
+export function listCfProfiles(): CfProfileInfo[] {
+  let names: string[];
+  try {
+    names = readdirSync(cfProfilesRoot(), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !e.name.startsWith("tmp-"))
+      .map((e) => e.name);
+  } catch {
+    return [];
+  }
+  return names
+    .map((name) => {
+      const dir = path.join(cfProfilesRoot(), name);
+      let usedAt: number | null = null;
+      try {
+        usedAt = statSync(path.join(dir, USED_MARKER)).mtimeMs;
+      } catch {
+        usedAt = null;
+      }
+      return {
+        name,
+        sizeBytes: dirSize(dir),
+        lastUsedAt: usedAt,
+        inUse: profilesInUse.has(name),
+        managed: isManaged(dir),
+      };
+    })
+    .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0) || a.name.localeCompare(b.name));
+}
+
+/**
+ * Creates an empty profile under a name a job's profile field (or a VNC session) can then
+ * target. The browser fills it in on first launch; until then it is an empty directory that
+ * simply reserves the name.
+ */
+export function createCfProfile(name: string): { ok: boolean; error?: string } {
+  const trimmed = name.trim();
+  if (!CF_PROFILE_NAME_RE.test(trimmed))
+    return {
+      ok: false,
+      error: "Name must be 1-64 characters of letters, digits, hyphen or underscore",
+    };
+  const dir = path.join(cfProfilesRoot(), trimmed);
+  if (existsSync(dir)) return { ok: false, error: `Profile "${trimmed}" already exists` };
+  try {
+    mkdirSync(dir, { recursive: true });
+    markCfProfileManaged(dir);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: `Could not create ${dir}: ${err?.message ?? err}` };
+  }
+}
+
+/**
+ * Deletes the named profiles. One that a browser has open is refused rather than pulled out
+ * from under it, and one failure does not stop the rest -- same reasoning as clearCfProfiles.
+ */
+export function deleteCfProfiles(names: string[]): {
+  removed: string[];
+  refused: Array<{ name: string; reason: string }>;
+} {
+  const removed: string[] = [];
+  const refused: Array<{ name: string; reason: string }> = [];
+  for (const name of names) {
+    const dir = cfProfileDir(name);
+    if (!dir) {
+      refused.push({ name, reason: "Not a valid profile name" });
+      continue;
+    }
+    if (profilesInUse.has(name)) {
+      refused.push({ name, reason: "A browser has this profile open" });
+      continue;
+    }
+    if (!existsSync(dir)) {
+      refused.push({ name, reason: "No such profile" });
+      continue;
+    }
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      removed.push(name);
+    } catch (err: any) {
+      refused.push({ name, reason: err?.message ?? String(err) });
+    }
+  }
+  return { removed, refused };
+}
+
 /**
  * Deletes every downloaded build, freeing the ~200MB each takes in the data dir. The
  * solver has nothing to launch afterwards, so this is the counterpart of the download
@@ -777,12 +937,21 @@ function lastUsedAt(dir: string): number {
   }
 }
 
-/** Drops the least recently used profiles, keeping the newest maxProfiles of them. */
+/**
+ * Drops the least recently used profiles, keeping the newest maxProfiles of them. A profile
+ * created or imported by hand is left alone however old it is: it holds a session someone set
+ * up on purpose, which is not housekeeping's to throw away.
+ */
 function pruneProfiles(root: string): void {
   const tune = cfTuning();
   try {
     const dirs = readdirSync(root)
-      .filter((name) => !profilesInUse.has(name) && !name.startsWith("tmp-"))
+      .filter(
+        (name) =>
+          !profilesInUse.has(name) &&
+          !name.startsWith("tmp-") &&
+          !existsSync(path.join(root, name, MANAGED_MARKER)),
+      )
       .map((name) => ({ full: path.join(root, name), usedAt: lastUsedAt(path.join(root, name)) }))
       .sort((a, b) => b.usedAt - a.usedAt);
     for (const stale of dirs.slice(tune.maxProfiles)) {

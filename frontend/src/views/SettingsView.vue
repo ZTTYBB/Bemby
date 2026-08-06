@@ -380,6 +380,138 @@
               {{ t("settings.cfSolver.profileIdHint") }}
             </div>
           </div>
+
+          <!-- Managing the profiles themselves: the sessions a run carries over. Kept beside
+               the name template above, which decides which profile a run lands on. -->
+          <div class="profiles-panel">
+            <div class="profiles-head">
+              <strong>{{ t("settings.profiles.title") }}</strong>
+              <span style="font-size: 11px; color: #888">
+                {{
+                  t("settings.profiles.summary")
+                    .replace("{n}", String(cfProfiles.length))
+                    .replace("{size}", formatBytes(cfProfilesTotalBytes))
+                }}
+              </span>
+              <button
+                class="btn btn-sm btn-ghost"
+                :disabled="cfProfilesLoading"
+                @click="loadCfProfiles"
+              >
+                <i class="fa-solid fa-rotate"></i> {{ t("common.refresh") }}
+              </button>
+            </div>
+
+            <div class="profiles-actions">
+              <input
+                v-model.trim="newProfileName"
+                class="form-input"
+                style="flex: 0 0 200px"
+                :placeholder="t('settings.profiles.namePlaceholder')"
+                @keyup.enter="addProfile"
+              />
+              <button
+                class="btn btn-sm btn-ghost"
+                :disabled="!newProfileName || profilesBusy"
+                @click="addProfile"
+              >
+                <i class="fa-solid fa-plus"></i> {{ t("settings.profiles.addBtn") }}
+              </button>
+              <span class="profiles-sep"></span>
+              <button
+                class="btn btn-sm btn-ghost"
+                :disabled="!selectedProfiles.length || profilesBusy"
+                @click="exportProfiles"
+              >
+                <i class="fa-solid fa-file-export"></i>
+                {{ t("settings.profiles.exportBtn") }}
+                <template v-if="selectedProfiles.length"> ({{ selectedProfiles.length }})</template>
+              </button>
+              <button
+                class="btn btn-sm btn-ghost"
+                :disabled="!selectedProfiles.length || profilesBusy"
+                @click="confirmDeleteProfiles = true"
+              >
+                <i class="fa-solid fa-trash"></i>
+                {{ t("settings.profiles.deleteBtn") }}
+                <template v-if="selectedProfiles.length"> ({{ selectedProfiles.length }})</template>
+              </button>
+              <span class="profiles-sep"></span>
+              <input
+                ref="profileImportInput"
+                type="file"
+                accept=".gz,.tgz,.tar.gz,application/gzip"
+                style="display: none"
+                @change="onProfileFilePicked"
+              />
+              <button
+                class="btn btn-sm btn-ghost"
+                :disabled="profilesBusy"
+                @click="profileImportInput?.click()"
+              >
+                <i class="fa-solid fa-file-import"></i> {{ t("settings.profiles.importBtn") }}
+              </button>
+              <label class="profiles-replace">
+                <input type="checkbox" v-model="importReplaceProfiles" />
+                {{ t("settings.profiles.replaceLabel") }}
+              </label>
+            </div>
+
+            <div v-if="profilesMsg" class="success-msg" style="margin: 6px 0">{{ profilesMsg }}</div>
+            <div v-if="profilesError" class="error-msg" style="margin: 6px 0">{{ profilesError }}</div>
+
+            <div v-if="!cfProfiles.length" style="font-size: 12px; color: #888">
+              {{ t("settings.profiles.empty") }}
+            </div>
+            <table v-else class="profiles-table">
+              <thead>
+                <tr>
+                  <th style="width: 28px">
+                    <input
+                      type="checkbox"
+                      :checked="allProfilesSelected"
+                      @change="toggleAllProfiles"
+                    />
+                  </th>
+                  <th>{{ t("settings.profiles.colName") }}</th>
+                  <th style="width: 90px">{{ t("settings.profiles.colSize") }}</th>
+                  <th style="width: 140px">{{ t("settings.profiles.colLastUsed") }}</th>
+                  <th style="width: 110px"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="p in cfProfiles" :key="p.name">
+                  <td>
+                    <input type="checkbox" :value="p.name" v-model="selectedProfiles" />
+                  </td>
+                  <td style="font-family: monospace; font-size: 12px">{{ p.name }}</td>
+                  <td>{{ formatBytes(p.sizeBytes) }}</td>
+                  <td style="font-size: 12px; color: #666">
+                    {{ p.lastUsedAt ? formatWhen(p.lastUsedAt) : t("settings.profiles.neverUsed") }}
+                  </td>
+                  <td>
+                    <span
+                      v-if="p.inUse"
+                      class="badge badge-red"
+                      style="font-size: 10px"
+                      :title="t('settings.profiles.inUseTip')"
+                      >{{ t("settings.profiles.inUse") }}</span
+                    >
+                    <span
+                      v-else-if="p.managed"
+                      class="badge badge-purple"
+                      style="font-size: 10px"
+                      :title="t('settings.profiles.managedTip')"
+                      >{{ t("settings.profiles.managed") }}</span
+                    >
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div style="font-size: 11px; color: #888; margin-top: 6px">
+              {{ t("settings.profiles.hint") }}
+            </div>
+          </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
             <button
               class="btn btn-primary"
@@ -1999,6 +2131,29 @@
         </div>
       </div>
     </div>
+
+    <!-- Deleting profiles takes the sessions in them with it, so it is asked for by name -->
+    <div v-if="confirmDeleteProfiles" class="modal-backdrop">
+      <div class="modal" style="width: 420px">
+        <h3 class="modal-title">{{ t("settings.profiles.deleteBtn") }}</h3>
+        <div class="modal-body">
+          <p>
+            {{ t("settings.profiles.deleteConfirm").replace("{n}", String(selectedProfiles.length)) }}
+          </p>
+          <p style="font-family: monospace; font-size: 12px; color: #666">
+            {{ selectedProfiles.join(", ") }}
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" @click="confirmDeleteProfiles = false">
+            <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+          </button>
+          <button class="btn btn-danger" :disabled="profilesBusy" @click="deleteProfiles">
+            <i class="fa-solid fa-trash"></i> {{ t("common.delete") }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -2012,6 +2167,7 @@ import {
   statusApi,
   type CfBrowserTest,
   type CfBrowserTestRun,
+  type CfProfile,
 } from "../api/client";
 import type {
   MemoryReport,
@@ -2425,6 +2581,7 @@ async function clearCfProfiles() {
         String(res.removed ?? 0),
       );
       await refreshCfBuildState();
+      await loadCfProfiles();
     } else {
       cfInstallError.value = res.message ?? t("settings.cfSolver.clearProfilesFailed");
     }
@@ -2433,6 +2590,165 @@ async function clearCfProfiles() {
       e?.response?.data?.message ?? e?.message ?? t("settings.cfSolver.clearProfilesFailed");
   } finally {
     cfClearingProfiles.value = false;
+  }
+}
+
+// ── Browser profiles ─────────────────────────────────────────────────────────
+// One profile is one browser identity's worth of state: cookies, cf_clearance, whatever it
+// is signed in to. Clearing them all is above; this is for keeping, moving and dropping them
+// one at a time.
+
+const cfProfiles = ref<CfProfile[]>([]);
+const cfProfilesLoading = ref(false);
+const selectedProfiles = ref<string[]>([]);
+const newProfileName = ref("");
+const importReplaceProfiles = ref(false);
+const profileImportInput = ref<HTMLInputElement | null>(null);
+const profilesBusy = ref(false);
+const profilesMsg = ref("");
+const profilesError = ref("");
+const confirmDeleteProfiles = ref(false);
+
+const cfProfilesTotalBytes = computed(() =>
+  cfProfiles.value.reduce((sum, p) => sum + p.sizeBytes, 0),
+);
+const allProfilesSelected = computed(
+  () => cfProfiles.value.length > 0 && selectedProfiles.value.length === cfProfiles.value.length,
+);
+
+function toggleAllProfiles() {
+  selectedProfiles.value = allProfilesSelected.value ? [] : cfProfiles.value.map((p) => p.name);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+function formatWhen(ms: number): string {
+  const mins = Math.round((Date.now() - ms) / 60_000);
+  if (mins < 1) return t("settings.profiles.justNow");
+  if (mins < 60) return t("settings.profiles.minsAgo").replace("{n}", String(mins));
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return t("settings.profiles.hoursAgo").replace("{n}", String(hours));
+  return t("settings.profiles.daysAgo").replace("{n}", String(Math.round(hours / 24)));
+}
+
+/** Keeps the selection to profiles that still exist, so a stale name is never acted on. */
+function setProfiles(list: CfProfile[]) {
+  cfProfiles.value = list;
+  const names = new Set(list.map((p) => p.name));
+  selectedProfiles.value = selectedProfiles.value.filter((n) => names.has(n));
+  cfProfileCount.value = list.length;
+}
+
+async function loadCfProfiles() {
+  cfProfilesLoading.value = true;
+  try {
+    setProfiles(await settingsApi.cfProfiles());
+  } catch (e: any) {
+    profilesError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
+  } finally {
+    cfProfilesLoading.value = false;
+  }
+}
+
+async function addProfile() {
+  profilesMsg.value = "";
+  profilesError.value = "";
+  profilesBusy.value = true;
+  try {
+    const res = await settingsApi.createCfProfile(newProfileName.value);
+    if (res.profiles) setProfiles(res.profiles);
+    profilesMsg.value = t("settings.profiles.added").replace("{name}", newProfileName.value);
+    newProfileName.value = "";
+  } catch (e: any) {
+    profilesError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
+  } finally {
+    profilesBusy.value = false;
+  }
+}
+
+async function deleteProfiles() {
+  confirmDeleteProfiles.value = false;
+  profilesMsg.value = "";
+  profilesError.value = "";
+  profilesBusy.value = true;
+  try {
+    const res = await settingsApi.deleteCfProfiles(selectedProfiles.value);
+    if (res.profiles) setProfiles(res.profiles);
+    if (res.removed.length)
+      profilesMsg.value = t("settings.profiles.deleted").replace("{n}", String(res.removed.length));
+    if (res.refused.length)
+      profilesError.value = res.refused.map((r) => `${r.name}: ${r.reason}`).join("; ");
+  } catch (e: any) {
+    profilesError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
+  } finally {
+    profilesBusy.value = false;
+  }
+}
+
+async function exportProfiles() {
+  profilesMsg.value = "";
+  profilesError.value = "";
+  profilesBusy.value = true;
+  try {
+    const blob = await settingsApi.exportCfProfiles(selectedProfiles.value);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const date = new Date().toISOString().split("T")[0];
+    a.download =
+      selectedProfiles.value.length === 1
+        ? `bemby-profile-${selectedProfiles.value[0]}-${date}.tar.gz`
+        : `bemby-profiles-${date}.tar.gz`;
+    a.click();
+    URL.revokeObjectURL(url);
+    profilesMsg.value = t("settings.profiles.exported").replace(
+      "{n}",
+      String(selectedProfiles.value.length),
+    );
+  } catch (e: any) {
+    profilesError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
+  } finally {
+    profilesBusy.value = false;
+  }
+}
+
+async function onProfileFilePicked(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // Cleared straight away so picking the same file again still fires a change event
+  input.value = "";
+  if (!file) return;
+  profilesMsg.value = "";
+  profilesError.value = "";
+  profilesBusy.value = true;
+  try {
+    const res = await settingsApi.importCfProfiles(file, importReplaceProfiles.value);
+    if (res.profiles) setProfiles(res.profiles);
+    if (res.imported.length)
+      profilesMsg.value = t("settings.profiles.imported")
+        .replace("{n}", String(res.imported.length))
+        .replace("{names}", res.imported.join(", "));
+    if (res.skipped?.length)
+      profilesError.value = res.skipped.map((s) => `${s.name}: ${s.reason}`).join("; ");
+  } catch (e: any) {
+    const data = e?.response?.data;
+    profilesError.value =
+      data?.error ??
+      data?.skipped?.map((s: { name: string; reason: string }) => `${s.name}: ${s.reason}`).join("; ") ??
+      e?.message ??
+      t("settings.profiles.importFailed");
+  } finally {
+    profilesBusy.value = false;
   }
 }
 
@@ -3012,6 +3328,8 @@ onMounted(async () => {
       rows.find((m) => m.model_id === form.ai_model);
     if (match) form.ai_default_model_id = String(match.id);
   }
+  // Sizes are walked from disk, so this is fetched on its own rather than with the settings
+  await loadCfProfiles();
 });
 
 async function saveSettings() {
@@ -3638,6 +3956,63 @@ async function signOutEverywhere() {
 </script>
 
 <style scoped>
+.profiles-panel {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #eee;
+  border-radius: 6px;
+}
+
+.profiles-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.profiles-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.profiles-sep {
+  width: 1px;
+  align-self: stretch;
+  background: #eee;
+  margin: 0 2px;
+}
+
+.profiles-replace {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #666;
+}
+
+.profiles-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.profiles-table th,
+.profiles-table td {
+  text-align: left;
+  padding: 5px 6px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 13px;
+}
+
+.profiles-table th {
+  font-size: 11px;
+  color: #888;
+  font-weight: 600;
+}
+
 .vnc-log {
   margin-top: 6px;
   padding: 6px 8px;
