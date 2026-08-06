@@ -68,17 +68,23 @@ describe("clearCfProfiles", () => {
 });
 
 // A profile is where the cookies live, so its name decides who shares a login with whom.
+// The name is written by the operator, which is why so much of this is about what happens
+// when it says something unexpected: the wrong answer silently shares a session between
+// accounts, or splits one that was meant to be kept.
 describe("cfProfileKey", () => {
   const PROXY = "http://user:secret@proxy.example:8080";
+  const JOB = { jobId: 104, templateId: 48, tgId: 7 };
 
-  it("names the exit's shared profile when nothing is scoped to itself", () => {
+  it("is one profile per exit when nothing is configured", () => {
     expect(cfProfileKey(undefined)).toBe("direct");
     expect(cfProfileKey(PROXY)).toMatch(/^[0-9a-f]{12}$/);
+    // The shipped default spelled out, which must mean the same as leaving it blank
+    expect(cfProfileKey(PROXY, "{ip}")).toBe(cfProfileKey(PROXY));
   });
 
   it("never puts the proxy address in the name, credentials and all", () => {
     // The name becomes a directory on disk; the URL carries a password
-    const key = cfProfileKey(PROXY);
+    const key = cfProfileKey(PROXY, "{ip}");
     expect(key).not.toContain("secret");
     expect(key).not.toContain("proxy.example");
   });
@@ -86,27 +92,60 @@ describe("cfProfileKey", () => {
   it("gives each job its own profile on the same exit", () => {
     // Two accounts going out through one exit must not share a cookie jar: the second login
     // would overwrite the first, and the site will not hand out another one
-    const a = cfProfileKey(undefined, "job104");
-    const b = cfProfileKey(undefined, "job105");
-    expect(a).not.toBe(b);
-    expect(a).not.toBe(cfProfileKey(undefined));
+    const a = cfProfileKey(undefined, "{ip}-{jobId}", { jobId: 104 });
+    const b = cfProfileKey(undefined, "{ip}-{jobId}", { jobId: 105 });
+    expect(a).toBe("direct-104");
+    expect(b).toBe("direct-105");
+    expect(a).not.toBe(cfProfileKey(undefined, "{ip}"));
   });
 
   it("gives the same job the same profile every run, which is the point of it", () => {
-    expect(cfProfileKey(PROXY, "job104")).toBe(cfProfileKey(PROXY, "job104"));
+    expect(cfProfileKey(PROXY, "{ip}-{jobId}", JOB)).toBe(cfProfileKey(PROXY, "{ip}-{jobId}", JOB));
   });
 
-  it("keeps one job's profiles apart per exit, since a cookie is tied to the address it came from", () => {
-    expect(cfProfileKey(PROXY, "job104")).not.toBe(cfProfileKey(undefined, "job104"));
+  it("keeps a job's profiles apart per exit, since a cookie is tied to where it came from", () => {
+    expect(cfProfileKey(PROXY, "{ip}-{jobId}", JOB)).not.toBe(
+      cfProfileKey(undefined, "{ip}-{jobId}", JOB),
+    );
   });
 
-  it("strips anything a directory name cannot hold", () => {
-    expect(cfProfileKey(undefined, "../../etc")).toBe("direct-etc");
-    expect(cfProfileKey(undefined, "job 104/x")).toBe("direct-job104x");
+  it("follows the account across its jobs, or the template across its accounts", () => {
+    expect(cfProfileKey(undefined, "{tgId}", JOB)).toBe("7");
+    // The interface calls it tgId; it is the account, so both spellings mean the same
+    expect(cfProfileKey(undefined, "{accountId}", JOB)).toBe("7");
+    expect(cfProfileKey(undefined, "{templateId}", JOB)).toBe("48");
   });
 
-  it("treats a blank scope as none, rather than leaving a trailing dash", () => {
+  it("takes free text, and text mixed with names", () => {
+    expect(cfProfileKey(undefined, "user1")).toBe("user1");
+    expect(cfProfileKey(undefined, "user1-{ip}-{jobId}", JOB)).toBe("user1-direct-104");
+  });
+
+  it("ignores case in a name, so {jobid} is not silently a different profile", () => {
+    expect(cfProfileKey(undefined, "{JobId}", JOB)).toBe("104");
+  });
+
+  it("falls back to the exit when the name resolves to nothing", () => {
+    // `{jobId}` outside a job, say. Falling back to the shared profile is the safe way to be
+    // wrong: everything lands in one jar rather than in a directory called "-" for ever
+    expect(cfProfileKey(undefined, "{jobId}")).toBe("direct");
+    expect(cfProfileKey(PROXY, "{jobId}-{templateId}")).toBe(cfProfileKey(PROXY, "{ip}"));
     expect(cfProfileKey(undefined, "   ")).toBe("direct");
     expect(cfProfileKey(undefined, "")).toBe("direct");
+  });
+
+  it("drops a name it does not know rather than making it part of every profile", () => {
+    expect(cfProfileKey(undefined, "{nonsense}-{jobId}", JOB)).toBe("nonsense-104");
+  });
+
+  it("leaves nothing in the name that a directory cannot hold", () => {
+    expect(cfProfileKey(undefined, "../../etc")).toBe("etc");
+    expect(cfProfileKey(undefined, "job 104/x")).toBe("job-104-x");
+    expect(cfProfileKey(undefined, "a//b")).toBe("a-b");
+    expect(cfProfileKey(undefined, "-lead-and-trail-")).toBe("lead-and-trail");
+  });
+
+  it("bounds the length, since the name ends up as a directory", () => {
+    expect(cfProfileKey(undefined, "x".repeat(200)).length).toBe(64);
   });
 });

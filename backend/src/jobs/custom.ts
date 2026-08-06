@@ -27,9 +27,9 @@ import {
   cfNoteFailure,
   cfRefusedFor,
   loadCheckinUrl,
+  cfProfileVars,
   newCfRunState,
   type CfRunState,
-  type LoadOptions,
 } from "./cloudflare";
 import {
   openableBotMenuApp,
@@ -42,91 +42,12 @@ import { resolvePeerTarget } from "../tg/peerTarget";
 import { cfMaxCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
 import { cfTuning } from "./cfTuning";
 import { rememberWebValue, usedWebValues } from "./webMemory";
+
 import type { CustomAction, CustomConfig, CustomStepLog } from "../types";
 
 export type CustomJobLog = {
   steps: CustomStepLog[];
 };
-
-// Opens a Cloudflare-gated URL (e.g. a "我不是机器人" button/answer) in the installed
-// browser to pass the "I am not a bot" check, recording the outcome on the step.
-// Returns the final page's visible text for success/fail matching.
-async function passCloudflare(
-  url: string,
-  cfChallenge: boolean | undefined,
-  step: CustomStepLog,
-  webProxyUrl?: string,
-  miniApp = false,
-  extra: Pick<LoadOptions, "inAppClicks" | "solveQuestion" | "refreshUrl"> = {},
-  cfRun: CfRunState = newCfRunState(),
-): Promise<string> {
-  if (!cfChallenge) {
-    throw new Error(
-      'This click opens a Cloudflare-protected page ("I am not a bot"). Enable "Solve Cloudflare challenge" for this action.',
-    );
-  }
-  const host = (() => {
-    try {
-      return new URL(url).host;
-    } catch {
-      return "";
-    }
-  })();
-  const refused = cfRefusedFor(cfRun, host);
-  const candidates = cfProxyCandidatesFor({ primaryUrl: webProxyUrl, host, exclude: refused });
-  if (!candidates.length) {
-    throw new Error(cfNoCandidatesMessage(cfRun, host));
-  }
-  const cf = await loadCheckinUrl(url, webProxyUrl, {
-    miniApp,
-    ...extra,
-    // A Mini App runs entirely inside the browser, so keep what it saw
-    screenshot: miniApp,
-    // Cloudflare refuses some exit IPs outright, so the rest of the pool stands by --
-    // minus the ones this run has already had refused
-    proxyCandidates: candidates,
-  });
-  step.cfProxy = cf.proxyLabel;
-  step.cfBuild = cf.browserTier;
-  step.cfAttempts = cf.attempts;
-  for (const id of cf.refusedProxyIds ?? []) refused.add(id);
-  if (!cf.ok) cfNoteFailure(cfRun, cf.finalHost, cf.reason);
-  if (cf.ok && cf.proxyId) rememberCfProxy(cf.finalHost, cf.proxyId);
-  step.cfHost = cf.finalHost;
-  step.cfChallenged = cf.challenged;
-  step.cfPassed = cf.ok;
-  step.cfMiniApp = miniApp || undefined;
-  step.cfMiniAppAction = cf.inAppAction;
-  step.cfPageTitle = cf.pageTitle;
-  step.cfNavError = cf.navError;
-  step.cfTrace = cf.trace;
-  step.cfScreenshot = cf.screenshot;
-  if (!cf.ok)
-    throw new Error(cf.reason ?? cfFailureFallback(cf.challenged, true));
-  return cf.text;
-}
-
-// A URL or Mini App button opens a page instead of firing a callback; Mini App
-// buttons get their signed URL from Telegram first, exactly as a real client does.
-// After a callback click the checkin may still hinge on a page: a URL the bot
-// answered with, or a follow-up URL / Mini App button in its replies. Returns the
-// page text (empty when there is nothing to open).
-async function followUpCfText(
-  client: TelegramClient,
-  peer: Api.TypeEntityLike,
-  answer: Api.messages.BotCallbackAnswer | null,
-  responses: { msg: Api.Message }[],
-  step: CustomStepLog,
-  webProxyUrl?: string,
-  cfRun: CfRunState = newCfRunState(),
-): Promise<string> {
-  const answerUrl = (answer as any)?.url as string | undefined;
-  if (answerUrl) return passCloudflare(answerUrl, true, step, webProxyUrl, false, {}, cfRun);
-
-  const hit = responses.map((r) => ({ msg: r.msg, web: findUrlButton(r.msg) })).find((h) => h.web);
-  if (!hit?.web) return '';
-  return (await openWebButton(client, hit.web, peer, hit.msg, true, step, webProxyUrl, cfRun)).text;
-}
 
 type WebButtonOutcome = {
   /** Text of the page that was opened, empty when nothing was loaded. */
@@ -135,15 +56,20 @@ type WebButtonOutcome = {
   deepLinkSent?: { botUsername: string; msg: Api.Message };
 };
 
+/**
+ * Handles a button that opens something rather than firing a callback.
+ *
+ * A `?start=` deep link is followed inside Telegram, which is what a real client does. A
+ * button that opens a page is not: a clicking action stays inside Telegram, and anything
+ * needing a browser belongs to the actions built around one -- so this says so rather than
+ * quietly starting a browser from a step that is not about the web.
+ */
 async function openWebButton(
   client: TelegramClient,
   web: WebButton,
   peer: Api.TypeEntityLike,
   msg: Api.Message | null,
-  cfChallenge: boolean | undefined,
   step: CustomStepLog,
-  webProxyUrl?: string,
-  cfRun: CfRunState = newCfRunState(),
 ): Promise<WebButtonOutcome> {
   // A `?start=` deep link is followed the way a real client does -- by sending the
   // command to that bot -- not by loading a page. Group bots use these to move a
@@ -155,16 +81,11 @@ async function openWebButton(
     return { text: "", deepLinkSent: { botUsername, msg: sent } };
   }
 
-  const { url, signed } = await openableButtonUrl(client, web, peer, msg ?? undefined);
-  step.cfMiniAppSigned = web.miniApp ? signed : undefined;
-  if (web.miniApp && !signed) {
-    throw new Error(
-      `Telegram would not sign the Mini App behind "${web.text}"; the app cannot be opened logged in`,
-    );
-  }
-  return {
-    text: await passCloudflare(url, cfChallenge, step, webProxyUrl, web.miniApp, {}, cfRun),
-  };
+  throw new Error(
+    web.miniApp
+      ? `"${web.text}" opens a Mini App, which this action cannot do. Use an "Open Mini App" action for it.`
+      : `"${web.text}" opens a web page, which this action cannot do. Use an "Open URL" action for it.`,
+  );
 }
 
 export class CustomJobError extends Error {
@@ -1198,7 +1119,7 @@ export async function runCustom(
                       const web = webButtonOf(btn);
                       if (web) {
                         const opened = await openWebButton(
-                          client, web, botUsername, buttonsMsg, action.cfChallenge, step, webProxyUrl, cfRun,
+                          client, web, botUsername, buttonsMsg, step,
                         );
                         const cfText = opened.text;
                         // Following a deep link starts a private chat with that bot;
@@ -1369,17 +1290,9 @@ export async function runCustom(
                           : undefined;
                       }
 
-                      // A URL to open (callback answer or a follow-up "我不是机器人"
-                      // button) completes the checkin only after passing Cloudflare.
-                      let cfText = '';
-                      // Only chase a Cloudflare URL from the response when this action
-                      // opted in; otherwise an incidental URL/WebApp button (e.g. a
-                      // "Verify" the user handles in a later action) must be ignored.
-                      if (action.cfChallenge) {
-                        cfText = await followUpCfText(
-                          client, botUsername, answer, responses, step, webProxyUrl, cfRun,
-                        );
-                      }
+                      // A URL in the reply is left alone: this action clicks inside
+                      // Telegram, and a page belongs to an action built around a browser.
+                      const cfText = '';
 
                       // Check success/fail text in callback answer, response, or CF page
                       if (action.successContains || action.failContains) {
@@ -1580,7 +1493,7 @@ export async function runCustom(
                       const web = webButtonOf(btn);
                       if (web) {
                         const opened = await openWebButton(
-                          client, web, entity, buttonsMsg, action.cfChallenge, step, webProxyUrl, cfRun,
+                          client, web, entity, buttonsMsg, step,
                         );
                         const cfText = opened.text;
                         // Following a deep link starts a private chat with that bot;
@@ -1743,17 +1656,9 @@ export async function runCustom(
                           : undefined;
                       }
 
-                      // A URL to open (callback answer or a follow-up "我不是机器人"
-                      // button) completes the checkin only after passing Cloudflare.
-                      let cfText = '';
-                      // Only chase a Cloudflare URL from the response when this action
-                      // opted in; otherwise an incidental URL/WebApp button (e.g. a
-                      // "Verify" the user handles in a later action) must be ignored.
-                      if (action.cfChallenge) {
-                        cfText = await followUpCfText(
-                          client, entity, answer, responses, step, webProxyUrl, cfRun,
-                        );
-                      }
+                      // A URL in the reply is left alone: this action clicks inside
+                      // Telegram, and a page belongs to an action built around a browser.
+                      const cfText = '';
 
                       if (action.successContains || action.failContains) {
                         const texts = [answer?.message ?? '', ...responses.map((r) => r.msg.message ?? ''), cfText].filter(Boolean).join('\n');
@@ -2455,6 +2360,7 @@ export async function runCustom(
                   miniApp: true,
                   inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
                   maxWaitMs: budgetLeft,
+                  profile: { template: action.profileId, vars: cfProfileVars(cfRun) },
                   // The browser side is invisible from here, so keep what it saw
                   screenshot: true,
                   solveQuestion: async (question) => {
@@ -2488,6 +2394,7 @@ export async function runCustom(
                 step.cfMiniAppAction = cf.inAppAction;
                 step.cfProxy = cf.proxyLabel;
                 step.cfBuild = cf.browserTier;
+                step.cfProfile = cf.profileKey;
                 step.cfAttempts = cf.attempts;
                 step.cfPageTitle = cf.pageTitle;
                 step.cfNavError = cf.navError;
@@ -2626,6 +2533,7 @@ export async function runCustom(
                   miniApp: true,
                   inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
                   maxWaitMs: budgetLeft,
+                  profile: { template: action.profileId, vars: cfProfileVars(cfRun) },
                   screenshot: true,
                   solveQuestion: async (question) => {
                     const prompt =
@@ -2652,6 +2560,7 @@ export async function runCustom(
                 step.cfMiniAppAction = cf.inAppAction;
                 step.cfProxy = cf.proxyLabel;
                 step.cfBuild = cf.browserTier;
+                step.cfProfile = cf.profileKey;
                 step.cfAttempts = cf.attempts;
                 step.cfPageTitle = cf.pageTitle;
                 step.cfNavError = cf.navError;
@@ -2748,16 +2657,15 @@ export async function runCustom(
                   usedValues: (varName) => usedWebValues(cfRun.jobId, varName),
                   markUsed: (varName, value) =>
                     rememberWebValue(cfRun.jobId, varName, value),
-                  // A login belongs to this job, not to everything sharing its exit
-                  ...(action.ownProfile && cfRun.jobId
-                    ? { profileScope: `job${cfRun.jobId}` }
-                    : {}),
+                  // Which cookie jar this runs on, and so what a login here belongs to
+                  profile: { template: action.profileId, vars: cfProfileVars(cfRun) },
                 });
                 step.cfHost = cf.finalHost;
                 step.cfChallenged = cf.challenged;
                 step.cfPassed = cf.ok;
                 step.cfProxy = cf.proxyLabel;
                 step.cfBuild = cf.browserTier;
+                step.cfProfile = cf.profileKey;
                 step.cfAttempts = cf.attempts;
                 step.cfPageTitle = cf.pageTitle;
                 step.cfNavError = cf.navError;

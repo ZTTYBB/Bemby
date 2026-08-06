@@ -4,6 +4,7 @@ import {
   chromiumExecutable,
   chromiumVersion,
   launchCfBrowser,
+  type CfProfileVars,
   type LaunchedBrowser,
 } from "./cfBrowser";
 import {
@@ -26,13 +27,18 @@ import type { WebStep, WebStepLog } from "../types";
 // one Cloudflare module to talk to.
 
 export {
+  CF_PROFILE_ID_DEFAULT,
+  CF_PROFILE_ID_KEY,
+  cfProfileKey,
   chromiumExecutable,
   chromiumVersion,
   cloakCacheDir,
+  configuredProfileId,
   installCfChromium,
   installedBuildTier,
   isChromiumInstalled,
   keyedBuildPending,
+  type CfProfileVars,
 } from "./cfBrowser";
 export {
   CF_FONTS,
@@ -135,6 +141,12 @@ export type CheckinPageResult = {
   browserFailed?: boolean;
   /** Which browser build ran: the licensed one, or the unlicensed fallback. */
   browserTier?: "keyed" | "free";
+  /**
+   * The browser profile it ran on, once the name was resolved -- so the log can say whose
+   * cookies these were. A login the site keeps asking for is nearly always a profile name
+   * resolving to something other than what was intended.
+   */
+  profileKey?: string;
   /** Why the attempt is not ok, in plain words, for the job log. */
   reason?: string;
   /** Navigation/renderer trouble seen while loading (page crash, failed request). */
@@ -167,18 +179,25 @@ export type CfRunState = {
    */
   lastFailure: Map<string, string>;
   /**
-   * Job this run belongs to, when there is one. Only the page steps use it, to keep what a
-   * `web_collect` has already handed to a loop apart from every other job's.
+   * What this run is, for the things that are kept per job rather than per run: what a
+   * `web_pick` has already handed to a loop, and the browser profile a name like
+   * `{ip}-{jobId}` or `{tgId}` resolves to. Absent outside a job, where both fall back.
    */
   jobId?: number;
+  templateId?: number;
+  tgId?: number;
 };
 
-export function newCfRunState(jobId?: number): CfRunState {
+export function newCfRunState(
+  identity: { jobId?: number; templateId?: number; tgId?: number } = {},
+): CfRunState {
   return {
     refused: new Map(),
     deadlines: new Map(),
     lastFailure: new Map(),
-    ...(jobId ? { jobId } : {}),
+    ...(identity.jobId ? { jobId: identity.jobId } : {}),
+    ...(identity.templateId ? { templateId: identity.templateId } : {}),
+    ...(identity.tgId ? { tgId: identity.tgId } : {}),
   };
 }
 
@@ -204,6 +223,11 @@ export function cfNoCandidatesMessage(state: CfRunState, host: string): string {
 }
 
 /** Notes why an attempt on `host` failed, for the message above. */
+/** What a profile name's `{jobId}`, `{templateId}` and `{tgId}` are filled in from. */
+export function cfProfileVars(state: CfRunState): CfProfileVars {
+  return { jobId: state.jobId, templateId: state.templateId, tgId: state.tgId };
+}
+
 export function cfNoteFailure(state: CfRunState, host: string, reason?: string): void {
   if (reason) state.lastFailure.set(host || "*", reason);
 }
@@ -261,11 +285,12 @@ export type LoadOptions = {
   usedValues?: (varName: string) => string[];
   markUsed?: (varName: string, value: string) => void;
   /**
-   * Narrows the browser profile -- so the cookies -- to this caller, instead of sharing the
-   * one every job on this exit uses. What a job logs into is its own: two accounts going out
-   * through the same exit would otherwise overwrite each other's session.
+   * Which browser profile -- so which cookie jar and which device -- to run on. The name is
+   * a template (`{ip}`, `{ip}-{jobId}`, `{tgId}`, free text); blank takes the configured
+   * default. This is what decides whether a login is private to a job or pooled across
+   * everything on the exit.
    */
-  profileScope?: string;
+  profile?: { template?: string; vars?: CfProfileVars };
 };
 
 // Every timing and limit the browser side runs on lives in cfTuning, so it can be
@@ -428,9 +453,9 @@ async function probeExitGeo(
 async function launchAlignedBrowser(
   proxyUrl: string | undefined,
   deadline: number,
-  profileScope?: string,
+  profile?: { template?: string; vars?: CfProfileVars },
 ): Promise<LaunchedBrowser> {
-  const launched = await launchCfBrowser(proxyUrl, { profileScope });
+  const launched = await launchCfBrowser(proxyUrl, { profile });
   if (launched.geo) return launched;
 
   const geo = await probeExitGeo(launched.page, launched.key, deadline);
@@ -442,7 +467,7 @@ async function launchAlignedBrowser(
   // be refused, which the keyed build answers by quitting during startup. The seat is
   // already free locally; this is purely to let the far side catch up.
   await sleep(cfTuning().relaunchSettleMs, deadline);
-  return launchCfBrowser(proxyUrl, { profileScope });
+  return launchCfBrowser(proxyUrl, { profile });
 }
 
 /**
@@ -3105,6 +3130,9 @@ async function attemptLoad(
   // the latter says anything about the exit.
   let launchOk = false;
   let browserTier: "keyed" | "free" | undefined;
+  // The profile it ran on, so a log can say whose cookies these were: a login that
+  // keeps being asked for is almost always a name resolving to other than intended.
+  let profileKey: string | undefined;
   // Renderer trouble the page reports on its own: a crashed tab or a main request
   // that never arrived both leave a blank page that otherwise looks challenge-free.
   const troubles: string[] = [];
@@ -3117,9 +3145,10 @@ async function attemptLoad(
   try {
     // The clock and language of the exit are launch flags, so this settles them before
     // anything on the target is loaded
-    launched = await launchAlignedBrowser(proxyUrl, budgetDeadline, opts.profileScope);
+    launched = await launchAlignedBrowser(proxyUrl, budgetDeadline, opts.profile);
     launchOk = true;
     browserTier = launched.tier;
+    profileKey = launched.profileKey;
     const page = launched.page;
 
     page.on("crash", () => note("page crashed"));
@@ -3351,6 +3380,7 @@ async function attemptLoad(
       // the challenge was already cleared is the page's doing, so every other exit would
       // meet it alike -- rotating the pool there only spends the budget.
       browserTier,
+      profileKey,
       exitRelated: solved && webFailure ? false : !!navError || (challenged && !verdict.ok) || !text.trim(),
       screenshot: opts.screenshot ? await screenshotOf(page) : undefined,
     };

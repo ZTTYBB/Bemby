@@ -37,6 +37,7 @@ import {
   chromiumExecutable,
   chromiumPath,
   CF_BROWSER_LANG_KEY,
+  CF_PROFILE_ID_KEY,
   installedBuildTier,
   installedCfBuilds,
   keyedBuildPending,
@@ -89,6 +90,7 @@ export const ALLOWED_KEYS = [
   "log_retention_days",
   "schedule_min_gap_minutes",
   "cf_solver_enabled",
+  CF_PROFILE_ID_KEY,
   CF_BROWSER_LANG_KEY,
   CF_TUNING_KEY,
 ];

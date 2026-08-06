@@ -667,6 +667,11 @@
                                 : t("logs.cf.buildFree")
                             }}</span
                           >
+                          <!-- Whose cookies the step had: a login the site keeps asking
+                               for is usually a profile name resolving elsewhere -->
+                          <span v-if="s.cfProfile"
+                            >{{ t("logs.cf.profile") }}: {{ s.cfProfile }}</span
+                          >
                           <span v-if="s.cfMiniApp"
                             >{{ t("logs.cf.signed") }}:
                             {{ s.cfMiniAppSigned ? "✓" : "✗" }}</span

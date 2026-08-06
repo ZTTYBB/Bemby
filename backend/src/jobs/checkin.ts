@@ -5,18 +5,8 @@ import { StringSession } from 'telegram/sessions';
 import type { TgProxy } from '../types';
 import type { TgDeviceParams } from '../auth/tgAuth';
 import { NewMessage, NewMessageEvent, Raw } from 'telegram/events';
-import {
-  cfFailureFallback,
-  cfNoCandidatesMessage,
-  cfNoteFailure,
-  cfRefusedFor,
-  loadCheckinUrl,
-  newCfRunState,
-  type CfRunState,
-} from './cloudflare';
-import { openableButtonUrl, webButtonOf, type WebButton } from '../tg/miniApp';
+import { webButtonOf, type WebButton } from '../tg/miniApp';
 import { escapeHtml, safeHref } from '../tg/htmlEscape';
-import { cfProxyCandidatesFor, rememberCfProxy } from '../tg/proxyProviders';
 
 export type CheckinAttemptLog = {
   attempt: number;
@@ -72,6 +62,8 @@ export type CheckinAttemptLog = {
    * and passes fewer challenges, so a run that quietly fell back is worth seeing.
    */
   cfBuild?: "keyed" | "free";
+  /** The browser profile the Cloudflare pass ran on, i.e. whose cookies it had. */
+  cfProfile?: string;
   /** How many exits were tried before the page loaded. */
   cfAttempts?: number;
 };
@@ -609,79 +601,6 @@ export function findUrlButton(msg: Api.Message | undefined, matchText?: string):
   return undefined;
 }
 
-// Scans several recent bot messages for an openable web button. Bots often send
-// the verify prompt as one of several follow-up messages (error + prompt + fresh
-// menu), so the single raced reply isn't enough.
-async function findUrlButtonRecent(
-  client: TelegramClient,
-  botUsername: string,
-  signal?: AbortSignal,
-  miniAppOnly = false,
-): Promise<{ web: WebButton; msg: Api.Message } | undefined> {
-  if (signal?.aborted) return undefined;
-  try {
-    const msgs = (await client.getMessages(botUsername, { limit: 6 })) as Api.Message[];
-    for (const m of msgs) {
-      const found = findUrlButton(m);
-      if (found && (!miniAppOnly || found.miniApp)) return { web: found, msg: m };
-    }
-  } catch {
-    /* ignore fetch errors, fall back to the raced reply */
-  }
-  return undefined;
-}
-
-// A verify page (e.g. FutureEcho's Turnstile) only unlocks the checkin; after it
-// passes, the bot expects the checkin button clicked again. Best-effort re-click
-// on the latest menu, returning the follow-up text for success/fail matching.
-// Never throws -- a failed re-click just yields no extra text.
-async function reclickCheckinButton(
-  client: TelegramClient,
-  botUsername: string,
-  buttonText: string,
-  replyTimeoutMs: number,
-  signal?: AbortSignal,
-): Promise<string> {
-  try {
-    if (signal?.aborted) return '';
-    await new Promise(r => setTimeout(r, 3000)); // let the bot register the verification
-    const msgs = (await client.getMessages(botUsername, { limit: 6 })) as Api.Message[];
-    const menu = msgs.find(m => (m as any).replyMarkup instanceof Api.ReplyInlineMarkup);
-    if (!menu) return '';
-    const markup = (menu as any).replyMarkup as Api.ReplyInlineMarkup;
-    let target: Api.KeyboardButtonCallback | undefined;
-    for (const row of markup.rows)
-      for (const btn of row.buttons)
-        if (btn instanceof Api.KeyboardButtonCallback && ((btn as any).text as string).includes(buttonText)) target = btn;
-    if (!target) return '';
-
-    const peer = await client.getInputEntity(botUsername);
-    const botPeerId = await client.getPeerId(botUsername);
-    const editP = waitForBotMessageEdit(client, menu.id, replyTimeoutMs, signal, botPeerId);
-    const newP = waitForNewBotMessage(client, botUsername, replyTimeoutMs, signal);
-    let answer: Api.messages.BotCallbackAnswer | undefined;
-    try {
-      answer = (await client.invoke(
-        new Api.messages.GetBotCallbackAnswer({ peer, msgId: menu.id, data: target.data }),
-      )) as Api.messages.BotCallbackAnswer;
-    } catch (err: any) {
-      if (!/BOT_RESPONSE_TIMEOUT/.test(err?.message ?? '')) throw err;
-    }
-    const capP = new Promise<Api.Message | null>(r =>
-      setTimeout(() => r(null), Math.min(replyTimeoutMs, 15_000)),
-    );
-    const resp = await Promise.race([editP, newP, capP]);
-    const parts = [answer?.message ?? ''];
-    if (resp && !signal?.aborted) {
-      const bp = await parseMessages([resp], client, signal);
-      parts.push(htmlToText(bp.html ?? ''));
-    }
-    return parts.filter(Boolean).join('\n');
-  } catch {
-    return '';
-  }
-}
-
 // Collects ALL bot messages; resolves when one has buttons, times out otherwise
 function waitForBotReply(
   client: TelegramClient,
@@ -882,11 +801,7 @@ export async function runCheckin(
   deviceParams?: TgDeviceParams,
   successContains?: string,
   failContains?: string,
-  cfChallenge = false,
   webProxyUrl?: string,
-  // Shared across the runner's retries, so an exit refused earlier in this run is not
-  // offered again instead of the same few being cycled
-  cfRun: CfRunState = newCfRunState(),
 ): Promise<CheckinAttemptLog> {
   const attemptStart = Date.now();
   const log: CheckinAttemptLog = {
@@ -906,56 +821,6 @@ export async function runCheckin(
   const t_connect = Date.now();
   await client.connect();
   log.connectMs = Date.now() - t_connect;
-
-  // Mini App buttons must be signed by Telegram before the page will accept us.
-  const toOpenableUrl = async (web: WebButton, msg?: Api.Message): Promise<string> => {
-    if (!web.miniApp) return web.url;
-    log.cfMiniApp = true;
-    const { url, signed } = await openableButtonUrl(client, web, botUsername, msg);
-    log.cfMiniAppSigned = signed;
-    return url;
-  };
-
-  // Opens a checkin page in the installed browser, passing any Cloudflare challenge.
-  // Returns the page text for success/fail matching.
-  const openCheckinPage = async (url: string): Promise<string> => {
-    if (!cfChallenge) {
-      throw new Error(
-        'Checkin requires opening a Cloudflare-protected page ("I am not a bot"). Enable "Solve Cloudflare challenge" for this job.',
-      );
-    }
-    const host = (() => {
-      try {
-        return new URL(url).host;
-      } catch {
-        return '';
-      }
-    })();
-    const refused = cfRefusedFor(cfRun, host);
-    const candidates = cfProxyCandidatesFor({ primaryUrl: webProxyUrl, host, exclude: refused });
-    if (!candidates.length) {
-      throw new Error(cfNoCandidatesMessage(cfRun, host));
-    }
-    const result = await loadCheckinUrl(url, webProxyUrl, {
-      miniApp: log.cfMiniApp,
-      // Cloudflare refuses some exit IPs outright, so the rest of the pool stands by --
-      // minus the ones this run has already had refused
-      proxyCandidates: candidates,
-    });
-    for (const id of result.refusedProxyIds ?? []) refused.add(id);
-    if (!result.ok) cfNoteFailure(cfRun, result.finalHost, result.reason);
-    log.cfHost = result.finalHost;
-    log.cfChallenged = result.challenged;
-    log.cfPassed = result.ok;
-    log.cfMiniAppAction = result.inAppAction;
-    log.cfProxy = result.proxyLabel;
-    log.cfBuild = result.browserTier;
-    log.cfAttempts = result.attempts;
-    if (result.ok && result.proxyId) rememberCfProxy(result.finalHost, result.proxyId);
-    if (!result.ok)
-      throw new Error(result.reason ?? cfFailureFallback(result.challenged, log.cfMiniApp));
-    return result.text;
-  };
 
   const assertOutcome = (...texts: string[]): void => {
     if (!successContains && !failContains) return;
@@ -990,20 +855,6 @@ export async function runCheckin(
         log.availableButtons = parsed.buttons;
       }
 
-      // Some bots answer minutes or hours later, but a Mini App checkin button is a
-      // standing entry point (unlike a one-shot verify link): open the one already in
-      // the chat rather than failing on the reply that never came.
-      if (cfChallenge && err instanceof BotReplyTimeoutError) {
-        const standing = await findUrlButtonRecent(client, botUsername, signal, true);
-        if (standing) {
-          log.cfFromHistory = true;
-          log.buttonClicked = standing.web.text;
-          const cfText = await openCheckinPage(await toOpenableUrl(standing.web, standing.msg));
-          assertOutcome(cfText);
-          log.totalMs = Date.now() - attemptStart;
-          return log;
-        }
-      }
       throw err;
     }
 
@@ -1050,22 +901,22 @@ export async function runCheckin(
     let clicked = false;
     // Set when the checkin completes by opening a web URL behind Cloudflare
     // (e.g. a "我不是机器人" link) rather than by a callback.
-    let urlToOpen: string | undefined;
 
     for (const row of allBtnRows) {
       for (const btn of row.buttons) {
         const btnText = (btn as any).text as string;
         const matches = useExactMatch ? btnText === targetText : btnText.includes(targetText);
         if (matches) {
-          // A URL or Mini App button carries the web checkin address; neither is
-          // clickable via callback, so we open it in a browser (below) to pass the
-          // CF check -- which is also how a real client runs a Mini App.
+          // A URL or Mini App button carries a web address rather than a callback, so
+          // there is nothing here to press. Opening it belongs to a custom job, whose
+          // browser actions sign a Mini App and drive the page properly.
           const web = webButtonOf(btn);
           if (web) {
-            urlToOpen = await toOpenableUrl(web, buttonsMsg);
-            log.buttonClicked = btnText;
-            clicked = true;
-            break;
+            throw new Error(
+              `Checkin button "${btnText}" opens ${web.miniApp ? 'a Mini App' : 'a web page'}, ` +
+                'which a checkin job cannot do. Use a custom job with an ' +
+                `"Open ${web.miniApp ? 'Mini App' : 'URL'}" action instead.`,
+            );
           }
           if (!(btn instanceof Api.KeyboardButtonCallback)) {
             const typeName = (btn as any).className ?? btn.constructor?.name ?? 'unknown';
@@ -1102,8 +953,6 @@ export async function runCheckin(
           if (answer?.message) log.callbackAnswer = answer.message;
           console.log(`[checkin] callback answer: message="${answer?.message ?? ''}" url="${(answer as any)?.url ?? ''}" alert=${(answer as any)?.alert ?? false}`);
           clicked = true;
-          // The bot may answer with a URL to open (a web checkin / CF page).
-          if ((answer as any)?.url) urlToOpen = (answer as any).url as string;
 
           // If the bot already confirmed via toast (answer.message), allow a short
           // grace window for any follow-up edit/message; otherwise wait longer.
@@ -1128,12 +977,6 @@ export async function runCheckin(
               log.buttonResponseHasMedia = bp.hasMedia || undefined;
               log.buttonResponseImage = bp.images[0];
               log.buttonResponseButtons = bp.buttons.length ? bp.buttons : undefined;
-            }
-            // A follow-up URL / Mini App button (e.g. "我不是机器人") takes precedence
-            // as the step that actually completes the checkin.
-            if (!urlToOpen) {
-              const followUp = findUrlButton(responseMsg);
-              if (followUp) urlToOpen = await toOpenableUrl(followUp, responseMsg);
             }
           }
 
@@ -1168,27 +1011,8 @@ export async function runCheckin(
     const notFoundLabel = isAiBtn(checkinButton) ? `{aiBtn} -> "${targetText}"` : `"${checkinButton}"`;
     if (!clicked) throw new Error(`Button ${notFoundLabel} not found in bot reply`);
 
-    // The verify/CF prompt is often one of several follow-up messages, so fall
-    // back to scanning recent messages if the raced reply didn't carry it.
-    if (cfChallenge && !urlToOpen) {
-      const recent = await findUrlButtonRecent(client, botUsername, signal);
-      if (recent) urlToOpen = await toOpenableUrl(recent.web, recent.msg);
-    }
-
-    // Some bots complete (or unlock) the checkin only after a Cloudflare-gated web
-    // page is opened: a "我不是机器人" URL button, or a Mini App button ("Verify",
-    // "打开小程序签到") whose page carries the challenge. Open it in the installed
-    // browser to pass the check.
-    let cfPageText = '';
-    let reclickText = '';
-    if (urlToOpen) {
-      cfPageText = await openCheckinPage(urlToOpen);
-      // Verify pages only unlock the checkin; re-click the button to register it.
-      reclickText = await reclickCheckinButton(client, botUsername, log.buttonClicked ?? checkinButton, replyTimeoutMs, signal);
-    }
-
-    // Check success/fail text in callback answer, button response, CF page, or re-click
-    assertOutcome(log.callbackAnswer ?? '', htmlToText(log.buttonResponseHtml ?? ''), cfPageText, reclickText);
+    // Check success/fail text in the callback answer and the button's reply
+    assertOutcome(log.callbackAnswer ?? '', htmlToText(log.buttonResponseHtml ?? ''));
 
     log.totalMs = Date.now() - attemptStart;
     return log;

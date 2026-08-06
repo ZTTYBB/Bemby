@@ -491,14 +491,6 @@
                   <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
                 </div>
-                <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                  <label class="form-checkbox-label">
-                    <input type="checkbox" v-model="action.cfChallenge" :disabled="cfBrowserMissing" />
-                    {{ t('jobs.custom.labelCfChallenge') }}
-                  </label>
-                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
-                  <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
-                </div>
               </div>
 
               <!-- click_message_button -->
@@ -548,14 +540,6 @@
                   <label class="form-label">{{ t('jobs.custom.labelFailContains') }}</label>
                   <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
-                </div>
-                <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                  <label class="form-checkbox-label">
-                    <input type="checkbox" v-model="action.cfChallenge" :disabled="cfBrowserMissing" />
-                    {{ t('jobs.custom.labelCfChallenge') }}
-                  </label>
-                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
-                  <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
                 </div>
               </div>
 
@@ -679,6 +663,11 @@
                   </label>
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppTryAllHint') }}</div>
                 </div>
+                <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                  <label class="form-label">{{ t('jobs.web.labelProfileId') }}</label>
+                  <input v-model.trim="action.profileId" class="form-input" :placeholder="profileIdPlaceholder" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.web.profileIdHint') }}</div>
+                </div>
               </div>
 
               <!-- open_url -->
@@ -729,11 +718,9 @@
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppTryAllHint') }}</div>
                 </div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                  <label class="form-checkbox-label">
-                    <input type="checkbox" v-model="action.ownProfile" />
-                    {{ t('jobs.web.labelOwnProfile') }}
-                  </label>
-                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.web.ownProfileHint') }}</div>
+                  <label class="form-label">{{ t('jobs.web.labelProfileId') }}</label>
+                  <input v-model.trim="action.profileId" class="form-input" :placeholder="profileIdPlaceholder" />
+                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.web.profileIdHint') }}</div>
                 </div>
               </div>
             </div>
@@ -964,14 +951,6 @@
             <input v-model.trim="checkinFailContains" class="form-input" :placeholder="t('jobs.failContainsPlaceholder')" />
             <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.failContainsHint') }}</div>
           </div>
-          <div class="form-group">
-            <label class="form-checkbox-label">
-              <input type="checkbox" v-model="checkinCfChallenge" :disabled="!!form.templateId || cfBrowserMissing" />
-              {{ t('jobs.custom.labelCfChallenge') }}
-            </label>
-            <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
-            <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
-          </div>
         </template>
 
         <div v-if="form.jobType === 'embywatch' && !form.templateId" class="form-row">
@@ -1176,7 +1155,6 @@ type CustomActionForm = {
   captchaLength: string;
   successContains: string;
   failContains: string;
-  cfChallenge: boolean;
   contact: string;
   groupId: string;
   checkMembership: boolean;
@@ -1189,7 +1167,7 @@ type CustomActionForm = {
   /** open_mini_app: pinned browser proxy id, 'direct', or '' for the job proxy */
   miniAppProxyId: string;
   miniAppTryAllProxies: boolean;
-  ownProfile: boolean;
+  profileId: string;
   /** open_url: the page to open */
   url: string;
   /** open_url: sub-steps run on the page once it is up */
@@ -1409,6 +1387,8 @@ const autoregCfg = reactive<AutoregCfgForm>(defaultAutoregCfg());
 const formError = ref('');
 const saving = ref(false);
 const aiKeyMissing = computed(() => settings.value?.ai_key_configured !== 'true');
+// A blank profile name falls back to the one configured in Settings, so show which
+const profileIdPlaceholder = computed(() => settings.value?.cf_profile_id?.trim() || '{ip}');
 // Anything that opens a page needs the solver's browser and its fonts in the data dir;
 // neither ships in the image, so those options stay off until both are downloaded.
 // Only ever true once the settings have actually arrived. Null means they have not (the
@@ -1432,7 +1412,6 @@ const btnCustom = ref('')
 const btnAiHint = ref('')
 const checkinSuccessContains = ref('')
 const checkinFailContains = ref('')
-const checkinCfChallenge = ref(false)
 
 function setCmdState(val: string) {
   if (CMD_PRESETS.has(val)) { cmdDropdown.value = val; cmdCustom.value = ''; }
@@ -1478,12 +1457,11 @@ function onJobTypeChange() {
   btnAiHint.value = '';
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
-  checkinCfChallenge.value = false;
   setCmdState(''); setBtnState('');
 }
 
 function defaultAction(): CustomActionForm {
-  return { type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '', contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到', buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0, captchaLength: '', successContains: '', failContains: '', cfChallenge: false, contact: '', groupId: '', checkMembership: false, verifyButton: '', verifyWaitMs: 30000, channelId: '', appButton: '', miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppTryAllProxies: true, ownProfile: false, url: '', webSteps: [] };
+  return { type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '', contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到', buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0, captchaLength: '', successContains: '', failContains: '', contact: '', groupId: '', checkMembership: false, verifyButton: '', verifyWaitMs: 30000, channelId: '', appButton: '', miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppTryAllProxies: true, profileId: '', url: '', webSteps: [] };
 }
 
 function addAction() {
@@ -1572,17 +1550,17 @@ function applyTemplate(tpl: JobTemplate) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha' as const, maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group' as const, groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000 };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel' as const, channelId: a.channelId, checkMembership: a.checkMembership ?? false };
-          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
-          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
-          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
-          if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, ownProfile: a.ownProfile ?? false };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
             let buttonDropdown: string, buttonCustom = '', buttonAiHint = '';
             if (aiMatch) { buttonDropdown = '{aiBtn}'; buttonAiHint = aiMatch[1]?.trim() ?? ''; }
             else if (ACTION_BTN_PRESETS.has(a.button)) { buttonDropdown = a.button; }
             else { buttonDropdown = 'custom'; buttonCustom = a.button; }
-            return { ...base, type: 'click_button' as const, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0, cfChallenge: a.cfChallenge ?? false };
+            return { ...base, type: 'click_button' as const, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           }
           if (a.type === 'click_message_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
@@ -1590,7 +1568,7 @@ function applyTemplate(tpl: JobTemplate) {
             if (aiMatch) { buttonDropdown = '{aiBtn}'; buttonAiHint = aiMatch[1]?.trim() ?? ''; }
             else if (ACTION_BTN_PRESETS.has(a.button)) { buttonDropdown = a.button; }
             else { buttonDropdown = 'custom'; buttonCustom = a.button; }
-            return { ...base, type: 'click_message_button' as const, contact: a.contact, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0, cfChallenge: a.cfChallenge ?? false };
+            return { ...base, type: 'click_message_button' as const, contact: a.contact, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           }
           return base;
         });
@@ -1761,7 +1739,6 @@ function openAdd() {
   Object.assign(autoregCfg, defaultAutoregCfg());
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
-  checkinCfChallenge.value = false;
   setCmdState(''); setBtnState('');
   formError.value = '';
   showForm.value = true;
@@ -1784,14 +1761,12 @@ function openEdit(j: Job) {
   setBtnState(j.checkinButton === '签到' ? '' : (j.checkinButton ?? ''));
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
-  checkinCfChallenge.value = false;
   if (j.jobType === 'checkin' && j.config) {
     try {
       let cfg = JSON.parse(j.config);
       if (typeof cfg === 'string') cfg = JSON.parse(cfg);
       checkinSuccessContains.value = cfg.successContains ?? '';
       checkinFailContains.value = cfg.failContains ?? '';
-      checkinCfChallenge.value = cfg.cfChallenge ?? false;
     } catch { /* ignore */ }
   }
   if (j.jobType === 'embywatch') {
@@ -1857,10 +1832,10 @@ function openEdit(j: Job) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha', maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group', groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000 };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel', channelId: a.channelId, checkMembership: a.checkMembership ?? false };
-          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app', contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
-          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url', url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
-          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
-          if (a.type === 'open_url') return { ...base, type: 'open_url', url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, ownProfile: a.ownProfile ?? false };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app', contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url', url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_url') return { ...base, type: 'open_url', url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
             let buttonDropdown: string, buttonCustom = '', buttonAiHint = '';
@@ -2056,6 +2031,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
           ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+          ...(a.profileId ? { profileId: a.profileId } : {}),
         };
         if (a.type === 'open_mini_app_url') return {
           type: 'open_mini_app_url' as const,
@@ -2068,6 +2044,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
           ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+          ...(a.profileId ? { profileId: a.profileId } : {}),
         };
         if (a.type === 'open_bot_menu_app') return {
           type: 'open_bot_menu_app' as const,
@@ -2079,18 +2056,20 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
           ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+          ...(a.profileId ? { profileId: a.profileId } : {}),
         };
         if (a.type === 'open_url') return {
           type: 'open_url' as const,
           url: a.url.trim(),
           ...(a.webSteps.length ? { steps: webStepsToConfig(a.webSteps) } : {}),
-          ...(a.ownProfile ? { ownProfile: true } : {}),
+          ...(a.profileId ? { profileId: a.profileId } : {}),
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
           ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+          ...(a.profileId ? { profileId: a.profileId } : {}),
         };
         let button: string;
         if (a.buttonDropdown === 'custom') button = a.buttonCustom;
@@ -2105,7 +2084,6 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.scope ? { scope: a.scope } : {}),
-          ...(a.cfChallenge ? { cfChallenge: true } : {}),
         };
         return {
           type: 'click_button' as const,
@@ -2115,7 +2093,6 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.scope ? { scope: a.scope } : {}),
-          ...(a.cfChallenge ? { cfChallenge: true } : {}),
         };
       }),
     };
@@ -2125,9 +2102,8 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
   if (form.jobType === 'checkin') {
     const s = checkinSuccessContains.value.trim();
     const f = checkinFailContains.value.trim();
-    const cf = checkinCfChallenge.value;
-    if (s || f || cf)
-      return { ...(s ? { successContains: s } : {}), ...(f ? { failContains: f } : {}), ...(cf ? { cfChallenge: true } : {}) };
+    if (s || f)
+      return { ...(s ? { successContains: s } : {}), ...(f ? { failContains: f } : {}) };
   }
   return null;
 }

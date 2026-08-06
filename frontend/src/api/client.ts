@@ -378,7 +378,6 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
-      cfChallenge?: boolean;
     }
   | {
       type: "click_message_button";
@@ -389,7 +388,6 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
-      cfChallenge?: boolean;
     }
   | {
       type: "ai_multiple_btn";
@@ -428,6 +426,11 @@ export type CustomAction =
       maxWaitMs?: number;
       proxyId?: string;
       tryAllProxies?: boolean;
+      /**
+       * Which browser profile to run on, and so whose cookies this shares: a name built from
+       * {ip}, {jobId}, {templateId}, {tgId} and any text. Blank takes the Settings default.
+       */
+      profileId?: string;
     }
   | {
       /** The Mini App a bot pins beside the composer, opened without naming an address. */
@@ -441,6 +444,11 @@ export type CustomAction =
       maxWaitMs?: number;
       proxyId?: string;
       tryAllProxies?: boolean;
+      /**
+       * Which browser profile to run on, and so whose cookies this shares: a name built from
+       * {ip}, {jobId}, {templateId}, {tgId} and any text. Blank takes the Settings default.
+       */
+      profileId?: string;
     }
   | {
       type: "open_mini_app";
@@ -456,6 +464,11 @@ export type CustomAction =
       proxyId?: string;
       /** Work through the rest of the proxy list when an exit is refused. */
       tryAllProxies?: boolean;
+      /**
+       * Which browser profile to run on, and so whose cookies this shares: a name built from
+       * {ip}, {jobId}, {templateId}, {tgId} and any text. Blank takes the Settings default.
+       */
+      profileId?: string;
     }
   | {
       type: "open_url";
@@ -470,8 +483,11 @@ export type CustomAction =
       proxyId?: string;
       /** Work through the rest of the proxy list when an exit is refused. */
       tryAllProxies?: boolean;
-      /** Give this job its own browser profile, so its cookies (a login) are private to it. */
-      ownProfile?: boolean;
+      /**
+       * Which browser profile to run on, and so whose cookies this shares: a name built from
+       * {ip}, {jobId}, {templateId}, {tgId} and any text. Blank takes the Settings default.
+       */
+      profileId?: string;
     }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
 
@@ -539,8 +555,6 @@ export type CheckinConfig = {
   successContains?: string;
   failContains?: string;
   proxyId?: string;
-  /** Open a Cloudflare-gated checkin URL in a browser to pass the "I am not a bot" check. */
-  cfChallenge?: boolean;
 };
 
 export type AutoregConfig = {
@@ -616,6 +630,8 @@ export type CustomStepLog = {
   cfProxy?: string;
   /** Which browser build ran the step: the licensed one, or the free fallback. */
   cfBuild?: "keyed" | "free";
+  /** The browser profile the step ran on, i.e. whose cookies it had. */
+  cfProfile?: string;
   cfAttempts?: number;
   cfPageTitle?: string;
   cfNavError?: string;
@@ -1238,6 +1254,7 @@ export type Settings = {
   cf_profile_count?: string;
   /** Locale the browser reports; blank follows the country its exit comes out in. */
   cf_browser_lang?: string;
+  cf_profile_id?: string;
   /** Server-computed: "true" when the CJK/emoji faces are in the data dir. */
   cf_fonts_installed?: string;
   /** Server-computed: comma-separated faces still to download. */

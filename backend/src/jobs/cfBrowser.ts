@@ -653,18 +653,82 @@ function exitKey(proxyUrl?: string): string {
   return proxyUrl ? createHash("sha1").update(proxyUrl).digest("hex").slice(0, 12) : "direct";
 }
 
+/** The setting holding the profile name every browser action falls back to. */
+export const CF_PROFILE_ID_KEY = "cf_profile_id";
+
+/** The profile name a browser action falls back to when it names none of its own. */
+export function configuredProfileId(): string {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(CF_PROFILE_ID_KEY) as
+      | { value: string }
+      | undefined;
+    return row?.value?.trim() || CF_PROFILE_ID_DEFAULT;
+  } catch {
+    return CF_PROFILE_ID_DEFAULT;
+  }
+}
+
+/** What a profile name is when nothing has been configured: one per exit, pooled. */
+export const CF_PROFILE_ID_DEFAULT = "{ip}";
+
+/** What a profile name may be built from, beyond `{ip}` which comes from the exit. */
+export type CfProfileVars = {
+  /** The job being run, for a profile that belongs to it alone. */
+  jobId?: number;
+  /** The template it came from, for one profile shared by every job built on it. */
+  templateId?: number;
+  /** The account it runs as, for one profile per Telegram account across its jobs. */
+  tgId?: number | string;
+};
+
+/** The names a profile may be built from, and where each gets its value. */
+const PROFILE_VAR_NAMES = ["ip", "jobId", "templateId", "tgId", "accountId"] as const;
+
 /**
- * Names the profile directory, and with it the device seed. The exit alone by default, so
- * everything going out through it pools one `cf_clearance`; narrowed by `scope` when a caller
- * needs its cookies to itself -- a job that logs in, above all, since two accounts sharing a
- * profile would overwrite each other's session and a site that rations logins would not give
- * either of them another one.
+ * Names the profile directory, and with it the device seed.
+ *
+ * `template` decides who shares cookies with whom, which is the whole point of it. `{ip}` --
+ * the default -- is one profile per exit, so everything going out through it pools a single
+ * `cf_clearance`. `{ip}-{jobId}` gives a job its own, which is what anything that logs in
+ * wants: two accounts sharing a profile overwrite each other's session, and a site that
+ * rations logins will not hand out another. `{tgId}` follows the account across its jobs,
+ * `{templateId}` groups everything built on one template, and free text is taken as written,
+ * so `user1-{ip}` is a name too.
+ *
+ * A name that resolves to nothing -- `{jobId}` outside a job, say -- falls back to the exit,
+ * which is the shared profile and never the wrong one.
  */
-export function cfProfileKey(proxyUrl?: string, scope?: string): string {
+export function cfProfileKey(
+  proxyUrl?: string,
+  template?: string,
+  vars: CfProfileVars = {},
+): string {
   const exit = exitKey(proxyUrl);
-  const trimmed = scope?.trim();
-  // Whatever a scope is named, it ends up as a directory name
-  return trimmed ? `${exit}-${trimmed.replace(/[^a-zA-Z0-9_-]/g, "")}` : exit;
+  const values: Record<(typeof PROFILE_VAR_NAMES)[number], string> = {
+    ip: exit,
+    jobId: vars.jobId ? String(vars.jobId) : "",
+    templateId: vars.templateId ? String(vars.templateId) : "",
+    // Two spellings of one thing: `{tgId}` is what it is called in the interface, and
+    // `{accountId}` is what it actually is -- the account the job runs as
+    tgId: vars.tgId ? String(vars.tgId) : "",
+    accountId: vars.tgId ? String(vars.tgId) : "",
+  };
+
+  const wanted = template?.trim() || CF_PROFILE_ID_DEFAULT;
+  const filled = wanted.replace(/\{(\w+)\}/g, (whole, name: string) => {
+    const known = PROFILE_VAR_NAMES.find((v) => v.toLowerCase() === name.toLowerCase());
+    // An unknown name is left as written and then cleaned off, rather than silently
+    // becoming part of every profile's name
+    return known ? values[known] : whole;
+  });
+
+  // Whatever it was built from, it ends up as a directory name
+  const safe = filled
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return safe || exit;
 }
 
 /**
@@ -871,6 +935,8 @@ export type LaunchedBrowser = {
   page: Page;
   /** Stable id of the exit this browser goes out through. */
   key: string;
+  /** The profile it is running on, which is what decides whose cookies it has. */
+  profileKey: string;
   /** Which build is running: the licensed one, or the unlicensed fallback. */
   tier: BuildTier;
   /** What is known about where it comes out, if anything yet. */
@@ -925,12 +991,11 @@ export async function launchCfBrowser(
      */
     tier?: BuildTier;
     /**
-     * Keeps this caller's cookies apart from everything else on the same exit, by giving it
-     * a profile of its own named after this. What a job logs into is its own: two accounts
-     * going out through the same exit would otherwise share one cookie jar and overwrite
-     * each other's session.
+     * Which profile -- so which cookie jar and which device -- this browser runs on. The
+     * name is a template: see `cfProfileKey`. Blank takes the configured default, which
+     * ships as one profile per exit.
      */
-    profileScope?: string;
+    profile?: { template?: string; vars?: CfProfileVars };
   } = {},
 ): Promise<LaunchedBrowser> {
   const tune = cfTuning();
@@ -952,9 +1017,13 @@ export async function launchCfBrowser(
   const geo = cfExitGeo(key);
   const locale = cfBrowserLang() ?? geo?.lang;
   // Geography follows the exit -- it is a fact about the IP, shared by everything going out
-  // through it. Cookies and the device they were issued to follow the profile, which a
-  // caller may narrow to itself: see `profileScope`.
-  const profileKey = cfProfileKey(proxyUrl, opts.profileScope);
+  // through it. Cookies and the device they were issued to follow the profile, whose name
+  // the caller decides: see `cfProfileKey`.
+  const profileKey = cfProfileKey(
+    proxyUrl,
+    opts.profile?.template || configuredProfileId(),
+    opts.profile?.vars,
+  );
   const profile = claimProfile(profileKey);
   const proxy = await resolveProxy(proxyUrl);
   // The keyed build first, on a seat of its own: one licence key is one concurrent
@@ -1110,6 +1179,7 @@ export async function launchCfBrowser(
       context,
       page,
       key,
+      profileKey,
       tier: usedTier,
       geo,
       close: async () => {

@@ -112,8 +112,6 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
-      /** Open a Cloudflare-gated URL button/answer (e.g. "我不是机器人") in a headless browser to pass the "I am not a bot" check. */
-      cfChallenge?: boolean;
     }
   | {
       // Click a button on the latest message from a specific contact (bot/group/user),
@@ -127,8 +125,6 @@ export type CustomAction =
       successContains?: string;
       failContains?: string;
       scope?: number;
-      /** Open a Cloudflare-gated URL button/answer (e.g. "我不是机器人") in a headless browser to pass the "I am not a bot" check. */
-      cfChallenge?: boolean;
     }
   | {
       // AI selects and clicks multiple buttons in order. The AI returns a JSON array of
@@ -186,6 +182,14 @@ export type CustomAction =
       proxyId?: string;
       /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
       tryAllProxies?: boolean;
+      /**
+       * Which browser profile to run on, and so whose cookies this shares. A name built from
+       * `{ip}` (the exit), `{jobId}`, `{templateId}`, `{tgId}` (the account) and any text you
+       * like: `{ip}` pools one profile per exit, `{ip}-{jobId}` gives this job its own,
+       * `{tgId}` follows the account across its jobs, `user1-{ip}` is a name of your own.
+       * Blank takes the default from Settings.
+       */
+      profileId?: string;
     }
   | {
       // Same as `open_mini_app`, but the address is given rather than hunted from a button
@@ -211,6 +215,14 @@ export type CustomAction =
       proxyId?: string;
       /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
       tryAllProxies?: boolean;
+      /**
+       * Which browser profile to run on, and so whose cookies this shares. A name built from
+       * `{ip}` (the exit), `{jobId}`, `{templateId}`, `{tgId}` (the account) and any text you
+       * like: `{ip}` pools one profile per exit, `{ip}-{jobId}` gives this job its own,
+       * `{tgId}` follows the account across its jobs, `user1-{ip}` is a name of your own.
+       * Blank takes the default from Settings.
+       */
+      profileId?: string;
     }
   | {
       // Open the Mini App a bot pins beside the composer -- the button at the bottom left
@@ -235,6 +247,14 @@ export type CustomAction =
       proxyId?: string;
       /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
       tryAllProxies?: boolean;
+      /**
+       * Which browser profile to run on, and so whose cookies this shares. A name built from
+       * `{ip}` (the exit), `{jobId}`, `{templateId}`, `{tgId}` (the account) and any text you
+       * like: `{ip}` pools one profile per exit, `{ip}-{jobId}` gives this job its own,
+       * `{tgId}` follows the account across its jobs, `user1-{ip}` is a name of your own.
+       * Blank takes the default from Settings.
+       */
+      profileId?: string;
     }
   | {
       // Open a plain web page in the installed browser, passing any Cloudflare challenge,
@@ -257,14 +277,13 @@ export type CustomAction =
       /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
       tryAllProxies?: boolean;
       /**
-       * Give this job its own browser profile, rather than sharing the one every job on this
-       * exit uses. Cookies live in the profile, so this is what keeps a login to itself: two
-       * accounts going out through the same exit would otherwise share one session and
-       * overwrite each other. On for anything that logs in; off (the default) shares the
-       * exit's profile, which is better for a `cf_clearance` that is worth pooling and keeps
-       * the number of profiles on disk down.
+       * Which browser profile to run on, and so whose cookies this shares. A name built from
+       * `{ip}` (the exit), `{jobId}`, `{templateId}`, `{tgId}` (the account) and any text you
+       * like: `{ip}` pools one profile per exit, `{ip}-{jobId}` gives this job its own,
+       * `{tgId}` follows the account across its jobs, `user1-{ip}` is a name of your own.
+       * Blank takes the default from Settings.
        */
-      ownProfile?: boolean;
+      profileId?: string;
     }
   | { type: "subscribe_channel"; channelId: string; checkMembership?: boolean };
 
@@ -503,8 +522,6 @@ export type CheckinConfig = {
   successContains?: string;
   failContains?: string;
   proxyId?: string;
-  /** Open a Cloudflare-gated checkin URL (e.g. "我不是机器人") in a headless browser to pass the "I am not a bot" check. */
-  cfChallenge?: boolean;
 };
 
 export type AutoregConfig = {
@@ -620,6 +637,12 @@ export type CustomStepLog = {
    * and passes fewer challenges, so a run that quietly fell back is worth seeing.
    */
   cfBuild?: "keyed" | "free";
+  /**
+   * The browser profile the step ran on, i.e. whose cookies it had. Worth seeing whenever a
+   * site asks a job to log in again: the usual cause is a profile name resolving to
+   * something other than what was meant.
+   */
+  cfProfile?: string;
   /** How many exits were tried before the page loaded. */
   cfAttempts?: number;
   /** Title of the page the browser ended up on. */

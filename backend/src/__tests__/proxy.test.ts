@@ -109,8 +109,8 @@ describe('runJob proxy resolution — checkin', () => {
     await runJob(job, makeAccount()); // account has no proxy: login went out direct
 
     expect(vi.mocked(runCheckin).mock.calls[0][10]).toBeUndefined();
-    // 16th argument (index 15) is the browser proxy URL
-    expect(vi.mocked(runCheckin).mock.calls[0][15]).toBe('socks5://proxy.local:1080');
+    // 15th argument (index 14) is the browser proxy URL
+    expect(vi.mocked(runCheckin).mock.calls[0][14]).toBe('socks5://proxy.local:1080');
   });
 
   it('keeps Telegram off a template proxy, handing it to the browser instead', async () => {
@@ -131,7 +131,7 @@ describe('runJob proxy resolution — checkin', () => {
     await runJob(job, makeAccount());
 
     expect(vi.mocked(runCheckin).mock.calls[0][10]).toBeUndefined();
-    expect(vi.mocked(runCheckin).mock.calls[0][15]).toBe('socks5://tpl.proxy:1080');
+    expect(vi.mocked(runCheckin).mock.calls[0][14]).toBe('socks5://tpl.proxy:1080');
   });
 
   it('does not pass a TgProxy when the account proxy URL is HTTP (not SOCKS)', async () => {
@@ -231,7 +231,7 @@ describe('runJob proxy resolution — account proxy priority (checkin)', () => {
     await runJob(job, makeAccount()); // proxyId: null -- as the login was
 
     expect(vi.mocked(runCheckin).mock.calls[0][10]).toBeUndefined();
-    expect(vi.mocked(runCheckin).mock.calls[0][15]).toBe('socks5://job.proxy:1080');
+    expect(vi.mocked(runCheckin).mock.calls[0][14]).toBe('socks5://job.proxy:1080');
   });
 
   it('sends the browser through the account proxy when the job names none', async () => {
@@ -241,7 +241,7 @@ describe('runJob proxy resolution — account proxy priority (checkin)', () => {
     await runJob(makeCheckinJob(), { ...makeAccount(), proxyId: 'acct-px' });
 
     expect(vi.mocked(runCheckin).mock.calls[0][10]).toMatchObject({ ip: 'acct.proxy' });
-    expect(vi.mocked(runCheckin).mock.calls[0][15]).toBe('socks5://acct.proxy:1080');
+    expect(vi.mocked(runCheckin).mock.calls[0][14]).toBe('socks5://acct.proxy:1080');
   });
 
   it('passes no proxy when account proxyId is null and job has no proxy', async () => {

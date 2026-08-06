@@ -336,6 +336,18 @@
               {{ t("settings.cfSolver.langHint") }}
             </div>
           </div>
+          <div class="form-group" style="margin: 0 0 12px; max-width: 420px">
+            <label class="form-label">{{ t("settings.cfSolver.profileIdLabel") }}</label>
+            <input
+              v-model.trim="cfProfileId"
+              class="form-input"
+              placeholder="{ip}"
+              @change="saveCfProfileId"
+            />
+            <div style="font-size: 11px; color: #888; margin-top: 3px">
+              {{ t("settings.cfSolver.profileIdHint") }}
+            </div>
+          </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
             <button
               class="btn btn-primary"
@@ -2242,6 +2254,7 @@ const CF_LOCALES = [
 ];
 
 const cfBrowserLang = ref("");
+const cfProfileId = ref("");
 
 /** Saved as it is chosen: one select is not worth its own save button. */
 async function saveCfBrowserLang() {
@@ -2249,6 +2262,18 @@ async function saveCfBrowserLang() {
   cfInstallError.value = "";
   try {
     await settingsApi.update({ cf_browser_lang: cfBrowserLang.value });
+    cfInstallMsg.value = t("settings.saved");
+  } catch (e: any) {
+    cfInstallError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
+  }
+}
+
+/** Saved as it is typed out of, the same way the locale above is. */
+async function saveCfProfileId() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  try {
+    await settingsApi.update({ cf_profile_id: cfProfileId.value });
     cfInstallMsg.value = t("settings.saved");
   } catch (e: any) {
     cfInstallError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
@@ -2853,6 +2878,7 @@ onMounted(async () => {
     cfBuilds.value = parseCfBuilds(s.cf_chromium_builds);
     cfProfileCount.value = Number(s.cf_profile_count ?? 0);
     cfBrowserLang.value = s.cf_browser_lang ?? "";
+    cfProfileId.value = s.cf_profile_id ?? "";
     cfChromiumPath.value = s.cf_chromium_path ?? "";
     cfKeyedPending.value = s.cf_chromium_keyed_pending === "true";
     cfFontsInstalled.value = s.cf_fonts_installed === "true";

@@ -413,14 +413,6 @@
                     <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
                   </div>
-                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                    <label class="form-checkbox-label">
-                      <input type="checkbox" v-model="action.cfChallenge" :disabled="cfBrowserMissing" />
-                      {{ t('jobs.custom.labelCfChallenge') }}
-                    </label>
-                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
-                    <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
-                  </div>
                 </div>
 
                 <!-- click_message_button -->
@@ -515,14 +507,6 @@
                     <label class="form-label">{{ t('jobs.custom.labelFailContains') }}</label>
                     <input v-model.trim="action.failContains" class="form-input" :placeholder="t('jobs.custom.failContainsPlaceholder')" />
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.failContainsHint') }}</div>
-                  </div>
-                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                    <label class="form-checkbox-label">
-                      <input type="checkbox" v-model="action.cfChallenge" :disabled="cfBrowserMissing" />
-                      {{ t('jobs.custom.labelCfChallenge') }}
-                    </label>
-                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
-                    <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
                   </div>
                 </div>
 
@@ -646,6 +630,11 @@
                     </label>
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppTryAllHint') }}</div>
                   </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.web.labelProfileId') }}</label>
+                    <input v-model.trim="action.profileId" class="form-input" :placeholder="profileIdPlaceholder" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.web.profileIdHint') }}</div>
+                  </div>
                 </div>
 
                 <!-- open_url -->
@@ -696,11 +685,9 @@
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppTryAllHint') }}</div>
                   </div>
                   <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                    <label class="form-checkbox-label">
-                      <input type="checkbox" v-model="action.ownProfile" />
-                      {{ t('jobs.web.labelOwnProfile') }}
-                    </label>
-                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.web.ownProfileHint') }}</div>
+                    <label class="form-label">{{ t('jobs.web.labelProfileId') }}</label>
+                    <input v-model.trim="action.profileId" class="form-input" :placeholder="profileIdPlaceholder" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.web.profileIdHint') }}</div>
                   </div>
                 </div>
               </div>
@@ -909,14 +896,6 @@
               <label class="form-label">{{ t('jobs.labelFailContains') }}</label>
               <input v-model.trim="tplCheckinFailContains" class="form-input" :placeholder="t('jobs.failContainsPlaceholder')" />
               <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.failContainsHint') }}</div>
-            </div>
-            <div class="form-group">
-              <label class="form-checkbox-label">
-                <input type="checkbox" v-model="tplCheckinCfChallenge" :disabled="cfBrowserMissing" />
-                {{ t('jobs.custom.labelCfChallenge') }}
-              </label>
-              <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.cfChallengeHint') }}</div>
-              <div v-if="cfBrowserMissing" style="font-size:11px;color:#e63946;margin-top:4px">{{ t('jobs.cfBrowserWarning') }}</div>
             </div>
           </template>
 
@@ -1158,7 +1137,6 @@ type CustomActionForm = {
   captchaLength: string;
   successContains: string;
   failContains: string;
-  cfChallenge: boolean;
   contact: string;
   groupId: string;
   checkMembership: boolean;
@@ -1171,7 +1149,7 @@ type CustomActionForm = {
   /** open_mini_app: pinned browser proxy id, 'direct', or '' for the job proxy */
   miniAppProxyId: string;
   miniAppTryAllProxies: boolean;
-  ownProfile: boolean;
+  profileId: string;
   /** open_url: the page to open */
   url: string;
   /** open_url: sub-steps run on the page once it is up */
@@ -1187,6 +1165,8 @@ const proxiesList = computed<Proxy[]>(() => {
   try { return JSON.parse(settings.value?.proxies ?? '[]'); } catch { return []; }
 });
 const aiKeyMissing = computed(() => settings.value?.ai_key_configured !== 'true');
+// A blank profile name falls back to the one configured in Settings, so show which
+const profileIdPlaceholder = computed(() => settings.value?.cf_profile_id?.trim() || '{ip}');
 // Anything that opens a page needs the solver's browser and its fonts in the data dir;
 // neither ships in the image, so those options stay off until both are downloaded.
 // See JobsView: not-yet-loaded settings must not read as a missing browser.
@@ -1415,7 +1395,6 @@ const btnCustom = ref('');
 const btnAiHint = ref('');
 const tplCheckinSuccessContains = ref('');
 const tplCheckinFailContains = ref('');
-const tplCheckinCfChallenge = ref(false);
 
 function setCmdState(val: string) {
   if (CMD_PRESETS.has(val)) { cmdDropdown.value = val; cmdCustom.value = ''; }
@@ -1456,7 +1435,6 @@ function onJobTypeChange() {
   btnAiHint.value = '';
   tplCheckinSuccessContains.value = '';
   tplCheckinFailContains.value = '';
-  tplCheckinCfChallenge.value = false;
   Object.assign(autoregCfg, defaultAutoregCfg());
   setCmdState(''); setBtnState('');
 }
@@ -1466,10 +1444,10 @@ function defaultAction(): CustomActionForm {
     type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '',
     contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, gapMs: 1000, button: '签到',
     buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0,
-    captchaLength: '', successContains: '', failContains: '', cfChallenge: false, contact: '', groupId: '', checkMembership: false,
+    captchaLength: '', successContains: '', failContains: '', contact: '', groupId: '', checkMembership: false,
     verifyButton: '', verifyWaitMs: 30000, channelId: '', appButton: '',
     miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppTryAllProxies: true,
-    url: '', webSteps: [], ownProfile: false,
+    url: '', webSteps: [], profileId: '',
   };
 }
 
@@ -1607,6 +1585,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
           ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+          ...(a.profileId ? { profileId: a.profileId } : {}),
         };
         if (a.type === 'open_mini_app_url') return {
           type: 'open_mini_app_url' as const,
@@ -1619,6 +1598,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
           ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+          ...(a.profileId ? { profileId: a.profileId } : {}),
         };
         if (a.type === 'open_bot_menu_app') return {
           type: 'open_bot_menu_app' as const,
@@ -1630,18 +1610,20 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
           ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+          ...(a.profileId ? { profileId: a.profileId } : {}),
         };
         if (a.type === 'open_url') return {
           type: 'open_url' as const,
           url: a.url.trim(),
           ...(a.webSteps.length ? { steps: webStepsToConfig(a.webSteps) } : {}),
-          ...(a.ownProfile ? { ownProfile: true } : {}),
+          ...(a.profileId ? { profileId: a.profileId } : {}),
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
           ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
+          ...(a.profileId ? { profileId: a.profileId } : {}),
         };
         if (a.type === 'ai_multiple_btn') return {
           type: 'ai_multiple_btn' as const,
@@ -1667,7 +1649,6 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.scope ? { scope: a.scope } : {}),
-          ...(a.cfChallenge ? { cfChallenge: true } : {}),
         };
         return {
           type: 'click_button' as const,
@@ -1677,7 +1658,6 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.scope ? { scope: a.scope } : {}),
-          ...(a.cfChallenge ? { cfChallenge: true } : {}),
         };
       }),
     };
@@ -1689,12 +1669,10 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
     const s = tplCheckinSuccessContains.value.trim();
     const f = tplCheckinFailContains.value.trim();
     const proxy = tplProxyId.value;
-    const cf = tplCheckinCfChallenge.value;
-    if (s || f || proxy || cf) return {
+    if (s || f || proxy) return {
       ...(s ? { successContains: s } : {}),
       ...(f ? { failContains: f } : {}),
       ...(proxy ? { proxyId: proxy } : {}),
-      ...(cf ? { cfChallenge: true } : {}),
     } as unknown as CustomConfig;
     return null;
   }
@@ -1756,7 +1734,6 @@ function openAdd() {
   customJobMaxRetries.value = 1;
   tplCheckinSuccessContains.value = '';
   tplCheckinFailContains.value = '';
-  tplCheckinCfChallenge.value = false;
   Object.assign(autoregCfg, defaultAutoregCfg());
   setCmdState(''); setBtnState('');
   formError.value = '';
@@ -1844,10 +1821,10 @@ function openEdit(tpl: JobTemplate) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha' as const, maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group' as const, groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000 };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel' as const, channelId: a.channelId, checkMembership: a.checkMembership ?? false };
-          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
-          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
-          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true };
-          if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, ownProfile: a.ownProfile ?? false };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
           if (a.type === 'ai_multiple_btn') return { ...base, type: 'ai_multiple_btn' as const, contact: a.contact ?? '', buttonAiHint: a.hint ?? '', gapMs: a.gapMs ?? 1000, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
@@ -1859,7 +1836,7 @@ function openEdit(tpl: JobTemplate) {
             } else {
               buttonDropdown = 'custom'; buttonCustom = a.button;
             }
-            return { ...base, type: 'click_button' as const, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0, cfChallenge: a.cfChallenge ?? false };
+            return { ...base, type: 'click_button' as const, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           }
           if (a.type === 'click_message_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
@@ -1871,7 +1848,7 @@ function openEdit(tpl: JobTemplate) {
             } else {
               buttonDropdown = 'custom'; buttonCustom = a.button;
             }
-            return { ...base, type: 'click_message_button' as const, contact: a.contact, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0, cfChallenge: a.cfChallenge ?? false };
+            return { ...base, type: 'click_message_button' as const, contact: a.contact, button: a.button, buttonDropdown, buttonCustom, buttonAiHint, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           }
           return base;
         });
@@ -1923,11 +1900,10 @@ function openEdit(tpl: JobTemplate) {
     tplCheckinFailContains.value = '';
     if (tpl.config) {
       try {
-        const cfg = JSON.parse(tpl.config) as { proxyId?: string; successContains?: string; failContains?: string; cfChallenge?: boolean };
+        const cfg = JSON.parse(tpl.config) as { proxyId?: string; successContains?: string; failContains?: string };
         tplProxyId.value = cfg.proxyId ?? '';
         tplCheckinSuccessContains.value = cfg.successContains ?? '';
         tplCheckinFailContains.value = cfg.failContains ?? '';
-        tplCheckinCfChallenge.value = cfg.cfChallenge ?? false;
       } catch { /* ignore */ }
     }
   }
