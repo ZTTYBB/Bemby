@@ -107,6 +107,18 @@ type SendAnchor = { msgId: number; dateSec: number };
 const hasInlineButtons = (m: Api.Message | null | undefined): boolean =>
   !!m && (m as any).replyMarkup instanceof Api.ReplyInlineMarkup;
 
+// Does a message's text/caption carry the wording an action is pinned to? A blank
+// needle matches anything. Whitespace is ignored on both sides, so a keyword typed
+// as "请在 180 秒内" still matches a message rendering it as "请在180秒内".
+export const msgTextMatches = (
+  m: Api.Message | null | undefined,
+  needle?: string,
+): boolean => {
+  if (!needle?.trim()) return true;
+  const strip = (s: string) => s.replace(/\s+/g, "");
+  return strip(m?.message ?? "").includes(strip(needle));
+};
+
 const anchorFromSent = (sent: Api.Message): SendAnchor => ({
   msgId: sent.id,
   dateSec: sent.date ?? Math.floor(Date.now() / 1000),
@@ -158,13 +170,15 @@ async function isChannelMember(client: TelegramClient, channel: Api.Channel): Pr
 
 // Waits for a message carrying inline buttons in a specific chat (e.g. the group we just
 // joined). Buttons can arrive on a brand-new message OR via an in-place edit of an
-// existing message, so both update paths are watched.
+// existing message, so both update paths are watched. mustContain keeps waiting until a
+// buttons message whose text carries that wording turns up.
 async function waitForButtonsInChat(
   client: TelegramClient,
   chat: Api.TypeEntityLike,
   maxMs: number,
   signal?: AbortSignal,
   minId = 0,
+  mustContain?: string,
 ): Promise<Api.Message[]> {
   const chatPeerId = await client.getPeerId(chat);
 
@@ -191,7 +205,13 @@ async function waitForButtonsInChat(
 
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error(`No message with buttons received within ${maxMs}ms`));
+      reject(
+        new Error(
+          mustContain?.trim()
+            ? `No message with buttons containing "${mustContain.trim()}" received within ${maxMs}ms`
+            : `No message with buttons received within ${maxMs}ms`,
+        ),
+      );
     }, maxMs);
 
     const onAbort = () => {
@@ -200,6 +220,9 @@ async function waitForButtonsInChat(
     };
     signal?.addEventListener("abort", onAbort, { once: true });
 
+    const wanted = (msg: Api.Message): boolean =>
+      hasInlineButtons(msg) && msgTextMatches(msg, mustContain);
+
     const handler = async (event: NewMessageEvent) => {
       const msg = event.message as Api.Message;
       // Match the chat by id here rather than through NewMessage({ chats }): that filter
@@ -207,7 +230,7 @@ async function waitForButtonsInChat(
       // rejection while resolving it on the next update -- immediate in a busy group.
       if (!msg.peerId || utils.getPeerId(msg.peerId) !== chatPeerId) return;
       collected.push(msg);
-      if (hasInlineButtons(msg)) succeed(msg);
+      if (wanted(msg)) succeed(msg);
     };
 
     const editHandler = async (update: any) => {
@@ -216,7 +239,7 @@ async function waitForButtonsInChat(
       if (!msg || msg.out) return;
       if (msg.id < minId) return; // out of scope (edit of a pre-anchor message)
       if (!msg.peerId || utils.getPeerId(msg.peerId) !== chatPeerId) return;
-      if (hasInlineButtons(msg)) succeed(msg);
+      if (wanted(msg)) succeed(msg);
     };
 
     client.addEventHandler(handler, new NewMessage({}));
@@ -497,6 +520,7 @@ async function waitForReply(
 // up on a brand-new message OR via an in-place edit of an earlier one; when sinceAnchor is
 // given, recent history is also scanned to cover the gap before the listeners attached.
 // excludeId skips one known message (e.g. the one whose buttons we already tried).
+// mustContain keeps waiting until a buttons message whose text carries that wording arrives.
 async function waitForButtonsMessage(
   client: TelegramClient,
   fromUsername: string,
@@ -504,6 +528,7 @@ async function waitForButtonsMessage(
   signal?: AbortSignal,
   minId = 0,
   excludeId?: number,
+  mustContain?: string,
 ): Promise<Api.Message[]> {
   const botPeerId = await client.getPeerId(fromUsername);
 
@@ -533,7 +558,13 @@ async function waitForButtonsMessage(
 
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error(`No message with buttons received within ${maxMs}ms`));
+      reject(
+        new Error(
+          mustContain?.trim()
+            ? `No message with buttons containing "${mustContain.trim()}" received within ${maxMs}ms`
+            : `No message with buttons received within ${maxMs}ms`,
+        ),
+      );
     }, maxMs);
 
     const onAbort = () => {
@@ -542,10 +573,13 @@ async function waitForButtonsMessage(
     };
     signal?.addEventListener("abort", onAbort, { once: true });
 
+    const wanted = (msg: Api.Message): boolean =>
+      hasInlineButtons(msg) && msgTextMatches(msg, mustContain);
+
     const handler = async (event: NewMessageEvent) => {
       const msg = event.message as Api.Message;
       collected.push(msg);
-      if (hasInlineButtons(msg)) succeed(msg);
+      if (wanted(msg)) succeed(msg);
     };
 
     const editHandler = async (update: any) => {
@@ -554,7 +588,7 @@ async function waitForButtonsMessage(
       if (!msg || msg.out) return;
       if (msg.id < minId) return; // out of scope (edit of a pre-anchor message)
       if (!msg.peerId || utils.getPeerId(msg.peerId) !== botPeerId) return;
-      if (hasInlineButtons(msg)) succeed(msg);
+      if (wanted(msg)) succeed(msg);
     };
 
     client.addEventHandler(
@@ -576,7 +610,8 @@ async function waitForButtonsMessage(
               !m.out &&
               m.id !== excludeId &&
               m.id >= minId &&
-              hasInlineButtons(m),
+              hasInlineButtons(m) &&
+              msgTextMatches(m, mustContain),
           );
           if (seed) succeed(seed);
         })
@@ -1689,6 +1724,9 @@ export async function runCustom(
               case "ai_multiple_btn": {
                 const contact = action.contact?.trim() ?? "";
                 const botMode = contact.length === 0;
+                // Pins the action to one wording so an unrelated menu in the same
+                // chat is never the one the AI clicks.
+                const mustContain = action.messageContains?.trim() || undefined;
                 step.label = botMode
                   ? "AI multi-click buttons"
                   : `AI multi-click buttons from ${contact}`;
@@ -1725,6 +1763,7 @@ export async function runCustom(
                         signal,
                         minId,
                         excludeId,
+                        mustContain,
                       )
                     : waitForButtonsInChat(
                         client,
@@ -1732,6 +1771,7 @@ export async function runCustom(
                         action.maxWaitMs,
                         signal,
                         minId,
+                        mustContain,
                       );
                 const waitNewMsg = (
                   timeoutMs: number,
@@ -1764,24 +1804,41 @@ export async function runCustom(
                       buttonsMsg = fresh;
                       lastButtonsMsg = fresh;
                     }
+                    // Carried-over menu isn't the one this action targets: wait for it.
+                    if (!msgTextMatches(buttonsMsg, mustContain))
+                      buttonsMsg = null;
                   }
                 } else {
                   const recent = (await client.getMessages(target, {
                     limit: 10,
                   })) as Api.Message[];
                   buttonsMsg =
-                    recent.find((m) => m.id >= minId && hasInlineButtons(m)) ??
-                    null;
+                    recent.find(
+                      (m) =>
+                        m.id >= minId &&
+                        hasInlineButtons(m) &&
+                        msgTextMatches(m, mustContain),
+                    ) ?? null;
                 }
                 if (!buttonsMsg) {
                   const msgs = await waitButtons();
                   if (botMode) lastMessages = msgs;
                   buttonsMsg =
-                    [...msgs].reverse().find((m) => hasInlineButtons(m)) ?? null;
+                    [...msgs]
+                      .reverse()
+                      .find(
+                        (m) =>
+                          hasInlineButtons(m) &&
+                          msgTextMatches(m, mustContain),
+                      ) ?? null;
                   if (buttonsMsg && botMode) lastButtonsMsg = buttonsMsg;
                 }
                 if (!buttonsMsg)
-                  throw new Error("No message with buttons available");
+                  throw new Error(
+                    mustContain
+                      ? `No message with buttons containing "${mustContain}" available`
+                      : "No message with buttons available",
+                  );
 
                 const preParsed = await parseMessages(
                   [buttonsMsg],
@@ -1860,7 +1917,11 @@ export async function runCustom(
                           if (botMode) lastMessages = msgs;
                           const bm = [...msgs]
                             .reverse()
-                            .find((m) => hasInlineButtons(m));
+                            .find(
+                              (m) =>
+                                hasInlineButtons(m) &&
+                                msgTextMatches(m, mustContain),
+                            );
                           if (bm) {
                             buttonsMsg = bm;
                             if (botMode) lastButtonsMsg = bm;

@@ -1578,6 +1578,10 @@
                     several options in sequence (e.g. a captcha). Leave
                     <strong>Contact</strong> blank to operate in the job's bot
                     chat, or set one to operate in that chat.
+                    <strong>Buttons message contains</strong> pins the action to
+                    one wording (e.g. <code>请在 180 秒内</code>), so a different
+                    menu in the same chat is never the one clicked; whitespace is
+                    ignored and the wait is bounded by <strong>Max wait</strong>.
                     <strong>Success contains</strong> is checked only after the
                     final click; <strong>Fail contains</strong> is checked after
                     every click.

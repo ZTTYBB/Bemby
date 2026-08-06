@@ -393,6 +393,8 @@ export type CustomAction =
       type: "ai_multiple_btn";
       contact?: string;
       hint?: string;
+      /** Only a buttons message whose text contains this is picked */
+      messageContains?: string;
       gapMs: number;
       maxRetries: number;
       maxWaitMs: number;

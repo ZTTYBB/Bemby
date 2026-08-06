@@ -133,6 +133,12 @@ export type CustomAction =
       type: "ai_multiple_btn";
       contact?: string;
       hint?: string;
+      /**
+       * Only a buttons message whose text contains this string is picked, so a
+       * stale or unrelated menu in the same chat is never clicked. Blank takes
+       * the most recent in-scope buttons message.
+       */
+      messageContains?: string;
       gapMs: number;
       maxRetries: number;
       maxWaitMs: number;

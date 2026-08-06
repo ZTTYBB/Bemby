@@ -473,6 +473,11 @@
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.contactOptionalHint') }}</div>
                   </div>
                   <div class="form-group" style="margin-bottom:0;margin-top:8px">
+                    <label class="form-label">{{ t('jobs.custom.labelMessageContains') }}</label>
+                    <input v-model.trim="action.messageContains" class="form-input" :placeholder="t('jobs.custom.messageContainsPlaceholder')" />
+                    <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.messageContainsHint') }}</div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;margin-top:8px">
                     <label class="form-label">{{ t('jobs.aiHintLabel') }}</label>
                     <input v-model.trim="action.buttonAiHint" class="form-input" :placeholder="t('jobs.aiHintPlaceholder')" />
                     <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.aiMultipleBtnHint') }}</div>
@@ -1137,6 +1142,8 @@ type CustomActionForm = {
   captchaLength: string;
   successContains: string;
   failContains: string;
+  /** ai_multiple_btn: wording the buttons message must contain */
+  messageContains: string;
   contact: string;
   groupId: string;
   checkMembership: boolean;
@@ -1444,7 +1451,7 @@ function defaultAction(): CustomActionForm {
     type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '',
     contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, gapMs: 1000, button: '签到',
     buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0,
-    captchaLength: '', successContains: '', failContains: '', contact: '', groupId: '', checkMembership: false,
+    captchaLength: '', successContains: '', failContains: '', messageContains: '', contact: '', groupId: '', checkMembership: false,
     verifyButton: '', verifyWaitMs: 30000, channelId: '', appButton: '',
     miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppTryAllProxies: true,
     url: '', webSteps: [], profileId: '',
@@ -1632,6 +1639,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           maxWaitMs: a.maxWaitMs,
           ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
           ...(a.buttonAiHint.trim() ? { hint: a.buttonAiHint.trim() } : {}),
+          ...(a.messageContains.trim() ? { messageContains: a.messageContains.trim() } : {}),
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.scope ? { scope: a.scope } : {}),
@@ -1825,7 +1833,7 @@ function openEdit(tpl: JobTemplate) {
           if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
           if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
           if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
-          if (a.type === 'ai_multiple_btn') return { ...base, type: 'ai_multiple_btn' as const, contact: a.contact ?? '', buttonAiHint: a.hint ?? '', gapMs: a.gapMs ?? 1000, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
+          if (a.type === 'ai_multiple_btn') return { ...base, type: 'ai_multiple_btn' as const, contact: a.contact ?? '', buttonAiHint: a.hint ?? '', messageContains: a.messageContains ?? '', gapMs: a.gapMs ?? 1000, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
             let buttonDropdown: string, buttonCustom = '', buttonAiHint = '';
