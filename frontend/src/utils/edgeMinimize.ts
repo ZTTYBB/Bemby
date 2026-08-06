@@ -1,44 +1,55 @@
-// Microsoft Edge restores a minimised window the instant a History API call runs inside a
-// visibilitychange handler, and vue-router makes one there to save the scroll position, so
-// the panel pops back up the moment it is minimised. Dropping just that call keeps it down.
-// See https://wiki.4ading.com/vue/trouble/edge-minimize-problem/
+// Microsoft Edge on Windows restores a minimised window the instant a History API call runs
+// while the page is hidden, so the panel pops straight back up. vue-router 4.6 started saving
+// the scroll position on `visibilitychange` (4.5.1 does not, which is why this only began
+// biting on that upgrade), and upstream closed it as not planned, so the workaround lives here.
+// See https://github.com/vuejs/router/issues/2644
+// and https://wiki.4ading.com/vue/trouble/edge-minimize-problem/
 //
-// Scoped to the visibilitychange dispatch rather than to "the page is hidden" as the article
-// has it: a background tab that navigates for its own reasons -- an expired session sending
-// the app to the login page, say -- must still update the address bar.
+// The router's call is recognised by what it writes, not by when it arrives: its snapshot
+// passes no URL and differs from the state already on the entry only in `scroll`. Timing is
+// not usable here -- Blink runs a microtask checkpoint between event listeners, so a flag
+// raised in our own `visibilitychange` handler is already down again by the time the router's
+// handler runs (which is why the first attempt at this stopped holding). Matching on content
+// also leaves genuine navigation in a hidden tab -- an expired session sending the app to the
+// login page, say -- free to update the address bar.
 
 const IS_EDGE = /\bEdg\//.test(navigator.userAgent);
+
+type ReplaceState = (data: unknown, unused: string, url?: string | URL | null) => void;
+
+const isStateObject = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * Is this `replaceState` nothing but vue-router's scroll snapshot of the entry already
+ * showing? Anything that moves the address bar or changes the entry itself is not.
+ */
+export function isScrollSnapshot(
+  next: unknown,
+  current: unknown,
+  url?: string | URL | null,
+): boolean {
+  if (url != null && String(url) !== window.location.href) return false;
+  if (!isStateObject(next) || !isStateObject(current)) return false;
+  const keys = new Set([...Object.keys(next), ...Object.keys(current)]);
+  keys.delete("scroll");
+  return [...keys].every(
+    (k) => JSON.stringify(next[k]) === JSON.stringify(current[k]),
+  );
+}
 
 /** Installs the workaround once at startup; a no-op on every browser but Edge. */
 export function suppressEdgeMinimizeRestore(): void {
   if (!IS_EDGE) return;
 
-  let inVisibilityChange = false;
-
-  // On window in the capture phase, so this runs ahead of every listener on document
-  // whatever order the modules registering them happen to load in.
-  window.addEventListener(
-    "visibilitychange",
-    () => {
-      if (document.visibilityState !== "hidden") return;
-      inVisibilityChange = true;
-      // One event's listeners all run in the same task, so a microtask lowers the flag
-      // once the last of them has been served.
-      void Promise.resolve().then(() => {
-        inVisibilityChange = false;
-      });
-    },
-    true,
-  );
-
-  type StateFn = (data: unknown, unused: string, url?: string | URL | null) => void;
-
-  for (const name of ["pushState", "replaceState"] as const) {
-    const original = history[name].bind(history) as StateFn;
-    const guarded: StateFn = (data, unused, url) => {
-      if (inVisibilityChange) return;
-      original(data, unused, url);
-    };
-    history[name] = guarded;
-  }
+  const original = history.replaceState.bind(history) as ReplaceState;
+  const guarded: ReplaceState = (data, unused, url) => {
+    if (
+      document.visibilityState === "hidden" &&
+      isScrollSnapshot(data, history.state, url)
+    )
+      return;
+    original(data, unused, url);
+  };
+  history.replaceState = guarded as History["replaceState"];
 }
