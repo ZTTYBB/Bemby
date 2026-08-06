@@ -1607,6 +1607,12 @@
                     (succeeds immediately if already subscribed) and re-verify
                     after sending; join group optionally clicks a verification
                     button after joining to clear some groups' entry checks.
+                    When many accounts join at once the group posts one prompt
+                    per joiner, so <strong>Only click a prompt that @-mentions
+                    this account</strong> restricts the click to the prompt
+                    naming this account (@username, a text mention when no
+                    username is set, or its numeric ID) and waits past the
+                    others.
                   </td>
                 </tr>
                 <tr>

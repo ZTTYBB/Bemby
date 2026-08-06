@@ -414,6 +414,8 @@ export type CustomAction =
       checkMembership?: boolean;
       verifyButton?: string;
       verifyWaitMs?: number;
+      /** Only click a verification prompt naming this account */
+      verifyMentionsMe?: boolean;
     }
   | {
       /** Mini App opened at a given address rather than one found on a button. */

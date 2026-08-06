@@ -119,6 +119,47 @@ export const msgTextMatches = (
   return strip(m?.message ?? "").includes(strip(needle));
 };
 
+/** This account, as the forms a group prompt can name it by. */
+type SelfRef = { id: string; username?: string };
+
+const selfRef = async (client: TelegramClient): Promise<SelfRef> => {
+  const me = (await client.getMe()) as Api.User;
+  return { id: me.id.toString(), username: me.username || undefined };
+};
+
+// Is this message addressed to this account? A group posting verification prompts for
+// several joiners at once names each one -- as @username, as a text mention (the only
+// form available when no username is set), or by numeric id -- and the server also
+// stamps the `mentioned` flag on the ones that single us out.
+export function messageAddressesUser(
+  m: Api.Message | null | undefined,
+  me: SelfRef,
+): boolean {
+  if (!m) return false;
+  if ((m as any).mentioned) return true;
+  const text = m.message ?? "";
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (me.username && new RegExp(`@${escape(me.username)}\\b`, "i").test(text))
+    return true;
+  if (text.includes(`tg://user?id=${me.id}`)) return true;
+  // A bare id, not part of a longer number (so "180" never matches an id ending in 180)
+  if (new RegExp(`(?:^|\\D)${me.id}(?:\\D|$)`).test(text)) return true;
+  // Text mentions carry the user in an entity rather than the text
+  return ((m.entities ?? []) as any[]).some(
+    (e) => e?.userId != null && e.userId.toString() === me.id,
+  );
+}
+
+// A wait for buttons can be pinned to a subset of messages: one carrying certain wording,
+// or one addressed to this account. `describe` only shapes the timeout message.
+type ButtonsFilter = {
+  accept: (m: Api.Message) => boolean;
+  describe: string;
+};
+
+const noButtonsError = (maxMs: number, filter?: ButtonsFilter): string =>
+  `No message with buttons ${filter ? `${filter.describe} ` : ""}received within ${maxMs}ms`;
+
 const anchorFromSent = (sent: Api.Message): SendAnchor => ({
   msgId: sent.id,
   dateSec: sent.date ?? Math.floor(Date.now() / 1000),
@@ -170,15 +211,15 @@ async function isChannelMember(client: TelegramClient, channel: Api.Channel): Pr
 
 // Waits for a message carrying inline buttons in a specific chat (e.g. the group we just
 // joined). Buttons can arrive on a brand-new message OR via an in-place edit of an
-// existing message, so both update paths are watched. mustContain keeps waiting until a
-// buttons message whose text carries that wording turns up.
+// existing message, so both update paths are watched. `filter` keeps the wait going until a
+// buttons message the caller actually wants turns up.
 async function waitForButtonsInChat(
   client: TelegramClient,
   chat: Api.TypeEntityLike,
   maxMs: number,
   signal?: AbortSignal,
   minId = 0,
-  mustContain?: string,
+  filter?: ButtonsFilter,
 ): Promise<Api.Message[]> {
   const chatPeerId = await client.getPeerId(chat);
 
@@ -205,13 +246,7 @@ async function waitForButtonsInChat(
 
     const timer = setTimeout(() => {
       cleanup();
-      reject(
-        new Error(
-          mustContain?.trim()
-            ? `No message with buttons containing "${mustContain.trim()}" received within ${maxMs}ms`
-            : `No message with buttons received within ${maxMs}ms`,
-        ),
-      );
+      reject(new Error(noButtonsError(maxMs, filter)));
     }, maxMs);
 
     const onAbort = () => {
@@ -221,7 +256,7 @@ async function waitForButtonsInChat(
     signal?.addEventListener("abort", onAbort, { once: true });
 
     const wanted = (msg: Api.Message): boolean =>
-      hasInlineButtons(msg) && msgTextMatches(msg, mustContain);
+      hasInlineButtons(msg) && (!filter || filter.accept(msg));
 
     const handler = async (event: NewMessageEvent) => {
       const msg = event.message as Api.Message;
@@ -288,6 +323,10 @@ async function waitForNewMessageInChat(
 // Some groups post an in-group verification message with a button that must be clicked to
 // gain real access after joining. Best-effort: waits for that message, clicks the button whose
 // text contains buttonMatch (or the sole button), and appends the outcome to step.result.
+//
+// With onlyMine set, only a prompt naming this account counts: a busy group verifying several
+// joiners at once posts one prompt each, and clicking someone else's does nothing for us (and
+// may burn their attempt), so the wait continues past prompts addressed to other people.
 async function clickGroupVerification(
   client: TelegramClient,
   chat: Api.Channel,
@@ -296,9 +335,24 @@ async function clickGroupVerification(
   step: CustomStepLog,
   signal?: AbortSignal,
   sinceSec?: number,
+  onlyMine?: boolean,
 ): Promise<void> {
+  const me = onlyMine ? await selfRef(client) : null;
+  const filter: ButtonsFilter | undefined = me
+    ? {
+        accept: (m) => messageAddressesUser(m, me),
+        describe: "addressed to this account",
+      }
+    : undefined;
+  const wanted = (m: Api.Message | null | undefined): boolean =>
+    hasInlineButtons(m) && (!filter || filter.accept(m as Api.Message));
+
   const findButtonsMsg = (msgs: Api.Message[]): Api.Message | null =>
-    [...msgs].reverse().find((m) => hasInlineButtons(m)) ?? null;
+    [...msgs].reverse().find((m) => wanted(m)) ?? null;
+
+  // A group verifying a rush of joiners buries our prompt under theirs, so look back
+  // further when only ours will do.
+  const scanLimit = onlyMine ? 50 : 10;
 
   // Waiter catches prompts that arrive (or get edited in) from now on; the scan catches a
   // prompt that landed in the gap before the listener attached. Whichever finds one first wins.
@@ -306,19 +360,19 @@ async function clickGroupVerification(
   const forwardAbort = () => waitAbort.abort();
   signal?.addEventListener("abort", forwardAbort, { once: true });
 
-  const waiterPromise = waitForButtonsInChat(client, chat, maxMs, waitAbort.signal)
+  const waiterPromise = waitForButtonsInChat(client, chat, maxMs, waitAbort.signal, 0, filter)
     .then(findButtonsMsg)
     .catch(() => null);
 
   const earlyScan = client
-    .getMessages(chat, { limit: 10 })
+    .getMessages(chat, { limit: scanLimit })
     .then(
       (recent) =>
         (recent as Api.Message[]).find(
           (m) =>
             m &&
             !m.out &&
-            hasInlineButtons(m) &&
+            wanted(m) &&
             (!sinceSec || Math.max(m.editDate ?? 0, m.date ?? 0) >= sinceSec),
         ) ?? null,
     )
@@ -334,12 +388,12 @@ async function clickGroupVerification(
 
   // Last resort: any recent prompt regardless of age
   if (!buttonsMsg) {
-    const recent = (await client.getMessages(chat, { limit: 10 })) as Api.Message[];
+    const recent = (await client.getMessages(chat, { limit: scanLimit })) as Api.Message[];
     buttonsMsg = findButtonsMsg(recent);
   }
 
   if (!buttonsMsg) {
-    step.result = `${step.result} (no verification prompt)`;
+    step.result = `${step.result} (no verification prompt${onlyMine ? " addressed to this account" : ""})`;
     return;
   }
 
@@ -520,7 +574,7 @@ async function waitForReply(
 // up on a brand-new message OR via an in-place edit of an earlier one; when sinceAnchor is
 // given, recent history is also scanned to cover the gap before the listeners attached.
 // excludeId skips one known message (e.g. the one whose buttons we already tried).
-// mustContain keeps waiting until a buttons message whose text carries that wording arrives.
+// `filter` keeps the wait going until a buttons message the caller actually wants arrives.
 async function waitForButtonsMessage(
   client: TelegramClient,
   fromUsername: string,
@@ -528,7 +582,7 @@ async function waitForButtonsMessage(
   signal?: AbortSignal,
   minId = 0,
   excludeId?: number,
-  mustContain?: string,
+  filter?: ButtonsFilter,
 ): Promise<Api.Message[]> {
   const botPeerId = await client.getPeerId(fromUsername);
 
@@ -558,13 +612,7 @@ async function waitForButtonsMessage(
 
     const timer = setTimeout(() => {
       cleanup();
-      reject(
-        new Error(
-          mustContain?.trim()
-            ? `No message with buttons containing "${mustContain.trim()}" received within ${maxMs}ms`
-            : `No message with buttons received within ${maxMs}ms`,
-        ),
-      );
+      reject(new Error(noButtonsError(maxMs, filter)));
     }, maxMs);
 
     const onAbort = () => {
@@ -574,7 +622,7 @@ async function waitForButtonsMessage(
     signal?.addEventListener("abort", onAbort, { once: true });
 
     const wanted = (msg: Api.Message): boolean =>
-      hasInlineButtons(msg) && msgTextMatches(msg, mustContain);
+      hasInlineButtons(msg) && (!filter || filter.accept(msg));
 
     const handler = async (event: NewMessageEvent) => {
       const msg = event.message as Api.Message;
@@ -611,7 +659,7 @@ async function waitForButtonsMessage(
               m.id !== excludeId &&
               m.id >= minId &&
               hasInlineButtons(m) &&
-              msgTextMatches(m, mustContain),
+              (!filter || filter.accept(m)),
           );
           if (seed) succeed(seed);
         })
@@ -1727,6 +1775,12 @@ export async function runCustom(
                 // Pins the action to one wording so an unrelated menu in the same
                 // chat is never the one the AI clicks.
                 const mustContain = action.messageContains?.trim() || undefined;
+                const buttonsFilter: ButtonsFilter | undefined = mustContain
+                  ? {
+                      accept: (m) => msgTextMatches(m, mustContain),
+                      describe: `containing "${mustContain}"`,
+                    }
+                  : undefined;
                 step.label = botMode
                   ? "AI multi-click buttons"
                   : `AI multi-click buttons from ${contact}`;
@@ -1763,7 +1817,7 @@ export async function runCustom(
                         signal,
                         minId,
                         excludeId,
-                        mustContain,
+                        buttonsFilter,
                       )
                     : waitForButtonsInChat(
                         client,
@@ -1771,7 +1825,7 @@ export async function runCustom(
                         action.maxWaitMs,
                         signal,
                         minId,
-                        mustContain,
+                        buttonsFilter,
                       );
                 const waitNewMsg = (
                   timeoutMs: number,
@@ -2258,6 +2312,7 @@ export async function runCustom(
                       step,
                       signal,
                       joinStartSec,
+                      action.verifyMentionsMe,
                     );
                   }
                 }

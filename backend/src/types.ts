@@ -160,6 +160,12 @@ export type CustomAction =
       // button whose text contains this string (bot-gated groups). verifyWaitMs bounds the wait.
       verifyButton?: string;
       verifyWaitMs?: number;
+      /**
+       * Click only a prompt that names this account (@username, a text mention, or its
+       * numeric id), so a group verifying several joiners at once never has someone
+       * else's prompt clicked. Prompts for other people are waited past.
+       */
+      verifyMentionsMe?: boolean;
     }
   | {
       // Open a Mini App button's page in the installed browser (passing Cloudflare on
