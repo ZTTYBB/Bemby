@@ -51,71 +51,72 @@ function rowToTemplate(row: TemplateRow): JobTemplate {
   };
 }
 
-// Sync template fields to all linked jobs (enabled is job-specific, not synced)
-function syncLinkedJobs(templateId: number, t: TemplateRow) {
-  if (t.job_type === 'embywatch') {
-    // Per-job credentials (username, password) must not be overwritten by the template config.
-    // Update all non-config fields in bulk, then merge config per-job.
-    db.prepare(`
-      UPDATE jobs SET
-        job_type = ?,
-        bot_username = ?,
-        timezone = ?,
-        reply_timeout_ms = ?,
-        retry_max = ?,
-        start_command = ?,
-        checkin_button = ?,
-        run_every_days = ?,
-        run_every_days_max = ?
-      WHERE template_id = ?
-    `).run(
-      t.job_type,
-      t.bot_username,
-      t.timezone,
-      t.reply_timeout_ms,
-      t.retry_max,
-      t.start_command,
-      t.checkin_button,
-      t.run_every_days ?? 7,
-      t.run_every_days_max ?? null,
-      templateId,
-    );
+function parseConfig(raw: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    let c = JSON.parse(raw) as Record<string, unknown> | string;
+    if (typeof c === 'string') c = JSON.parse(c) as Record<string, unknown>;
+    return c && typeof c === 'object' ? c : {};
+  } catch {
+    return {};
+  }
+}
 
-    const tplCfg = t.config ? (JSON.parse(t.config) as Record<string, unknown>) : {};
-    const linkedJobs = db.prepare('SELECT id, config FROM jobs WHERE template_id = ?').all(templateId) as Array<{ id: number; config: string | null }>;
-    for (const job of linkedJobs) {
-      const jobCfg = job.config ? (JSON.parse(job.config) as Record<string, unknown>) : {};
-      // Spread template config first, then restore per-job credentials on top
-      const merged = { ...tplCfg, username: jobCfg.username, password: jobCfg.password };
-      db.prepare('UPDATE jobs SET config = ? WHERE id = ?').run(JSON.stringify(merged), job.id);
-    }
-  } else {
-    db.prepare(`
-      UPDATE jobs SET
-        job_type = ?,
-        bot_username = ?,
-        timezone = ?,
-        reply_timeout_ms = ?,
-        retry_max = ?,
-        config = ?,
-        start_command = ?,
-        checkin_button = ?,
-        run_every_days = ?,
-        run_every_days_max = ?
-      WHERE template_id = ?
-    `).run(
-      t.job_type,
-      t.bot_username,
-      t.timezone,
-      t.reply_timeout_ms,
-      t.retry_max,
-      t.config,
-      t.start_command,
-      t.checkin_button,
-      t.run_every_days ?? 7,
-      t.run_every_days_max ?? null,
-      templateId,
-    );
+/**
+ * Config settings a job owns, which a template sync must leave alone: its proxy override
+ * (blank means it follows the template's, resolved at run time) and, for Emby Watch, the
+ * credentials that were never the template's to hold.
+ */
+function jobOwnedConfig(jobCfg: Record<string, unknown>, jobType: string): Record<string, unknown> {
+  const own: Record<string, unknown> = {};
+  if (typeof jobCfg.proxyId === 'string' && jobCfg.proxyId) own.proxyId = jobCfg.proxyId;
+  if (jobType === 'embywatch') {
+    own.username = jobCfg.username;
+    own.password = jobCfg.password;
+  }
+  return own;
+}
+
+// Sync template fields to all linked jobs (enabled is job-specific, not synced)
+export function syncLinkedJobs(templateId: number, t: TemplateRow) {
+  // Config is merged per job below, so that job-owned settings survive
+  db.prepare(`
+    UPDATE jobs SET
+      job_type = ?,
+      bot_username = ?,
+      timezone = ?,
+      reply_timeout_ms = ?,
+      retry_max = ?,
+      start_command = ?,
+      checkin_button = ?,
+      run_every_days = ?,
+      run_every_days_max = ?
+    WHERE template_id = ?
+  `).run(
+    t.job_type,
+    t.bot_username,
+    t.timezone,
+    t.reply_timeout_ms,
+    t.retry_max,
+    t.start_command,
+    t.checkin_button,
+    t.run_every_days ?? 7,
+    t.run_every_days_max ?? null,
+    templateId,
+  );
+
+  const tplCfg = parseConfig(t.config);
+  // The template's own proxy stays on the template: a job stores a proxy id only when it
+  // overrides one, and the runner falls back to the template's when it does not.
+  delete tplCfg.proxyId;
+  const linkedJobs = db
+    .prepare('SELECT id, config FROM jobs WHERE template_id = ?')
+    .all(templateId) as Array<{ id: number; config: string | null }>;
+  for (const job of linkedJobs) {
+    const merged = { ...tplCfg, ...jobOwnedConfig(parseConfig(job.config), t.job_type) };
+    const hasValue = Object.values(merged).some(v => v !== undefined);
+    db.prepare('UPDATE jobs SET config = ? WHERE id = ?')
+      .run(hasValue ? JSON.stringify(merged) : null, job.id);
   }
   refreshScheduler();
 }

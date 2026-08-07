@@ -23,6 +23,8 @@ vi.mock('../jobs/custom', () => ({
 }));
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+// The real route helper, so this suite cannot drift from what a template save does
+import { syncLinkedJobs } from '../routes/templates';
 import { runJob, type JobDetailLog } from '../jobs/runner';
 import { runEmbywatch } from '../jobs/embywatch';
 import type { Job } from '../types';
@@ -56,7 +58,8 @@ const SCHEMA = `
     start_command    TEXT    NOT NULL DEFAULT '/start',
     checkin_button   TEXT    NOT NULL DEFAULT '签到',
     created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
-    run_every_days   INTEGER NOT NULL DEFAULT 1
+    run_every_days   INTEGER NOT NULL DEFAULT 1,
+    run_every_days_max INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS jobs (
@@ -76,7 +79,8 @@ const SCHEMA = `
     start_command         TEXT    NOT NULL DEFAULT '/start',
     checkin_button        TEXT    NOT NULL DEFAULT '签到',
     template_id           INTEGER REFERENCES job_templates(id) ON DELETE SET NULL,
-    run_every_days        INTEGER NOT NULL DEFAULT 1
+    run_every_days        INTEGER NOT NULL DEFAULT 1,
+    run_every_days_max    INTEGER
   );
 `;
 
@@ -92,10 +96,13 @@ type TemplateRow = {
   timezone: string;
   reply_timeout_ms: number;
   retry_max: number;
+  enabled: number;
   config: string | null;
   start_command: string;
   checkin_button: string;
+  created_at: string;
   run_every_days: number;
+  run_every_days_max: number | null;
 };
 
 type JobRow = {
@@ -193,49 +200,6 @@ function getJob(id: number): JobRow {
 
 function getTemplate(id: number): TemplateRow | undefined {
   return testDb.prepare('SELECT * FROM job_templates WHERE id = ?').get(id) as TemplateRow | undefined;
-}
-
-// Mirrors the syncLinkedJobs function in templates route
-function syncLinkedJobs(templateId: number, t: TemplateRow) {
-  if (t.job_type === 'embywatch') {
-    testDb.prepare(`
-      UPDATE jobs SET
-        job_type = ?, bot_username = ?, timezone = ?,
-        reply_timeout_ms = ?, retry_max = ?,
-        start_command = ?, checkin_button = ?,
-        run_every_days = ?
-      WHERE template_id = ?
-    `).run(
-      t.job_type, t.bot_username, t.timezone,
-      t.reply_timeout_ms, t.retry_max,
-      t.start_command, t.checkin_button,
-      t.run_every_days,
-      templateId,
-    );
-
-    const tplCfg = t.config ? (JSON.parse(t.config) as Record<string, unknown>) : {};
-    const linkedJobs = testDb.prepare('SELECT id, config FROM jobs WHERE template_id = ?').all(templateId) as Array<{ id: number; config: string | null }>;
-    for (const job of linkedJobs) {
-      const jobCfg = job.config ? (JSON.parse(job.config) as Record<string, unknown>) : {};
-      const merged = { ...tplCfg, username: jobCfg.username, password: jobCfg.password };
-      testDb.prepare('UPDATE jobs SET config = ? WHERE id = ?').run(JSON.stringify(merged), job.id);
-    }
-  } else {
-    testDb.prepare(`
-      UPDATE jobs SET
-        job_type = ?, bot_username = ?, timezone = ?,
-        reply_timeout_ms = ?, retry_max = ?,
-        config = ?, start_command = ?, checkin_button = ?,
-        run_every_days = ?
-      WHERE template_id = ?
-    `).run(
-      t.job_type, t.bot_username, t.timezone,
-      t.reply_timeout_ms, t.retry_max,
-      t.config, t.start_command, t.checkin_button,
-      t.run_every_days,
-      templateId,
-    );
-  }
 }
 
 // Mirrors the isLinked config-lock logic in the jobs PUT route.
@@ -440,6 +404,32 @@ describe('Template update -- syncLinkedJobs', () => {
     expect(cfg1.password).toBe('secret1');
     expect(cfg2.username).toBe('bob');
     expect(cfg2.password).toBe('secret2');
+  });
+
+  it('keeps a job proxy override when the template proxy changes', () => {
+    const t = insertTemplate({ jobType: 'custom', config: { actions: [], proxyId: 'tpl-px' } });
+    const overridden = insertJob({ jobType: 'custom', templateId: t.id, config: { actions: [], proxyId: 'job-px' } });
+    const following = insertJob({ jobType: 'custom', templateId: t.id, config: { actions: [] } });
+
+    const newConfig = JSON.stringify({ actions: [], proxyId: 'tpl-px2' });
+    testDb.prepare('UPDATE job_templates SET config = ? WHERE id = ?').run(newConfig, t.id);
+    syncLinkedJobs(t.id, { ...t, config: newConfig });
+
+    expect(JSON.parse(getJob(overridden.id).config!).proxyId).toBe('job-px');
+    // A job following the template stores no proxy of its own; the runner falls back
+    expect(JSON.parse(getJob(following.id).config!).proxyId).toBeUndefined();
+  });
+
+  it('keeps an embywatch job proxy override alongside its credentials', () => {
+    const t = insertTemplate({ jobType: 'embywatch', config: { playDuration: 300, proxyId: 'tpl-px' } });
+    const job = insertJob({ jobType: 'embywatch', templateId: t.id, config: { username: 'alice', password: 'secret1', proxyId: 'job-px' } });
+
+    const newConfig = JSON.stringify({ playDuration: 600, proxyId: 'tpl-px2' });
+    testDb.prepare('UPDATE job_templates SET config = ? WHERE id = ?').run(newConfig, t.id);
+    syncLinkedJobs(t.id, { ...t, config: newConfig });
+
+    const cfg = JSON.parse(getJob(job.id).config!);
+    expect(cfg).toMatchObject({ playDuration: 600, username: 'alice', password: 'secret1', proxyId: 'job-px' });
   });
 });
 

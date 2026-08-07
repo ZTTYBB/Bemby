@@ -612,6 +612,38 @@ runOnce("passkey-move-out-of-attributes", () => {
   }
 });
 
+// A template save used to copy the whole template config onto every linked job, proxy id
+// and all. A job now stores a proxy id only when it overrides the template's, so those
+// copies would read as deliberate overrides and pin the job to a stale exit. Drop the ones
+// that still match the template's own proxy; anything else is a real override.
+runOnce("job-proxy-drop-template-copies", () => {
+  const rows = db
+    .prepare(
+      `SELECT j.id, j.config, t.config AS tpl_config
+       FROM jobs j JOIN job_templates t ON j.template_id = t.id
+       WHERE j.config LIKE '%proxyId%'`,
+    )
+    .all() as Array<{ id: number; config: string; tpl_config: string | null }>;
+  const upd = db.prepare("UPDATE jobs SET config = ? WHERE id = ?");
+  const parse = (raw: string | null): any => {
+    if (!raw) return null;
+    try {
+      let c = JSON.parse(raw);
+      if (typeof c === "string") c = JSON.parse(c);
+      return c && typeof c === "object" ? c : null;
+    } catch {
+      return null;
+    }
+  };
+  for (const r of rows) {
+    const cfg = parse(r.config);
+    const tplProxyId = parse(r.tpl_config)?.proxyId;
+    if (!cfg?.proxyId || cfg.proxyId !== tplProxyId) continue;
+    delete cfg.proxyId;
+    upd.run(Object.keys(cfg).length ? JSON.stringify(cfg) : null, r.id);
+  }
+});
+
 // With BEMBY_DATA_KEY configured, bring any credential still sitting in plain text up to
 // date. Not a runOnce migration: the key can be turned on at any point, and rows written
 // while it was off have to be caught the next time the app starts with it on. Rows already
