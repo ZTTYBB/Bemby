@@ -2,7 +2,13 @@ import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import net from "node:net";
 import { db } from "../db/database";
-import { cfProfileKey, launchCfBrowser, startPrivateDisplay, type LaunchedBrowser } from "./cfBrowser";
+import {
+  CF_NO_PROFILE_KEY,
+  cfProfileKey,
+  launchCfBrowser,
+  startPrivateDisplay,
+  type LaunchedBrowser,
+} from "./cfBrowser";
 import { configuredProfileId } from "./cfBrowser";
 import { vncCommand } from "./vncInstall";
 import { runDisplay } from "./runDisplays";
@@ -217,6 +223,14 @@ export async function startManualSession(opts: {
     templateId: opts.job.templateId ?? undefined,
     tgId: opts.accountId,
   });
+  // Nothing this session does would survive it, and the cookie is the whole point
+  if (profileKey === CF_NO_PROFILE_KEY) {
+    throw new Error(
+      'This job runs on {noProfile}, so its browser keeps nothing between runs -- a login ' +
+        'left here would be thrown away with the session. Give the job a profile name first.',
+    );
+  }
+
   const url =
     opts.url?.trim() || (action as { url?: string } | undefined)?.url?.trim() || "about:blank";
 

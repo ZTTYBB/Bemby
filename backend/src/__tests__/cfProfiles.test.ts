@@ -11,7 +11,12 @@ vi.mock("../db/database", () => ({
   db: { prepare: () => ({ get: () => undefined, run: () => {}, all: () => [] }) },
 }));
 
-import { cfProfileCount, cfProfileKey, clearCfProfiles } from "../jobs/cfBrowser";
+import {
+  CF_NO_PROFILE_KEY,
+  cfProfileCount,
+  cfProfileKey,
+  clearCfProfiles,
+} from "../jobs/cfBrowser";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "cfprofiles-"));
 const profiles = path.join(root, "cf-profiles");
@@ -147,5 +152,25 @@ describe("cfProfileKey", () => {
 
   it("bounds the length, since the name ends up as a directory", () => {
     expect(cfProfileKey(undefined, "x".repeat(200)).length).toBe(64);
+  });
+
+  // {noProfile} is what a Mini App wants when one exit runs several accounts: an app that
+  // keeps its own session in the profile shows whoever signed in first, however carefully
+  // Telegram signs the init data afterwards
+  it("asks for no profile at all, whatever the token is cased or hyphenated as", () => {
+    expect(cfProfileKey(undefined, "{noProfile}", JOB)).toBe(CF_NO_PROFILE_KEY);
+    expect(cfProfileKey(PROXY, "{noprofile}")).toBe(CF_NO_PROFILE_KEY);
+    expect(cfProfileKey(PROXY, "{no-profile}")).toBe(CF_NO_PROFILE_KEY);
+    expect(cfProfileKey(PROXY, "  {NoProfile}  ")).toBe(CF_NO_PROFILE_KEY);
+  });
+
+  it("keeps nothing when the token is mixed into a name, rather than half-persisting", () => {
+    expect(cfProfileKey(undefined, "{ip}-{noProfile}", JOB)).toBe(CF_NO_PROFILE_KEY);
+  });
+
+  it("gives no-profile a key no real profile can be called", () => {
+    // It becomes a directory name everywhere else, so the sentinel must not survive sanitising
+    expect(cfProfileKey(undefined, "(none)")).toBe("none");
+    expect(CF_NO_PROFILE_KEY).not.toBe(cfProfileKey(undefined, CF_NO_PROFILE_KEY));
   });
 });

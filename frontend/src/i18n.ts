@@ -855,7 +855,7 @@ const zh = {
         "在这段时间内反复检查，一旦成立立即走 then 分支；超时仍不成立才走 else。留空或 0 表示 5 秒。页面刚加载完可能还没渲染出要找的元素，过早判定会走错分支、白白消耗一次登录",
       labelProfileId: "浏览器配置文件名",
       profileIdHint:
-        "浏览器的 Cookie 保存在「配置文件」中，此处决定本动作与谁共用。可用占位符：{ip}（出口/代理）、{jobId}（任务）、{templateId}（模板）、{tgId}（账号），也可直接写文字并混用。例如 {ip} 表示同一出口共用一份（默认，便于共享 cf_clearance）；{ip}-{jobId} 表示本任务独享，登录状态不会被其他账号覆盖，且可跨运行保留（配合条件分支即可只登录一次）；{tgId} 表示同一账号的所有任务共用；user1-{ip} 为自定义名称。留空则使用「设置」中的默认值。注意「设置」中的配置文件数量上限（默认 12，按最近使用淘汰），独立配置文件较多时请相应调高",
+        "浏览器的 Cookie 保存在「配置文件」中，此处决定本动作与谁共用。可用占位符：{ip}（出口/代理）、{jobId}（任务）、{templateId}（模板）、{tgId}（账号），也可直接写文字并混用。例如 {ip} 表示同一出口共用一份（默认，便于共享 cf_clearance）；{ip}-{jobId} 表示本任务独享，登录状态不会被其他账号覆盖，且可跨运行保留（配合条件分支即可只登录一次）；{tgId} 表示同一账号的所有任务共用；user1-{ip} 为自定义名称。留空则使用「设置」中的默认值。打开小程序时请务必带上 {tgId} 或 {jobId}：小程序会把自己的登录态存进配置文件，多个账号共用 {ip} 时，页面显示的始终是第一个登录的账号，与 Telegram 签名传入的账号无关。{noProfile} 表示不使用任何配置文件：本次运行用临时目录（含独立设备指纹），结束即删除，适合一次性任务或排查串号问题 —— 代价是每次都是全新访客，人机验证更频繁。注意「设置」中的配置文件数量上限（默认 12，按最近使用淘汰），独立配置文件较多时请相应调高",
       labelTimes: "循环次数",
       timesHint:
         "本循环执行多少轮，即本次运行回复多少个帖子。无需变量：每轮都自己去列表页挑一个帖子。页面上已无可回复的新帖时循环提前结束，且不算失败",
@@ -1296,7 +1296,7 @@ const zh = {
       langHint: "浏览器向网站声明的语言。默认跟随代理出口所在国家，这样浏览器与其 IP 一致，不易被识别。若小程序会按浏览器语言切换界面，而任务里的按钮文字是固定某种语言，可在此固定语言 —— 代价是语言与出口国家不再匹配。修改后对新启动的浏览器生效。",
       profileIdLabel: "浏览器配置文件名（默认）",
       profileIdHint:
-        "所有使用浏览器的任务默认使用的配置文件名 —— Cookie 就保存在其中，因此它决定了谁与谁共用登录状态。可用占位符：{ip}（出口/代理）、{jobId}、{templateId}、{tgId}（账号），也可写入自定义文字。默认 {ip}：同一出口共用一份，便于共享 cf_clearance；改为 {ip}-{jobId} 则每个任务独立，登录互不覆盖。任务的浏览器动作中可单独覆盖此项。修改后对新启动的浏览器生效；已有配置文件不会被重命名，改名相当于换用一份全新（未登录）的配置文件。",
+        "所有使用浏览器的任务默认使用的配置文件名 —— Cookie 就保存在其中，因此它决定了谁与谁共用登录状态。可用占位符：{ip}（出口/代理）、{jobId}、{templateId}、{tgId}（账号），也可写入自定义文字。默认 {ip}：同一出口共用一份，便于共享 cf_clearance；改为 {ip}-{jobId} 则每个任务独立，登录互不覆盖；{noProfile} 表示不保留任何配置文件（临时目录，运行结束即删除）。若有打开小程序的任务，建议加上 {tgId} 或 {jobId}：小程序自己的登录态也存在配置文件里，多个账号共用一份时页面会一直显示第一个登录的账号。任务的浏览器动作中可单独覆盖此项。修改后对新启动的浏览器生效；已有配置文件不会被重命名，改名相当于换用一份全新（未登录）的配置文件。",
       clearProfilesBtn: "清除浏览器配置",
       clearingProfiles: "清除中…",
       profilesCleared: "已清除 {n} 个浏览器配置",
@@ -2446,7 +2446,7 @@ const en: typeof zh = {
         "Checked over and over for this long, taking the then branch the moment it holds; the else branch only once the time is up. Blank or 0 waits 5 seconds. A page that has only just loaded may not have drawn the thing being looked for yet, and deciding too early takes the wrong branch -- and spends a login",
       labelProfileId: "Browser profile name",
       profileIdHint:
-        "Cookies live in the browser profile, and this name decides who this action shares one with. Build it from {ip} (the exit), {jobId}, {templateId}, {tgId} (the account), and any text you like. {ip} is one profile per exit -- the default, and the one that pools a cf_clearance. {ip}-{jobId} gives this job its own, so no other account overwrites its login and the session survives to the next run (with a condition above, that means logging in once rather than every time). {tgId} follows the account across all its jobs, and user1-{ip} is a name of your own. Blank takes the default from Settings. Mind the profile limit in Settings (12 by default, least recently used dropped first) and raise it if you keep many separate profiles",
+        "Cookies live in the browser profile, and this name decides who this action shares one with. Build it from {ip} (the exit), {jobId}, {templateId}, {tgId} (the account), and any text you like. {ip} is one profile per exit -- the default, and the one that pools a cf_clearance. {ip}-{jobId} gives this job its own, so no other account overwrites its login and the session survives to the next run (with a condition above, that means logging in once rather than every time). {tgId} follows the account across all its jobs, and user1-{ip} is a name of your own. Blank takes the default from Settings. Opening a Mini App wants {tgId} or {jobId} in the name: the app keeps its own login in the profile, so several accounts sharing one {ip} profile all land on whoever signed in first, whatever account Telegram signs the init data for. {noProfile} keeps nothing at all -- a temporary directory with a device of its own, deleted when the run ends, which suits a one-off job or proving a crossed session -- at the cost of arriving as a first-time visitor every run, so challenges come up more often. Mind the profile limit in Settings (12 by default, least recently used dropped first) and raise it if you keep many separate profiles",
       labelTimes: "Number of rounds",
       timesHint:
         "How many times to run the steps below -- so, how many posts get a reply this run. No list and no variable needed: each round goes and finds its own post. When the page holds nothing new the loop ends early, and that is not a failure",
@@ -2899,7 +2899,7 @@ const en: typeof zh = {
       langHint: "The language the browser tells sites it wants. It normally follows the country the proxy comes out in, which keeps the browser consistent with its IP. Pin one when a Mini App renders in whatever language the browser asks for and your step names its buttons in a fixed language -- the trade is that the locale no longer matches the exit country. Applies to browsers started after the change.",
       profileIdLabel: "Browser profile name (default)",
       profileIdHint:
-        "The profile every browser action falls back to -- cookies live in it, so this decides who shares a login with whom. Build it from {ip} (the exit), {jobId}, {templateId}, {tgId} (the account), and any text you like. The default {ip} is one profile per exit, which pools a cf_clearance; {ip}-{jobId} gives every job its own so logins never overwrite each other. Any browser action can override this for itself. Applies to browsers started after the change: existing profiles are not renamed, so a new name means starting on a fresh, logged-out profile.",
+        "The profile every browser action falls back to -- cookies live in it, so this decides who shares a login with whom. Build it from {ip} (the exit), {jobId}, {templateId}, {tgId} (the account), and any text you like. The default {ip} is one profile per exit, which pools a cf_clearance; {ip}-{jobId} gives every job its own so logins never overwrite each other; {noProfile} keeps nothing at all, running each time in a temporary directory that goes with the browser. Put {tgId} or {jobId} in the name if any job opens a Mini App: the app stores its own login in the profile too, so accounts sharing one keep landing on whoever signed in first. Any browser action can override this for itself. Applies to browsers started after the change: existing profiles are not renamed, so a new name means starting on a fresh, logged-out profile.",
       clearProfilesBtn: "Clear browser profiles",
       clearingProfiles: "Clearing…",
       profilesCleared: "Cleared {n} browser profile(s)",

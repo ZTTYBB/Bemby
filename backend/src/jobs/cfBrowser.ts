@@ -846,6 +846,16 @@ export function configuredProfileId(): string {
 /** What a profile name is when nothing has been configured: one per exit, pooled. */
 export const CF_PROFILE_ID_DEFAULT = "{ip}";
 
+/**
+ * What a name resolves to when it asks for no profile at all. Deliberately unspellable in
+ * the alphabet cfProfileKey produces, so it can never collide with a profile on disk;
+ * `claimProfile` hands out a throwaway directory for it instead of a kept one.
+ */
+export const CF_NO_PROFILE_KEY = "(none)";
+
+/** The token asking for that: `{noProfile}`, however it is cased or hyphenated. */
+const NO_PROFILE_RE = /\{\s*no[-_]?profile\s*\}/i;
+
 /** What a profile name may be built from, beyond `{ip}` which comes from the exit. */
 export type CfProfileVars = {
   /** The job being run, for a profile that belongs to it alone. */
@@ -872,6 +882,11 @@ const PROFILE_VAR_NAMES = ["ip", "jobId", "templateId", "tgId", "accountId"] as 
  *
  * A name that resolves to nothing -- `{jobId}` outside a job, say -- falls back to the exit,
  * which is the shared profile and never the wrong one.
+ *
+ * `{noProfile}` is the opposite of all this: nothing is kept, so every run arrives as a
+ * first-time visitor on a device of its own. That is what a Mini App wants when the same
+ * exit runs several accounts -- an app that stores its own session in the profile shows
+ * whichever account signed in first, whatever init data Telegram signs afterwards.
  */
 export function cfProfileKey(
   proxyUrl?: string,
@@ -890,6 +905,10 @@ export function cfProfileKey(
   };
 
   const wanted = template?.trim() || CF_PROFILE_ID_DEFAULT;
+  // Asked for nothing kept: the token wins over the rest of the name, since a name that
+  // half-persists is no answer either way
+  if (NO_PROFILE_RE.test(wanted)) return CF_NO_PROFILE_KEY;
+
   const filled = wanted.replace(/\{(\w+)\}/g, (whole, name: string) => {
     const known = PROFILE_VAR_NAMES.find((v) => v.toLowerCase() === name.toLowerCase());
     // An unknown name is left as written and then cleaned off, rather than silently
@@ -1020,20 +1039,33 @@ async function restoreCookies(context: BrowserContext, dir: string): Promise<num
   }
 }
 
-type ClaimedProfile = { dir: string; release: () => void };
+type ClaimedProfile = {
+  dir: string;
+  release: () => void;
+  /** What the device fingerprint is derived from -- see `fingerprintSeed`. */
+  seedKey: string;
+};
 
 /**
  * The profile directory for this exit. When it is already open elsewhere -- or cannot be
  * created -- a throwaway one is used instead, which is thrown away with the browser.
  */
 function claimProfile(key: string): ClaimedProfile {
-  const throwaway = (): ClaimedProfile => {
+  const throwaway = (seedKey: string): ClaimedProfile => {
     const root = existsSync(cfProfilesRoot()) ? cfProfilesRoot() : os.tmpdir();
     const dir = mkdtempSync(path.join(root, "tmp-"));
-    return { dir, release: () => rmSync(dir, { recursive: true, force: true }) };
+    // A fallback keeps the profile's device so the cookies it may still restore match it;
+    // one asked for by name keeps nothing, so it gets a device of its own from the unique
+    // directory name -- otherwise every no-profile run in the fleet is the same machine
+    return {
+      dir,
+      release: () => rmSync(dir, { recursive: true, force: true }),
+      seedKey: seedKey || dir,
+    };
   };
 
-  if (profilesInUse.has(key)) return throwaway();
+  if (key === CF_NO_PROFILE_KEY) return throwaway("");
+  if (profilesInUse.has(key)) return throwaway(key);
   const dir = path.join(cfProfilesRoot(), key);
   try {
     mkdirSync(dir, { recursive: true });
@@ -1045,10 +1077,10 @@ function claimProfile(key: string): ClaimedProfile {
     writeFileSync(path.join(dir, USED_MARKER), "");
     profilesInUse.add(key);
     pruneProfiles(cfProfilesRoot());
-    return { dir, release: () => profilesInUse.delete(key) };
+    return { dir, release: () => profilesInUse.delete(key), seedKey: key };
   } catch (err: any) {
     console.warn(`[cfBrowser] no persistent profile (${err?.message ?? err})`);
-    return throwaway();
+    return throwaway(key);
   }
 }
 
@@ -1342,7 +1374,7 @@ export async function launchCfBrowser(
           // One machine per exit, kept across runs alongside its cookies
           // Seeded from the profile, not the bare exit: the device has to stay with the
           // cookies it was issued to, or a session comes back on a machine that has changed
-          `--fingerprint=${fingerprintSeed(profileKey)}`,
+          `--fingerprint=${fingerprintSeed(profile.seedKey)}`,
           // The container has no user namespaces to sandbox into, and /dev/shm is small
           "--no-sandbox",
           "--disable-setuid-sandbox",
