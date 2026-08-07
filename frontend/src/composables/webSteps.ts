@@ -33,6 +33,10 @@ export type WebStepForm = {
   key: string;
   /** web_select: the option to choose, by its label or its value. */
   option: string;
+  /** web_set: what to hold under the name. */
+  value: string;
+  /** web_notify: the chat to send to; blank uses the configured one. */
+  target: string;
   /** web_hold: how long to keep the pointer down. */
   holdMs: number;
   /** web_drag: what to drop it on; blank drags by the offset below. */
@@ -70,6 +74,8 @@ export const WEB_STEP_TYPES: WebStepType[] = [
   "web_pick",
   "web_collect",
   "web_read",
+  "web_set",
+  "web_notify",
   "web_if",
   "web_repeat",
   "web_for_each",
@@ -129,6 +135,8 @@ export function defaultWebStep(): WebStepForm {
     max: 0,
     key: "Enter",
     option: "",
+    value: "",
+    target: "",
     holdMs: 1000,
     toSelector: "",
     dragX: 260,
@@ -201,6 +209,14 @@ export function webStepToConfig(s: WebStepForm): WebStep {
         ...(s.pattern.trim() ? { pattern: s.pattern.trim() } : {}),
         ...(s.limit > 0 ? { limit: s.limit } : {}),
         ...(s.skipUsed ? { skipUsed: true } : {}),
+      };
+    case "web_set":
+      return { type: "web_set", varName: s.varName.trim(), value: s.value };
+    case "web_notify":
+      return {
+        type: "web_notify",
+        text: s.text,
+        ...(s.target.trim() ? { target: s.target.trim() } : {}),
       };
     case "web_read":
       return {
@@ -333,6 +349,10 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
         limit: s.limit ?? 0,
         skipUsed: s.skipUsed ?? false,
       };
+    case "web_set":
+      return { ...base, type: s.type, varName: s.varName, value: s.value };
+    case "web_notify":
+      return { ...base, type: s.type, text: s.text, target: s.target ?? "" };
     case "web_read":
       return {
         ...base,

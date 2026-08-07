@@ -295,6 +295,8 @@ export type LoadOptions = {
   /** What a `web_pick` with `skipUsed` should leave out, and where a used value is kept. */
   usedValues?: (varName: string) => string[];
   markUsed?: (varName: string, value: string) => void;
+  /** Sends a message mid-run, for the `web_notify` sub-step. */
+  notify?: (text: string, target?: string) => Promise<void>;
   /**
    * Which browser profile -- so which cookie jar and which device -- to run on. The name is
    * a template (`{ip}`, `{ip}-{jobId}`, `{tgId}`, free text); blank takes the configured
@@ -2220,6 +2222,72 @@ async function typeInto(page: Page, selector: string, text: string): Promise<boo
   return typeIntoFocused(page, text);
 }
 
+/** How a person writes a modifier, against the one name the browser answers to. */
+const KEY_MODIFIERS: Record<string, string> = {
+  ctrl: "Control",
+  control: "Control",
+  cmd: "Meta",
+  command: "Meta",
+  meta: "Meta",
+  win: "Meta",
+  super: "Meta",
+  alt: "Alt",
+  option: "Alt",
+  opt: "Alt",
+  shift: "Shift",
+};
+
+/** The same for the key itself, for the ones that go by more than one name. */
+const KEY_NAMES: Record<string, string> = {
+  enter: "Enter",
+  return: "Enter",
+  esc: "Escape",
+  escape: "Escape",
+  tab: "Tab",
+  space: "Space",
+  spacebar: "Space",
+  backspace: "Backspace",
+  del: "Delete",
+  delete: "Delete",
+  insert: "Insert",
+  home: "Home",
+  end: "End",
+  pageup: "PageUp",
+  pagedown: "PageDown",
+  up: "ArrowUp",
+  down: "ArrowDown",
+  left: "ArrowLeft",
+  right: "ArrowRight",
+  arrowup: "ArrowUp",
+  arrowdown: "ArrowDown",
+  arrowleft: "ArrowLeft",
+  arrowright: "ArrowRight",
+};
+
+/**
+ * Turns a key as a person writes it into the one spelling the browser takes: `ctrl + enter`,
+ * `Ctrl+Enter` and `Control+Enter` all mean the same press, and only the last of them works
+ * unaided. Spacing and case are free, `+` separates the modifiers from the key.
+ *
+ * A single character is left exactly as it was typed -- `a` and `A` are different presses,
+ * and the shifted one is how a capital is asked for. Anything else the tables do not know is
+ * passed through untouched, so a key name they have never heard of still reaches the browser
+ * (which says so plainly enough when it is wrong).
+ */
+export function normaliseKey(key: string): string {
+  const parts = key
+    .split("+")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (!parts.length) return key.trim();
+
+  const pressed = parts.pop() as string;
+  const modifiers = parts.map((m) => KEY_MODIFIERS[m.toLowerCase()] ?? m);
+  const named =
+    [...pressed].length === 1 ? pressed : (KEY_NAMES[pressed.toLowerCase()] ?? pressed);
+  return [...modifiers, named].join("+");
+}
+
 export type WebStepHooks = {
   /**
    * Hands a screenshot and a prompt to the vision model and returns its reply. Supplied by
@@ -2233,6 +2301,12 @@ export type WebStepHooks = {
    */
   usedValues?: (varName: string) => string[];
   markUsed?: (varName: string, value: string) => void;
+  /**
+   * Sends a message from the middle of a run. Supplied by the caller for the same reason as
+   * the rest: the bot token and the chat to send to live in the settings, which this side
+   * does not read. Absent, a `web_notify` step says so rather than passing silently.
+   */
+  notify?: (text: string, target?: string) => Promise<void>;
   /**
    * Works any Cloudflare challenge standing on the page right now, or returns null when
    * there is none. Called after a `web_goto`, since a fresh navigation is exactly what
@@ -2697,6 +2771,8 @@ async function runStepList(
           const between = Math.max(0, step.betweenMs || 0);
           let done = 0;
           const failures: string[] = [];
+          // As in a repeat: what was set before the loop is still there in every round
+          const outer = new Map(run.current);
 
           for (let n = 1; n <= values.length; n++) {
             if (msLeft(deadline) <= 0) {
@@ -2706,7 +2782,7 @@ async function runStepList(
             const value = values[n - 1];
             // Each round starts clean but for the value it is on, so nothing a previous one
             // read is still standing when this one fills a field in
-            run.current.clear();
+            run.current = new Map(outer);
             run.picked.clear();
             run.current.set(name, value);
             run.picked.set(name, value);
@@ -2733,7 +2809,7 @@ async function runStepList(
             }
             if (between && n < values.length) await sleep(between, deadline);
           }
-          run.current.clear();
+          run.current = new Map(outer);
           run.picked.clear();
 
           if (!values.length) {
@@ -2749,6 +2825,28 @@ async function runStepList(
           log.outcome = failures.length
             ? `${summary}; ${failures.length} failed (${failures[0]})`
             : summary;
+          break;
+        }
+
+        case "web_set": {
+          const name = step.varName.trim();
+          if (!name) throw new Error("no name given to hold the value under");
+          // Drawn once, here: a value settled up front is one later steps can all use, which
+          // is the difference between this and putting `{alpha:12}` in the field itself
+          const value = fillContent(step.value ?? "", run.current);
+          run.current.set(name, value);
+          log.outcome = `{${name}} = ${oneLine(value).slice(0, 120)}`;
+          break;
+        }
+
+        case "web_notify": {
+          if (!hooks.notify)
+            throw new Error("no notification bot is configured (see Settings)");
+          const text = fillContent(step.text ?? "", run.current).trim();
+          if (!text) throw new Error("no message given to send");
+          const target = fillVars(step.target ?? "", run.current).trim();
+          await hooks.notify(text, target || undefined);
+          log.outcome = `sent ${oneLine(text).slice(0, 160)}${target ? ` to ${target}` : ""}`;
           break;
         }
 
@@ -2854,6 +2952,9 @@ async function runStepList(
           const between = Math.max(0, step.betweenMs || 0);
           let done = 0;
           const failures: string[] = [];
+          // What was set before the loop stays set inside it -- a username settled up front
+          // is still `{username}` in round three -- while what a round reads is its own
+          const outer = new Map(run.current);
 
           for (let n = 1; n <= times; n++) {
             if (msLeft(deadline) <= 0) {
@@ -2861,7 +2962,7 @@ async function runStepList(
               break;
             }
             // Each round starts clean: it loads the list itself and picks its own value
-            run.current.clear();
+            run.current = new Map(outer);
             run.picked.clear();
             run.round = `${n}/${times}`;
             const roundFailure = await runStepList(page, inner, run, {
@@ -2884,7 +2985,7 @@ async function runStepList(
             }
             if (between && n < times) await sleep(between, deadline);
           }
-          run.current.clear();
+          run.current = new Map(outer);
           run.picked.clear();
 
           const summary = `${done} of ${times} round(s) got through`;
@@ -3014,7 +3115,7 @@ async function runStepList(
         }
 
         case "web_press": {
-          const key = fillVars(step.key ?? "", run.current).trim();
+          const key = normaliseKey(fillVars(step.key ?? "", run.current));
           if (!key) throw new Error("no key given to press");
           const selector = fillVars(step.selector ?? "", run.current).trim();
           const timeout = Math.max(1_000, capped(5_000, deadline));
@@ -3286,6 +3387,10 @@ function describeWebStep(step: WebStep, run: WebStepRun): string {
         `${step.containsText?.trim() ? ` reading "${fill(step.containsText.trim())}"` : ""}` +
         ` into {${step.varName}}`
       );
+    case "web_set":
+      return `Set {${step.varName}}`;
+    case "web_notify":
+      return `Send a notification${step.target?.trim() ? ` to ${fill(step.target)}` : ""}`;
     case "web_read":
       return `Read \`${fill(step.selector)}\` into {${step.varName}}`;
     case "web_repeat":
@@ -3883,6 +3988,7 @@ async function attemptLoad(
         aiLocate: opts.aiLocate,
         usedValues: opts.usedValues,
         markUsed: opts.markUsed,
+        notify: opts.notify,
         // A `web_goto` lands on a page that may have its own challenge, and the solver for
         // this attempt is right here -- so the steps work it through rather than the run
         // only noticing once every step has already failed against an interstitial

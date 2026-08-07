@@ -42,6 +42,7 @@ import { resolvePeerTarget } from "../tg/peerTarget";
 import { cfMaxCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
 import { cfTuning } from "./cfTuning";
 import { rememberWebValue, usedWebValues } from "./webMemory";
+import { getNotifyConfig, sendBotNotify } from "./notify";
 import { displayForRun } from "./runDisplays";
 
 import type { CustomAction, CustomConfig, CustomStepLog } from "../types";
@@ -2782,6 +2783,21 @@ export async function runCustom(
                   usedValues: (varName) => usedWebValues(cfRun.jobId, varName),
                   markUsed: (varName, value) =>
                     rememberWebValue(cfRun.jobId, varName, value),
+                  // And the same again for a `web_notify` step: the bot token and the chat
+                  // to send to are settings, which the browser side does not read. Sent
+                  // outright rather than through notifyJobEvent -- a step that says to send
+                  // is an instruction, not something the success/failure switches govern.
+                  notify: async (text, target) => {
+                    const cfg = getNotifyConfig();
+                    if (!cfg.botToken)
+                      throw new Error("no notification bot token is set (see Settings)");
+                    const chat = target?.trim() || cfg.botTarget;
+                    if (!chat)
+                      throw new Error(
+                        "no chat to send to: set a default in Settings, or name one on the step",
+                      );
+                    await sendBotNotify(cfg.botToken, chat, text);
+                  },
                   // Which cookie jar this runs on, and so what a login here belongs to
                   profile: { template: action.profileId, vars: cfProfileVars(cfRun) },
                   display: await displayForRun(cfRun),

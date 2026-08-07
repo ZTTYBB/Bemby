@@ -809,6 +809,8 @@ const zh = {
         web_pick: "挑选一个元素（存为变量）",
         web_collect: "收集全部元素（存为列表）",
         web_read: "读取页面文字（存为变量）",
+        web_set: "设置变量（自定义取值）",
+        web_notify: "发送通知（Telegram 机器人）",
         web_if: "条件分支（if / else）",
         web_repeat: "循环 N 次（for loop）",
         web_for_each: "遍历列表（for each）",
@@ -838,6 +840,18 @@ const zh = {
       labelMaxChars: "最多保留字数",
       readHint:
         "读取第一个匹配元素的文字并存入该变量，供后续步骤以 {变量名} 使用——最典型的是写进 AI 提示，让模型直接读到帖子正文，而不必从截图里辨认。留空或 0 表示保留 1000 字",
+      setNamePlaceholder: "username",
+      labelSetValue: "取值",
+      setValuePlaceholder: "bemby_{word:6}",
+      setHint:
+        "把一个自定义取值存入变量，后续步骤即可用 {变量名} 引用。取值支持随机占位符（{word:6}、{alpha:12}、{num:4}、{uuid}、{randomFirstName}、{randomLastName}）与已有变量（如 {username}-{num:3}），且只在本步骤生成一次——这正是它与「直接在输入框里写 {alpha:12}」的区别：先定下来，注册表单填一次、通知里再发一次，前后是同一个值。取值会显示在运行日志中",
+      labelNotifyText: "通知内容",
+      notifyTextPlaceholder: "注册成功：{username}----{password}",
+      notifyTextHint:
+        "运行到此步骤时，通过「设置」中配置的通知机器人发送一条消息，{变量名} 会替换为当前的值。适合把刚注册好的账号密码发给自己——否则这次运行结束后就无从查起。需要先在「设置」中配置通知机器人 Token；本步骤不受「成功/失败」通知开关的影响，执行到就发送",
+      labelNotifyTarget: "发送给（可选）",
+      notifyTargetPlaceholder: "-1001234567890 或 @频道名",
+      notifyTargetHint: "留空则发送到「设置」中配置的默认目标；也可填写话题 ID，如 -1001234567890/12",
       labelListName: "列表名",
       collectHint:
         "把选择器匹配到的所有值一次性存成一个列表，交给下方的「遍历列表」逐个处理。与「挑选一个元素」不同，列表读一次就存下来，因此循环里可以离开这个页面（例如逐个打开帖子再返回）。填属性名则读该属性（如 href），留空则读元素文本",
@@ -850,7 +864,7 @@ const zh = {
       labelKey: "按键",
       keyPlaceholder: "Enter",
       keyHint:
-        "使用 Playwright 的按键写法：Enter、Control+Enter、Escape、Tab 等。适用于没有发送按钮、靠回车提交的输入框",
+        "适用于没有发送按钮、靠回车提交的输入框。可从下拉建议中选择，也可直接输入：大小写与空格不限，`ctrl + enter`、`Ctrl+Enter`、`Control+Enter` 等写法都可以；单个字符即按该字符（区分大小写，如 `a` 与 `A` 不同），组合键用 `+` 连接，如 `Control+a`",
       pressSelectorHint: "留空则按在当前焦点上，也就是上一步刚输入过的那个字段",
       labelHoldMs: "按住时长（毫秒）",
       holdHint:
@@ -2476,6 +2490,8 @@ const en: typeof zh = {
         web_pick: "Pick one element (into a name)",
         web_collect: "Collect every element (into a list)",
         web_read: "Read text off the page (into a name)",
+        web_set: "Set a variable (a value of your own)",
+        web_notify: "Send a notification (Telegram bot)",
         web_if: "Branch on the page (if / else)",
         web_repeat: "Repeat a number of times (for loop)",
         web_for_each: "For each value in a list (for each)",
@@ -2505,6 +2521,19 @@ const en: typeof zh = {
       labelMaxChars: "Keep at most (characters)",
       readHint:
         "Reads the first matching element's text and holds it under the name for later steps to use as {name} -- most usefully in an AI hint, so the model is handed the post's own words rather than having to make them out in a screenshot. Blank or 0 keeps 1000 characters",
+      setNamePlaceholder: "username",
+      labelSetValue: "Value",
+      setValuePlaceholder: "bemby_{word:6}",
+      setHint:
+        "Holds a value of your own under the name, for later steps to use as {name}. It takes the random placeholders ({word:6}, {alpha:12}, {num:4}, {uuid}, {randomFirstName}, {randomLastName}) and the names already set ({username}-{num:3}), and is drawn once here -- which is the difference between this and putting {alpha:12} in the field itself: settled up front, the same value fills the signup form and goes out in the message afterwards. The value is shown in the run log",
+      labelNotifyText: "Message",
+      notifyTextPlaceholder: "signed up: {username}----{password}",
+      notifyTextHint:
+        "Sends a message through the notification bot from Settings when the run reaches this step, with {name} filled in. This is how the credentials a signup just made reach you -- nothing else in the run keeps them once it is over. Needs a bot token set in Settings; the success/failure switches do not govern this one, since a step that says to send is an instruction",
+      labelNotifyTarget: "Send to (optional)",
+      notifyTargetPlaceholder: "-1001234567890 or @channelname",
+      notifyTargetHint:
+        "Blank sends to the default target set in Settings. A forum topic can be named by appending its id, as in -1001234567890/12",
       labelListName: "Name to hold the list under",
       collectHint:
         "Reads every value the selector matches into one list, for the For each step below to work through. Unlike picking one, the list is read once and kept, so the loop can leave this page behind -- open each post in turn and come back. An attribute name reads that attribute (href, say), blank reads the element's text",
@@ -2517,7 +2546,7 @@ const en: typeof zh = {
       labelKey: "Key",
       keyPlaceholder: "Enter",
       keyHint:
-        "Playwright's spelling: Enter, Control+Enter, Escape, Tab. For a box that has no send button and goes by the keyboard instead",
+        "For a box that has no send button and goes by the keyboard instead. Pick from the suggestions or type your own: case and spacing are free, so `ctrl + enter`, `Ctrl+Enter` and `Control+Enter` all mean the same press. A single character is a press of that character (`a` and `A` differ), and `+` joins a modifier to a key, as in `Control+a`",
       pressSelectorHint: "Blank presses wherever the focus is, which is the field the step before it typed into",
       labelHoldMs: "Hold for (ms)",
       holdHint:

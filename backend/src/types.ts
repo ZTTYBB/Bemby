@@ -544,6 +544,35 @@ export type WebStep =
     }
   | {
       /**
+       * Hold a value of your own under a name, without reading anything off the page. What a
+       * signup needs: settle on a username and a password up front, fill the form in with
+       * `{username}` and `{password}`, and send them on at the end -- rather than typing a
+       * generated value straight into a field, where nothing afterwards can see what it was.
+       */
+      type: "web_set";
+      /** Name to hold it under. */
+      varName: string;
+      /**
+       * What to hold. Takes the names already set (`{username}-{num:3}`) and the random
+       * tokens every other template takes (`{word:4}`, `{alpha:12}`, `{randomFirstName}`),
+       * drawn once here -- which is the point, since a name can then be used twice over.
+       */
+      value: string;
+    }
+  | {
+      /**
+       * Send a message through the notification bot from the middle of a run, with `{name}`
+       * standing for whatever the steps have gathered. What makes a signup worth running:
+       * the account it just made is of no use if nothing says what the credentials were.
+       */
+      type: "web_notify";
+      /** The message, e.g. `signed up: {username}----{password}`. */
+      text: string;
+      /** Chat to send to. Blank uses the one set in Settings. */
+      target?: string;
+    }
+  | {
+      /**
        * Read text off the page and hold it under a name, written `{name}` in any later field
        * of the round -- an AI hint, most usefully, so the model is given the post it is
        * replying to as text rather than having to make it out in a screenshot.

@@ -74,6 +74,56 @@
         </div>
       </div>
 
+      <!-- Set a value of your own, for the steps after it to use -->
+      <div v-if="s.type === 'web_set'">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelVarName") }}</label>
+            <input
+              v-model.trim="s.varName"
+              class="form-input"
+              :placeholder="t('jobs.web.setNamePlaceholder')"
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelSetValue") }}</label>
+            <input
+              v-model="s.value"
+              class="form-input"
+              :placeholder="t('jobs.web.setValuePlaceholder')"
+            />
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.setHint") }}
+        </div>
+      </div>
+
+      <div v-if="s.type === 'web_notify'">
+        <label class="form-label">{{ t("jobs.web.labelNotifyText") }}</label>
+        <textarea
+          v-model="s.text"
+          class="form-input"
+          rows="2"
+          style="resize: vertical"
+          :placeholder="t('jobs.web.notifyTextPlaceholder')"
+        />
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.notifyTextHint") }}
+        </div>
+        <div class="form-group" style="margin-top: 8px">
+          <label class="form-label">{{ t("jobs.web.labelNotifyTarget") }}</label>
+          <input
+            v-model.trim="s.target"
+            class="form-input"
+            :placeholder="t('jobs.web.notifyTargetPlaceholder')"
+          />
+          <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+            {{ t("jobs.web.notifyTargetHint") }}
+          </div>
+        </div>
+      </div>
+
       <div v-if="s.type === 'web_hold'" style="margin-top: 8px">
         <label class="form-label">{{ t("jobs.web.labelHoldMs") }}</label>
         <input v-model.number="s.holdMs" class="form-input" type="number" min="0" step="500" />
@@ -113,7 +163,14 @@
 
       <div v-if="s.type === 'web_press'" style="margin-top: 8px">
         <label class="form-label">{{ t("jobs.web.labelKey") }}</label>
-        <input v-model.trim="s.key" class="form-input" :placeholder="t('jobs.web.keyPlaceholder')" />
+        <!-- A list of the usual ones, while staying a plain field: the keys worth pressing
+             are far too many to enumerate, and any letter is one of them -->
+        <input
+          v-model.trim="s.key"
+          class="form-input"
+          :list="keyListId"
+          :placeholder="t('jobs.web.keyPlaceholder')"
+        />
         <div style="font-size: 11px; color: #aaa; margin-top: 3px">
           {{ t("jobs.web.keyHint") }}
         </div>
@@ -507,11 +564,17 @@
     <button type="button" class="btn btn-ghost btn-sm" style="margin-top: 6px" @click="add">
       <i class="fa-solid fa-plus"></i> {{ t("jobs.web.addStep") }}
     </button>
+
+    <!-- Shared by every key field in this editor; the id is per instance, since the editor
+         recurses for a loop's rounds and a branch's arms -->
+    <datalist :id="keyListId">
+      <option v-for="k in COMMON_KEYS" :key="k" :value="k" />
+    </datalist>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, getCurrentInstance } from "vue";
 import { t } from "../i18n";
 import {
   AI_WEB_STEP_TYPES,
@@ -537,6 +600,37 @@ const props = defineProps<{
 }>();
 
 const offeredTypes = computed(() => offeredWebStepTypes(props.depth ?? 0, props.inLoop ?? false));
+
+// Suggestions for the key field. Not the whole set -- any letter or digit is a key too, and
+// the field stays free text for those; these are the ones a page usually goes by. The backend
+// settles the spelling, so `ctrl + enter` typed by hand works as well as the entry here does.
+const COMMON_KEYS = [
+  "Enter",
+  "Control+Enter",
+  "Shift+Enter",
+  "Alt+Enter",
+  "Meta+Enter",
+  "Escape",
+  "Tab",
+  "Shift+Tab",
+  "Space",
+  "Backspace",
+  "Delete",
+  "ArrowDown",
+  "ArrowUp",
+  "ArrowLeft",
+  "ArrowRight",
+  "PageDown",
+  "PageUp",
+  "Home",
+  "End",
+  "Control+a",
+  "Control+c",
+  "Control+v",
+];
+
+// One datalist per editor instance, so the recursion cannot mint the same id twice
+const keyListId = `web-keys-${getCurrentInstance()?.uid ?? 0}`;
 
 const heading = computed(() => {
   switch (props.role) {

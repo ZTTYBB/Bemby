@@ -570,6 +570,19 @@ export type WebStep =
       limit?: number;
       skipUsed?: boolean;
     }
+  | {
+      /** Hold a value of your own under a name, for later steps to use as {name}. */
+      type: "web_set";
+      varName: string;
+      value: string;
+    }
+  | {
+      /** Send a message through the notification bot mid-run, with {name} filled in. */
+      type: "web_notify";
+      text: string;
+      /** Chat to send to. Blank uses the one set in Settings. */
+      target?: string;
+    }
   | { type: "web_read"; selector: string; varName: string; maxChars?: number }
   | { type: "web_goto"; url: string; waitMs?: number }
   | { type: "web_back"; waitMs?: number }

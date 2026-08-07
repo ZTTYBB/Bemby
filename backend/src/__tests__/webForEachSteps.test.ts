@@ -23,7 +23,7 @@ vi.mock("../db/database", () => ({
 
 import { describe, expect, it, vi } from "vitest";
 import type { Page } from "playwright-core";
-import { parseWebAiText, runWebSteps } from "../jobs/cloudflare";
+import { normaliseKey, parseWebAiText, runWebSteps } from "../jobs/cloudflare";
 import type { WebStep } from "../types";
 
 const HOME = "https://forum.example/";
@@ -367,6 +367,158 @@ describe("web_ai_input", () => {
   });
 });
 
+// The shape of a signup: settle on the credentials up front, fill the form in with them, and
+// send them on at the end. Typing `{alpha:12}` straight into the field would work once and
+// leave nothing able to say what the password had been.
+describe("web_set and web_notify", () => {
+  it("holds a value of its own, for later steps to use", async () => {
+    const f = fakePage();
+    const sent: Array<{ text: string; target?: string }> = [];
+    const out = await run(
+      f.page,
+      [
+        { type: "web_set", varName: "username", value: "bemby_{word:6}" },
+        { type: "web_set", varName: "password", value: "{alpha:12}" },
+        { type: "web_input", selector: "#user", text: "{username}" },
+        { type: "web_input", selector: "#pass", text: "{password}" },
+        { type: "web_notify", text: "signed up: {username}----{password}" },
+      ],
+      { notify: async (text, target) => void sent.push({ text, target }) },
+    );
+
+    expect(out.ok).toBe(true);
+    const [user, pass] = f.calls.typed;
+    expect(user).toMatch(/^bemby_[a-z]{6}$/);
+    expect(pass).toMatch(/^[a-zA-Z0-9]{12}$/);
+    // The same values reach the message: settled once, used three times over
+    expect(sent).toEqual([{ text: `signed up: ${user}----${pass}`, target: undefined }]);
+  });
+
+  it("builds one value out of another", async () => {
+    const f = fakePage();
+    const out = await run(f.page, [
+      { type: "web_set", varName: "user", value: "sam" },
+      { type: "web_set", varName: "email", value: "{user}+{num:3}@outlook.com" },
+      { type: "web_input", selector: "#email", text: "{email}" },
+    ]);
+
+    expect(out.ok).toBe(true);
+    expect(f.calls.typed[0]).toMatch(/^sam\+\d{3}@outlook\.com$/);
+  });
+
+  it("shows the value in the log, since remembering it is the point", async () => {
+    const f = fakePage();
+    const out = await run(f.page, [
+      { type: "web_set", varName: "password", value: "hunter2" },
+    ]);
+
+    expect(out.logs[0].outcome).toBe("{password} = hunter2");
+  });
+
+  it("sends to the chat a step names, over the configured default", async () => {
+    const f = fakePage();
+    const sent: Array<{ text: string; target?: string }> = [];
+    await run(f.page, [{ type: "web_notify", text: "done", target: "@ops_channel" }], {
+      notify: async (text, target) => void sent.push({ text, target }),
+    });
+
+    expect(sent).toEqual([{ text: "done", target: "@ops_channel" }]);
+  });
+
+  it("fails the step when the notification cannot be sent", async () => {
+    const f = fakePage();
+    const out = await run(f.page, [{ type: "web_notify", text: "done" }], {
+      notify: async () => {
+        throw new Error("no chat to send to");
+      },
+    });
+
+    expect(out.ok).toBe(false);
+    expect(out.logs[0].error).toBe("no chat to send to");
+  });
+
+  it("says so when no notification bot is wired up at all", async () => {
+    const f = fakePage();
+    const out = await run(f.page, [{ type: "web_notify", text: "done" }]);
+
+    expect(out.ok).toBe(false);
+    expect(out.logs[0].error).toMatch(/no notification bot is configured/);
+  });
+
+  it("a value set before a loop is still there inside every round", async () => {
+    const f = fakePage(LIST);
+    const out = await run(
+      f.page,
+      [
+        { type: "web_set", varName: "tag", value: "batch-7" },
+        COLLECT,
+        forEach("postId", [
+          { type: "web_input", selector: "#c", text: "{tag}: {postId}" },
+        ]),
+      ],
+      { usedValues: () => [] },
+    );
+
+    expect(out.ok).toBe(true);
+    expect(f.calls.typed).toEqual([
+      "batch-7: 859148",
+      "batch-7: 859149",
+      "batch-7: 859150",
+    ]);
+  });
+
+  it("keeps what a round set out of the rounds after it", async () => {
+    const f = fakePage(LIST);
+    const out = await run(
+      f.page,
+      [
+        COLLECT,
+        forEach("postId", [
+          { type: "web_input", selector: "#c", text: "[{leftover}]" },
+          { type: "web_set", varName: "leftover", value: "round-{postId}" },
+        ]),
+      ],
+      { usedValues: () => [] },
+    );
+
+    expect(out.ok).toBe(true);
+    // Round two starts as round one did: an unset name stands as it was written
+    expect(f.calls.typed).toEqual(["[{leftover}]", "[{leftover}]", "[{leftover}]"]);
+  });
+});
+
+describe("normaliseKey", () => {
+  it("settles the many spellings of one press on the browser's", () => {
+    for (const written of ["Control+Enter", "ctrl+enter", "Ctrl + Enter", "CTRL+return"])
+      expect(normaliseKey(written)).toBe("Control+Enter");
+    expect(normaliseKey("cmd+a")).toBe("Meta+a");
+    expect(normaliseKey("option + delete")).toBe("Alt+Delete");
+    expect(normaliseKey(" down ")).toBe("ArrowDown");
+  });
+
+  it("leaves a single character exactly as it was typed", () => {
+    // `A` is the shifted press and `a` the plain one -- they are not the same key
+    expect(normaliseKey("a")).toBe("a");
+    expect(normaliseKey("A")).toBe("A");
+    expect(normaliseKey("7")).toBe("7");
+    expect(normaliseKey("ctrl+A")).toBe("Control+A");
+  });
+
+  it("passes a name it does not know through to the browser", () => {
+    expect(normaliseKey("F7")).toBe("F7");
+    expect(normaliseKey("NumpadEnter")).toBe("NumpadEnter");
+    expect(normaliseKey("ctrl+F5")).toBe("Control+F5");
+  });
+
+  it("gives nothing back for nothing, so the step can say so", () => {
+    expect(normaliseKey("   ")).toBe("");
+  });
+
+  it("keeps a bare plus, which is a key in its own right", () => {
+    expect(normaliseKey("+")).toBe("+");
+  });
+});
+
 describe("parseWebAiText", () => {
   it("takes the text out of the JSON object it asked for", () => {
     expect(parseWebAiText('{"text": "Nicely put."}')).toBe("Nicely put.");
@@ -397,6 +549,25 @@ describe("web_press and web_select", () => {
     expect(f.calls.pressed).toEqual([
       { selector: "#reply", key: "Control+Enter" },
       { key: "Escape" },
+    ]);
+  });
+
+  it("takes a key written the way a person writes it", async () => {
+    const f = fakePage();
+    const out = await run(f.page, [
+      { type: "web_press", key: "ctrl + enter" },
+      { type: "web_press", key: "esc" },
+      { type: "web_press", key: "shift+Tab" },
+      // A single character is a press of that character, capital and all
+      { type: "web_press", key: "a" },
+    ]);
+
+    expect(out.ok).toBe(true);
+    expect(f.calls.pressed.map((p) => p.key)).toEqual([
+      "Control+Enter",
+      "Escape",
+      "Shift+Tab",
+      "a",
     ]);
   });
 
