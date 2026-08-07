@@ -3,7 +3,7 @@
 // after it. Neither needs a browser, and both are where a mis-configured pick actually goes
 // wrong -- the real-browser cover for the steps themselves is in webStepsBrowser.test.ts.
 import { describe, it, expect } from "vitest";
-import { fillVars, narrowCollected } from "../jobs/cloudflare";
+import { fillVars, keepMatchingText, narrowCollected } from "../jobs/cloudflare";
 
 // A forum index reads like this: post links worth keeping, plus profile and category links
 // that match the same selector and are not posts.
@@ -114,5 +114,53 @@ describe("fillVars", () => {
 
   it("takes an empty string without complaint", () => {
     expect(fillVars("", vars)).toBe("");
+  });
+});
+
+// A selector reaches "every post in the list"; only its text says which of them is a
+// giveaway. CSS cannot ask about text at all, so without this a job wanting one kind of post
+// has to take the lot and sort it out after navigating -- by which point it has already
+// spent a round on the wrong post.
+describe("keepMatchingText", () => {
+  const LIST = [
+    { value: "/post-862176-1", text: "推荐使用商家的dns，还是自己改1.1.1.1？" },
+    { value: "/post-862177-1", text: "【抽奖】抽一台8.10到期的DMIT" },
+    { value: "/post-862178-1", text: "毕业了，小鸡们出个干净" },
+    { value: "/post-862179-1", text: "月末抽奖活动来了" },
+  ];
+
+  it("keeps only what reads the wanted words, and keeps the value not the text", () => {
+    expect(keepMatchingText(LIST, "抽奖", ".post-title a")).toEqual([
+      "/post-862177-1",
+      "/post-862179-1",
+    ]);
+  });
+
+  it("keeps everything when nothing is asked for", () => {
+    expect(keepMatchingText(LIST, "", ".post-title a")).toHaveLength(4);
+  });
+
+  it("ignores case, so an English tag matches however it is written", () => {
+    const rows = [{ value: "/post-1", text: "[GIVEAWAY] free vps" }];
+    expect(keepMatchingText(rows, "giveaway", "a")).toEqual(["/post-1"]);
+  });
+
+  it("says so rather than picking wrongly when the list holds none of them", () => {
+    // Silently returning nothing would surface as "the page did not load", sending whoever
+    // reads the log after the wrong thing entirely
+    expect(() => keepMatchingText(LIST, "内部优惠", ".post-title a")).toThrow(/none of them read/);
+  });
+
+  it("is nothing to filter when the selector matched nothing at all", () => {
+    // That case is narrowCollected's to report, and it words it as an empty page
+    expect(keepMatchingText([], "抽奖", ".post-title a")).toEqual([]);
+  });
+
+  it("hands its result to narrowCollected unchanged, so the regex still applies", () => {
+    const kept = keepMatchingText(LIST, "抽奖", ".post-title a");
+    expect(narrowCollected(kept, { selector: "a", pattern: "/post-(\\d+)" }).values).toEqual([
+      "862177",
+      "862179",
+    ]);
   });
 });

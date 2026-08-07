@@ -120,7 +120,18 @@
       </div>
 
       <div v-if="s.type === 'web_pick'" style="margin-top: 8px">
-        <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">{{ t("jobs.web.labelContainsText") }}</label>
+          <input
+            v-model.trim="s.containsText"
+            class="form-input"
+            :placeholder="t('jobs.web.containsTextPlaceholder')"
+          />
+          <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+            {{ t("jobs.web.containsTextHint") }}
+          </div>
+        </div>
+        <div class="form-row" style="margin-top: 8px">
           <div class="form-group">
             <label class="form-label">{{ t("jobs.web.labelPattern") }}</label>
             <input

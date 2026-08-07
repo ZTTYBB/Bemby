@@ -37,14 +37,21 @@ const HOME = "https://forum.example/";
  *
  * `matches` maps a selector to what the page holds for it. Passing a function instead of a
  * list makes the answer depend on when it is asked -- a front page that moves between rounds.
+ * An entry is either the value alone, or the value and the text the element reads, for a pick
+ * that narrows the list by what a post is called.
  */
-function fakePage(matches: Record<string, string[] | (() => string[])> = {}) {
+type Held = string | { value: string; text: string };
+
+function fakePage(matches: Record<string, Held[] | (() => Held[])> = {}) {
   const visited: string[] = [HOME];
   let gotoError: string | undefined;
 
-  const held = (sel: string): string[] => {
+  const held = (sel: string): Array<{ value: string; text: string }> => {
     const found = matches[sel];
-    return typeof found === "function" ? found() : (found ?? []);
+    const list = typeof found === "function" ? found() : (found ?? []);
+    // A bare entry stands for an element whose text is its value, which is what a link
+    // written out in full looks like
+    return list.map((h) => (typeof h === "string" ? { value: h, text: h } : h));
   };
 
   const page = {
@@ -66,7 +73,7 @@ function fakePage(matches: Record<string, string[] | (() => string[])> = {}) {
       if (arg && typeof arg === "object" && "sel" in (arg as Record<string, unknown>))
         return held((arg as { sel: string }).sel);
       // The read step passes its selector on its own
-      if (typeof arg === "string") return held(arg)[0] ?? "";
+      if (typeof arg === "string") return held(arg)[0]?.value ?? "";
       // `isInterstitial` looks for the challenge markers; nothing here is a challenge page
       if (String(fn).includes("challenge-")) return false;
       // Anything else reading the page gets text long enough to count as rendered
@@ -470,5 +477,70 @@ describe("web_read", () => {
     ]);
     expect(out.ok).toBe(false);
     expect(out.logs[0].error).toMatch(/has any text on the page/);
+  });
+});
+
+// CSS reaches every post in a list and no fewer, so a job that wants one kind of post has to
+// say which by the words on it. Without this the round navigates first and finds out after,
+// having already spent itself on the wrong post.
+describe("a pick narrowed by what the post is called", () => {
+  const LISTING: Held[] = [
+    { value: "/post-100-1", text: "推荐使用商家的dns" },
+    { value: "/post-200-1", text: "【抽奖】抽一台DMIT" },
+    { value: "/post-300-1", text: "毕业了，小鸡出个干净" },
+    { value: "/post-400-1", text: "月末抽奖活动" },
+  ];
+
+  const pick = (containsText?: string): WebStep => ({
+    type: "web_pick",
+    selector: POSTS,
+    varName: "postId",
+    attribute: "href",
+    pattern: "/post-(\\d+)",
+    skipUsed: true,
+    ...(containsText ? { containsText } : {}),
+  });
+
+  it("visits only the posts whose title says so", async () => {
+    const { page, visited } = fakePage({ [POSTS]: LISTING });
+    await run(page, [
+      {
+        type: "web_repeat",
+        times: 2,
+        steps: [pick("抽奖"), { type: "web_goto", url: "https://forum.example/post-{postId}-1" }],
+      },
+    ]);
+    expect(visited.filter((u) => u.includes("/post-"))).toEqual([
+      "https://forum.example/post-200-1",
+      "https://forum.example/post-400-1",
+    ]);
+  });
+
+  it("takes the lot when nothing narrows it, which is what it did before", async () => {
+    const { page, visited } = fakePage({ [POSTS]: LISTING });
+    await run(page, [
+      {
+        type: "web_repeat",
+        times: 4,
+        steps: [pick(), { type: "web_goto", url: "https://forum.example/post-{postId}-1" }],
+      },
+    ]);
+    expect(visited.filter((u) => u.includes("/post-"))).toHaveLength(4);
+  });
+
+  it("goes nowhere at all rather than somewhere wrong when the list holds none", async () => {
+    const { page, visited } = fakePage({ [POSTS]: LISTING });
+    const log = await run(page, [
+      {
+        type: "web_repeat",
+        times: 1,
+        steps: [
+          pick("内部优惠"),
+          { type: "web_goto", url: "https://forum.example/post-{postId}-1" },
+        ],
+      },
+    ]);
+    expect(visited.filter((u) => u.includes("/post-"))).toEqual([]);
+    expect(JSON.stringify(log)).toMatch(/none of them read/);
   });
 });

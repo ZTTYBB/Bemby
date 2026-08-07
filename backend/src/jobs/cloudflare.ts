@@ -2244,6 +2244,31 @@ export function fillVars(text: string, vars: Map<string, string>): string {
  * everything skipped is not one of them -- that is a page with nothing new on it, which the
  * pick reports and the loop stops on.
  */
+/**
+ * Drops the candidates that do not read `containsText`, which is how a list is narrowed by
+ * what something is called while still taking its address. CSS has no way to ask about text,
+ * so without this a selector can only reach "every post", never "the giveaway ones".
+ *
+ * An empty needle keeps everything. A needle that matches nothing is an error rather than an
+ * empty list: silently picking from nothing would look like a page that had not loaded.
+ */
+export function keepMatchingText(
+  collected: Array<{ value: string; text: string }>,
+  containsText: string,
+  selector: string,
+): string[] {
+  if (!containsText) return collected.map((c) => c.value);
+  const needle = containsText.toLowerCase();
+  const kept = collected.filter((c) => c.text.toLowerCase().includes(needle));
+  if (!kept.length && collected.length) {
+    throw new Error(
+      `${collected.length} element(s) matched \`${selector}\`, but none of them read ` +
+        `"${containsText}"`,
+    );
+  }
+  return kept.map((c) => c.value);
+}
+
 export function narrowCollected(
   raw: string[],
   opts: { selector: string; pattern?: string; used?: string[] },
@@ -2470,9 +2495,10 @@ async function runStepList(
           const name = step.varName.trim();
           if (!name) throw new Error("no name given to hold the chosen value under");
 
-          // The values come back raw and are narrowed here: a regular expression is far
-          // easier to get right in Node than serialised into the page
-          const raw = await page
+          // Each match comes back as what it is worth and what it reads, both raw: the text
+          // filter and the regular expression are far easier to get right in Node than
+          // serialised into the page
+          const collected = await page
             .evaluate(
               (arg: { sel: string; attr: string; cap: number }) =>
                 Array.from(document.querySelectorAll(arg.sel))
@@ -2481,11 +2507,20 @@ async function runStepList(
                     const value = arg.attr
                       ? el.getAttribute(arg.attr)
                       : (el as HTMLElement).innerText;
-                    return (value ?? "").trim();
+                    return {
+                      value: (value ?? "").trim(),
+                      text: ((el as HTMLElement).innerText ?? "").trim(),
+                    };
                   }),
               { sel: selector, attr: step.attribute?.trim() ?? "", cap: MAX_COLLECTED },
             )
-            .catch(() => [] as string[]);
+            .catch(() => [] as Array<{ value: string; text: string }>);
+
+          const raw = keepMatchingText(
+            collected,
+            fillVars(step.containsText ?? "", run.current).trim(),
+            selector,
+          );
 
           if (step.skipUsed) run.remember.add(name);
           else run.remember.delete(name);
@@ -2924,7 +2959,12 @@ function describeWebStep(step: WebStep, run: WebStepRun): string {
     case "web_turnstile":
       return "Press the Turnstile checkbox";
     case "web_pick":
-      return `Pick one \`${fill(step.selector)}\`${step.attribute?.trim() ? ` [${step.attribute.trim()}]` : ""} into {${step.varName}}`;
+      return (
+        `Pick one \`${fill(step.selector)}\`` +
+        `${step.attribute?.trim() ? ` [${step.attribute.trim()}]` : ""}` +
+        `${step.containsText?.trim() ? ` reading "${fill(step.containsText.trim())}"` : ""}` +
+        ` into {${step.varName}}`
+      );
     case "web_read":
       return `Read \`${fill(step.selector)}\` into {${step.varName}}`;
     case "web_repeat":

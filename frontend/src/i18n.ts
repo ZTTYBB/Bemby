@@ -827,6 +827,10 @@ const zh = {
       labelMaxChars: "最多保留字数",
       readHint:
         "读取第一个匹配元素的文字并存入该变量，供后续步骤以 {变量名} 使用——最典型的是写进 AI 提示，让模型直接读到帖子正文，而不必从截图里辨认。留空或 0 表示保留 1000 字",
+      labelContainsText: "标题/文字须包含（可选）",
+      containsTextPlaceholder: "抽奖",
+      containsTextHint:
+        "只在文字包含这几个字的候选中挑选 —— CSS 选择器只能按结构和属性筛选，问不了文字，所以「只回复标题含「抽奖」的帖子」这类条件要写在这里。读的是元素自身的文字（如标题链接的文字），不区分大小写；先按此筛掉，再套用下面的正则。留空表示不筛。若选中的元素一个都不含这几个字，本轮会报错并跳过，不会误选。",
       labelPattern: "正则提取（可选）",
       patternPlaceholder: "/post-(\\d+)",
       patternHint:
@@ -2442,6 +2446,10 @@ const en: typeof zh = {
       labelMaxChars: "Keep at most (characters)",
       readHint:
         "Reads the first matching element's text and holds it under the name for later steps to use as {name} -- most usefully in an AI hint, so the model is handed the post's own words rather than having to make them out in a screenshot. Blank or 0 keeps 1000 characters",
+      labelContainsText: "Text must contain (optional)",
+      containsTextPlaceholder: "抽奖",
+      containsTextHint:
+        "Only consider candidates whose own text contains this -- a CSS selector can ask about structure and attributes but never about text, so \"only the posts whose title says 抽奖\" has to be said here. It reads the element's own text (the title link's wording, say), ignores case, and runs before the regex below. Blank considers everything. When the selector matches elements but none of them read this, the round says so and picks nothing rather than picking wrongly.",
       labelPattern: "Narrow with a regex (optional)",
       patternPlaceholder: "/post-(\\d+)",
       patternHint:

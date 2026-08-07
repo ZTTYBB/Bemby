@@ -466,6 +466,13 @@ export type WebStep =
        */
       pattern?: string;
       /**
+       * Only consider candidates whose own text contains this, which is how a list is
+       * narrowed by what a post is called rather than by where it links. CSS cannot ask
+       * about text, so a selector alone cannot express "the giveaway ones"; this reads
+       * each match's text and drops the rest before `pattern` runs. Case is ignored.
+       */
+      containsText?: string;
+      /**
        * Which of the usable candidates to take. `first` is the top of the list and is
        * predictable; `random` spreads the choice about, which is both more like a person
        * reading a forum and less likely to keep retrying whatever sits at the top.

@@ -18,6 +18,8 @@ export type WebStepForm = {
   url: string;
   varName: string;
   attribute: string;
+  /** web_pick: only consider candidates whose text contains this. */
+  containsText: string;
   pattern: string;
   choose: "first" | "random";
   skipUsed: boolean;
@@ -95,6 +97,7 @@ export function defaultWebStep(): WebStepForm {
     url: "",
     varName: "",
     attribute: "",
+    containsText: "",
     pattern: "",
     choose: "first",
     skipUsed: true,
@@ -152,6 +155,7 @@ export function webStepToConfig(s: WebStepForm): WebStep {
         selector: s.selector.trim(),
         varName: s.varName.trim(),
         ...(s.attribute.trim() ? { attribute: s.attribute.trim() } : {}),
+        ...(s.containsText.trim() ? { containsText: s.containsText.trim() } : {}),
         ...(s.pattern.trim() ? { pattern: s.pattern.trim() } : {}),
         ...(s.choose === "random" ? { choose: "random" as const } : {}),
         ...(s.skipUsed ? { skipUsed: true } : {}),
@@ -227,6 +231,7 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
         selector: s.selector,
         varName: s.varName,
         attribute: s.attribute ?? "",
+        containsText: s.containsText ?? "",
         pattern: s.pattern ?? "",
         choose: s.choose ?? "first",
         skipUsed: s.skipUsed ?? false,
