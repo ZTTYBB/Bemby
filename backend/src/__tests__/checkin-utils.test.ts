@@ -81,6 +81,29 @@ describe("expandCommand", () => {
     }
   });
 
+  it("{randomFirstName} and {randomLastName} produce an ordinary name", () => {
+    expect(expandCommand("{randomFirstName}")).toMatch(/^[A-Z][a-z]+$/);
+    expect(expandCommand("{randomLastName}")).toMatch(/^[A-Z][a-z]+$/);
+    expect(expandCommand("{randomFirstName} {randomLastName}")).toMatch(
+      /^[A-Z][a-z]+ [A-Z][a-z]+$/,
+    );
+  });
+
+  it("draws a different name often enough to be random", () => {
+    const seen = new Set(
+      Array.from({ length: 40 }, () => expandCommand("{randomFirstName}")),
+    );
+    expect(seen.size).toBeGreaterThan(5);
+  });
+
+  it("a name placeholder ignores a length, having no use for one", () => {
+    expect(expandCommand("{randomFirstName:4}")).toMatch(/^[A-Z][a-z]+$/);
+  });
+
+  it("a named context value still wins over a random name", () => {
+    expect(expandCommand("{randomFirstName}", { randomFirstName: "Sam" })).toBe("Sam");
+  });
+
   it("leaves unknown placeholders untouched", () => {
     expect(expandCommand("{foo}")).toBe("{foo}");
     expect(expandCommand("{bar:5}")).toBe("{bar:5}");

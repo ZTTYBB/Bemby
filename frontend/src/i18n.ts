@@ -558,7 +558,7 @@ const zh = {
     uaDefault: "默认",
     uaCustom: "自定义...",
     labelStartCommand: "启动命令",
-    startCommandHint: "支持占位符：{word:N} {WORD:N} {num:N} {alpha:N} {uuid}",
+    startCommandHint: "支持占位符：{word:N} {WORD:N} {num:N} {alpha:N} {uuid} {randomFirstName} {randomLastName}",
     labelMarkWatched: "播放后标记已看",
     markWatchedHint: "播放完成后，将该剧集标记为已看",
     labelVerifyPlayable: "上报前校验可播放",
@@ -681,7 +681,7 @@ const zh = {
       afterCodeRequiredHint:
         "开启：回复中找不到该按钮时视为此注册码已失效，直接尝试下一个。关闭：仅记录并继续发送用户名——适用于机器人有时才要求这一步的情况",
       labelSignupUsername: "注册用户名",
-      signupUsernameHint: "完成注册时发送的用户名，支持 {word:N} {num:N} {alpha:N} {uuid} 占位符",
+      signupUsernameHint: "完成注册时发送的用户名，支持 {word:N} {num:N} {alpha:N} {uuid} {randomFirstName} {randomLastName} 占位符",
       labelListenMinutes: "监听时长（分钟）",
       listenMinutesHint: "等待注册码出现的最长时间，超时则任务失败",
       labelScanHistory: "扫描历史消息数",
@@ -715,7 +715,7 @@ const zh = {
       actionOpenBotMenuApp: "打开机器人菜单小程序（左下角按钮）",
       actionOpenUrl: "打开网页",
       labelContent: "消息/命令",
-      contentHint: "支持占位符：{word:N} {WORD:N} {num:N} {alpha:N} {uuid}",
+      contentHint: "支持占位符：{word:N} {WORD:N} {num:N} {alpha:N} {uuid} {randomFirstName} {randomLastName}",
       labelMaxWait: "最长等待（毫秒）",
       labelWaitMs: "等待时长（毫秒）",
       labelButton: "按钮文字",
@@ -792,7 +792,7 @@ const zh = {
       labelUrl: "网址",
       urlPlaceholder: "https://example.com/login",
       urlHint:
-        "在内置浏览器中直接打开该网址，与 Telegram 无关。页面若有 Cloudflare 验证会自动通过；支持 {word:N}、{num:N}、{alpha:N}、{uuid} 占位符",
+        "在内置浏览器中直接打开该网址，与 Telegram 无关。页面若有 Cloudflare 验证会自动通过；支持 {word:N}、{num:N}、{alpha:N}、{uuid}、{randomFirstName}、{randomLastName} 占位符",
       stepsLabel: "页面子步骤",
       stepsHint: "页面打开后按顺序执行。任一步骤失败即中止该动作；每步执行后都会截图保存到日志",
       addStep: "添加子步骤",
@@ -826,7 +826,7 @@ const zh = {
         "每轮按顺序执行一遍。典型用法：跳转到首页 → 挑选一个还没回复过的帖子 → 打开该帖 → 读取正文 → AI 回复 → 返回。任一字段中的 {变量名} 会被替换为本轮挑中的值；某一轮失败不影响其余轮次（见下方开关）。循环内不能再嵌套循环",
       gotoPlaceholder: "https://example.com/post-{postId}-1",
       gotoHint:
-        "在同一个浏览器中跳转，已登录的会话保持有效。支持 {变量名} 占位符，取自本轮挑中的值；新页面若出现 Cloudflare 验证会自动处理",
+        "在同一个浏览器中跳转，已登录的会话保持有效。支持 {变量名} 占位符（取自本轮挑中的值）与随机占位符 {word:N}、{num:N}、{alpha:N}、{uuid}、{randomFirstName}、{randomLastName}；新页面若出现 Cloudflare 验证会自动处理",
       backHint: "等同于浏览器的后退按钮，用于回到列表页继续下一轮",
       labelVarName: "变量名",
       varNamePlaceholder: "postId",
@@ -924,7 +924,8 @@ const zh = {
       selectorHint: "标准 CSS 选择器，取第一个匹配到的元素",
       labelText: "输入内容",
       textPlaceholder: "要输入的文本",
-      textHint: "输入前会先清空该字段。支持与网址相同的随机占位符",
+      textHint:
+        "输入前会先清空该字段。支持随机占位符 {word:N}、{num:N}、{alpha:N}、{uuid}、{randomFirstName}、{randomLastName}（每次执行重新生成，循环中每轮都不同），也支持 {变量名} 引用前面步骤存下的值（如 {postId}）",
       labelDelay: "等待时长（毫秒）",
       delayHint: "页面需要缓冲时使用，例如等待动画或跳转完成",
       labelTimeout: "超时（毫秒）",
@@ -2212,7 +2213,7 @@ const en: typeof zh = {
     uaCustom: "Custom...",
     labelStartCommand: "Start Command",
     startCommandHint:
-      "Placeholders: {word:N} {WORD:N} {num:N} {alpha:N} {uuid}",
+      "Placeholders: {word:N} {WORD:N} {num:N} {alpha:N} {uuid} {randomFirstName} {randomLastName}",
     labelMarkWatched: "Mark as watched after playback",
     markWatchedHint:
       "After playback completes, mark the episode as watched in Emby",
@@ -2344,7 +2345,7 @@ const en: typeof zh = {
       afterCodeRequiredHint:
         "On, a reply with no such button means the code is spent and the next one is tried. Off, it is logged and the username is sent anyway — which is what a bot that only sometimes asks for the extra click needs",
       labelSignupUsername: "Signup username",
-      signupUsernameHint: "Username sent to finish signup; supports {word:N} {num:N} {alpha:N} {uuid} placeholders",
+      signupUsernameHint: "Username sent to finish signup; supports {word:N} {num:N} {alpha:N} {uuid} {randomFirstName} {randomLastName} placeholders",
       labelListenMinutes: "Listen duration (minutes)",
       listenMinutesHint: "Maximum time to wait for codes to appear before the job fails",
       labelScanHistory: "Scan recent messages",
@@ -2379,7 +2380,7 @@ const en: typeof zh = {
       actionOpenUrl: "Open web page",
       labelContent: "Message / command",
       contentHint:
-        "Supports placeholders: {word:N} {WORD:N} {num:N} {alpha:N} {uuid}",
+        "Supports placeholders: {word:N} {WORD:N} {num:N} {alpha:N} {uuid} {randomFirstName} {randomLastName}",
       labelMaxWait: "Max wait (ms)",
       labelWaitMs: "Wait duration (ms)",
       labelButton: "Button text",
@@ -2457,7 +2458,7 @@ const en: typeof zh = {
       labelUrl: "URL",
       urlPlaceholder: "https://example.com/login",
       urlHint:
-        "Opened directly in the built-in browser; nothing about this goes through Telegram. A Cloudflare challenge on the page is passed automatically. Supports the {word:N}, {num:N}, {alpha:N} and {uuid} placeholders",
+        "Opened directly in the built-in browser; nothing about this goes through Telegram. A Cloudflare challenge on the page is passed automatically. Supports the {word:N}, {num:N}, {alpha:N}, {uuid}, {randomFirstName} and {randomLastName} placeholders",
       stepsLabel: "Page steps",
       stepsHint:
         "Run in order once the page is up. The first step that fails stops the action, and the page is captured after every step",
@@ -2492,7 +2493,7 @@ const en: typeof zh = {
         "Run in order once per round. The usual shape: go to the front page, pick a post not yet replied to, open it, read it, have the AI reply, come back. {name} in any field stands for what the round picked. A round that fails does not take the others with it (see the switch below). Loops do not nest",
       gotoPlaceholder: "https://example.com/post-{postId}-1",
       gotoHint:
-        "Goes there in the same browser, so whatever the steps above logged into stays logged in. Takes {name} placeholders, filled in from what the round picked, and a Cloudflare challenge on the new page is passed automatically",
+        "Goes there in the same browser, so whatever the steps above logged into stays logged in. Takes {name} placeholders, filled in from what the round picked, and the random ones ({word:N}, {uuid}, {randomFirstName} and the rest). A Cloudflare challenge on the new page is passed automatically",
       backHint: "The browser's back button, for returning to the list page before the next round",
       labelVarName: "Name to hold it under",
       varNamePlaceholder: "postId",
@@ -2596,7 +2597,7 @@ const en: typeof zh = {
       labelText: "Text to type",
       textPlaceholder: "What to type in",
       textHint:
-        "The field is cleared first. Takes the same random placeholders as the URL",
+        "The field is cleared first. Takes the random placeholders -- {word:N}, {num:N}, {alpha:N}, {uuid}, {randomFirstName}, {randomLastName} -- drawn afresh every time the step runs, so each round of a loop gets its own. {name} stands for whatever an earlier step held under that name",
       labelDelay: "Wait (ms)",
       delayHint: "For a page that needs a moment, e.g. an animation or a redirect finishing",
       labelTimeout: "Timeout (ms)",

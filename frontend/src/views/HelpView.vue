@@ -1003,6 +1003,13 @@
                   <td><code>{uuid}</code></td>
                   <td>随机 UUID v4</td>
                 </tr>
+                <tr>
+                  <td>
+                    <code>{randomFirstName}</code> /
+                    <code>{randomLastName}</code>
+                  </td>
+                  <td>随机的常见英文名 / 姓氏（无需填位数）</td>
+                </tr>
               </tbody>
             </table>
             <p class="help-note">
@@ -1407,6 +1414,13 @@
                 <tr>
                   <td><code>{uuid}</code></td>
                   <td>Random UUID v4</td>
+                </tr>
+                <tr>
+                  <td>
+                    <code>{randomFirstName}</code> /
+                    <code>{randomLastName}</code>
+                  </td>
+                  <td>An ordinary given name / surname (no length to give)</td>
                 </tr>
               </tbody>
             </table>

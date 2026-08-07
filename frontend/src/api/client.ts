@@ -1403,9 +1403,15 @@ export type RunDisplay = {
 };
 
 export const manualBrowserApi = {
-  status: () =>
+  /**
+   * The open session and every run with a screen up. `watching: false` says this poll is
+   * only after the list, so it does not hold an idle hand-driven session open.
+   */
+  status: (opts?: { watching?: boolean }) =>
     api
-      .get<{ session: ManualSession | null; runs: RunDisplay[] }>("/manual-browser")
+      .get<{ session: ManualSession | null; runs: RunDisplay[] }>("/manual-browser", {
+        params: opts?.watching === false ? { watching: "0" } : undefined,
+      })
       .then((r) => r.data),
   /** Attaches to a job already running, instead of opening a browser. */
   watch: (runId: string) =>

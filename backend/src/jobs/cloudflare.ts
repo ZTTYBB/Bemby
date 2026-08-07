@@ -14,6 +14,7 @@ import {
   type CfExitGeo,
   type ProxyCandidate,
 } from "../tg/proxyProviders";
+import { expandCommand } from "./placeholders";
 import type { WebStep, WebStepLog } from "../types";
 
 // Completes a checkin that hands back a URL behind Cloudflare's "I am not a bot"
@@ -2281,6 +2282,17 @@ export function fillVars(text: string, vars: Map<string, string>): string {
 }
 
 /**
+ * The same, for a field holding something a person wrote rather than a selector: the round's
+ * values first, then the random tokens every other template in Bemby takes -- `{word:10}`,
+ * `{num:6}`, `{alpha:8}`, `{uuid}` -- so a signup form can be given an address of its own.
+ * One pass, with the round's names taking precedence, and anything neither knows left alone.
+ */
+export function fillContent(text: string, vars: Map<string, string>): string {
+  if (!text) return text;
+  return expandCommand(text, Object.fromEntries(vars));
+}
+
+/**
  * Turns what a `web_pick` read off the page into the candidates it may choose from:
  * narrowed to the part that matters, de-duplicated, and minus what has already been used.
  * Kept out of the step body because this is where a mis-configured pick goes wrong, and
@@ -2490,7 +2502,7 @@ async function runStepList(
         case "web_input": {
           const selector = fillVars(step.selector, run.current).trim();
           if (!selector) throw new Error("no CSS selector given");
-          const text = fillVars(step.text, run.current);
+          const text = fillContent(step.text, run.current);
           if (!(await typeInto(page, selector, text)))
             throw new Error(`nothing matching \`${selector}\` could be typed into`);
           log.outcome = `typed ${maskForLog(text, selector)} into \`${selector}\``;
@@ -2888,7 +2900,7 @@ async function runStepList(
         }
 
         case "web_goto": {
-          const url = fillVars(step.url, run.current).trim();
+          const url = fillContent(step.url, run.current).trim();
           if (!url) throw new Error("no address given");
           if (!/^https?:\/\//i.test(url))
             throw new Error(`the address must start with http:// or https:// (got "${url}")`);
@@ -3126,7 +3138,7 @@ async function runStepList(
             break;
           }
 
-          const typed = step.text?.trim() ? fillVars(step.text, run.current) : aiText;
+          const typed = step.text?.trim() ? fillContent(step.text, run.current) : aiText;
           if (!typed) throw new Error("the AI did not say what to type, and no text was configured");
           if (!(await typeInto(page, selector, typed)))
             throw new Error(`marker ${mark} (${what}) could not be typed into`);

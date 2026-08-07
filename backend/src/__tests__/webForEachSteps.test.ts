@@ -430,6 +430,56 @@ describe("web_press and web_select", () => {
   });
 });
 
+// What a person types into a step is a template, the same as a start command or an address:
+// a signup form wants an address of its own each run, not the literal `{word:10}`.
+describe("placeholders in what a step types", () => {
+  it("expands the random tokens in the text a field is filled with", async () => {
+    const f = fakePage();
+    const out = await run(f.page, [
+      { type: "web_input", selector: "#email", text: "{word:10}@outlook.com" },
+    ]);
+
+    expect(out.ok).toBe(true);
+    expect(f.calls.typed[0]).toMatch(/^[a-z]{10}@outlook\.com$/);
+    // The log shows what was actually typed, not the template
+    expect(out.logs[0].outcome).toMatch(/@outlook\.com/);
+  });
+
+  it("expands them in an address a step opens", async () => {
+    const f = fakePage();
+    await run(f.page, [{ type: "web_goto", url: `${HOME}search?q={alpha:6}` }]);
+
+    expect(f.opened[0]).toMatch(/^https:\/\/forum\.example\/search\?q=[A-Za-z0-9]{6}$/);
+  });
+
+  it("gives a round's own value precedence over a random token", async () => {
+    const f = fakePage(LIST);
+    const out = await run(
+      f.page,
+      [
+        COLLECT,
+        forEach("postId", [
+          { type: "web_input", selector: "#comment", text: "re: {postId} ({num:4})" },
+        ]),
+      ],
+      { usedValues: () => [] },
+    );
+
+    expect(out.ok).toBe(true);
+    expect(f.calls.typed).toHaveLength(3);
+    expect(f.calls.typed[0]).toMatch(/^re: 859148 \(\d{4}\)$/);
+    // A fresh draw per round, rather than one expansion reused
+    expect(f.calls.typed[1]).toMatch(/^re: 859149 \(\d{4}\)$/);
+  });
+
+  it("leaves a placeholder nothing knows about as it stands", async () => {
+    const f = fakePage();
+    await run(f.page, [{ type: "web_input", selector: "#c", text: "hi {notAToken}" }]);
+
+    expect(f.calls.typed[0]).toBe("hi {notAToken}");
+  });
+});
+
 describe("web_hold", () => {
   it("keeps the button down for the time it was given, then lets go", async () => {
     const f = fakePage({}, { centres: { "#verify": { x: 100, y: 50 } } });

@@ -22,11 +22,13 @@ import { liveRunDisplays } from "../jobs/runDisplays";
  */
 const router = Router();
 
-router.get("/", (_req, res) => {
+router.get("/", (req, res) => {
   const session = currentManualSession();
-  // The panel polls this while the viewer is open: reading a page is not being idle, and
-  // the idle timer would otherwise close a session someone is still looking at
-  if (session) touchManualSession(session.id);
+  // The viewer polls this while it is open: reading a page is not being idle, and the idle
+  // timer would otherwise close a session someone is still looking at. `watching=0` says the
+  // caller only wants the list -- the jobs list keeps it up to date in the background, and a
+  // poll nobody is watching must not hold a hand-driven session open.
+  if (session && req.query.watching !== "0") touchManualSession(session.id);
   // Runs with a screen up, so the panel can offer to watch one
   res.json({ session: session ?? null, runs: liveRunDisplays() });
 });

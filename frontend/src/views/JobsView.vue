@@ -1589,6 +1589,7 @@ onMounted(async () => {
   loadAccountDisplaySetting();
   loadSchedulePageSetting();
   await Promise.all([loadJobs(), loadAccounts(), loadStatus(), loadSettings(), loadTemplates()]);
+  pollLiveRuns();
 });
 
 // Label for a job's account, honouring the "{Bemby name} - {TG name}" display setting.
@@ -2513,13 +2514,35 @@ function watchRun(runId: string) {
 
 async function refreshLiveRuns() {
   try {
-    const { runs } = await manualBrowserApi.status();
+    // Only after the list: a poll from here is nobody watching, so it must not keep a
+    // hand-driven session from idling out
+    const { runs } = await manualBrowserApi.status({ watching: false });
     const map: Record<number, string> = {};
     for (const r of runs ?? []) if (r.jobId) map[r.jobId] = r.runId;
     liveRuns.value = map;
   } catch {
     liveRuns.value = {};
   }
+}
+
+// A run puts its screen up part way through -- when it reaches the page it has to open --
+// rather than the moment it starts, so the watch button cannot be settled once at load time.
+// The list keeps looking: quickly while a run is about, slowly otherwise, so the button
+// arrives and goes on its own instead of waiting for the page to be reloaded.
+const LIVE_RUN_POLL_BUSY_MS = 3000;
+const LIVE_RUN_POLL_IDLE_MS = 15000;
+let liveRunTimer: ReturnType<typeof setTimeout> | null = null;
+
+function pollLiveRuns() {
+  if (liveRunTimer) clearTimeout(liveRunTimer);
+  const busy = running.value.size > 0 || Object.keys(liveRuns.value).length > 0;
+  liveRunTimer = setTimeout(
+    async () => {
+      await refreshLiveRuns();
+      pollLiveRuns();
+    },
+    busy ? LIVE_RUN_POLL_BUSY_MS : LIVE_RUN_POLL_IDLE_MS,
+  );
 }
 
 /** Opens the job's own browser to drive by hand, so a login lands on its profile. */
@@ -2533,6 +2556,9 @@ async function runNow(id: number) {
   try {
     const { logId } = await jobsApi.run(id);
     schedulePoll(id, logId);
+    // Something of ours is going now: look for its screen on the quick cadence, so the watch
+    // button turns up as soon as the run opens one
+    pollLiveRuns();
   } catch (err: any) {
     alert(err.response?.data?.error ?? 'Trigger failed');
     stopRunning(id);
@@ -2547,6 +2573,7 @@ const stopTaskFinishWatch = onBulkTaskFinished((task) => {
 
 onUnmounted(() => {
   for (const timer of pollTimers.values()) clearTimeout(timer);
+  if (liveRunTimer) clearTimeout(liveRunTimer);
   stopTaskFinishWatch();
 });
 </script>
