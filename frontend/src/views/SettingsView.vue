@@ -384,8 +384,15 @@
           <!-- Managing the profiles themselves: the sessions a run carries over. Kept beside
                the name template above, which decides which profile a run lands on. -->
           <div class="profiles-panel">
+            <!-- Folded away by default: a dozen profiles fill the page, and this is a place
+                 you visit to tidy up rather than one you read on the way past -->
             <div class="profiles-head">
-              <strong>{{ t("settings.profiles.title") }}</strong>
+              <button class="btn btn-sm btn-ghost" @click="cfProfilesOpen = !cfProfilesOpen">
+                <i
+                  :class="cfProfilesOpen ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"
+                ></i>
+                <strong>{{ t("settings.profiles.title") }}</strong>
+              </button>
               <span style="font-size: 11px; color: #888">
                 {{
                   t("settings.profiles.summary")
@@ -394,6 +401,7 @@
                 }}
               </span>
               <button
+                v-if="cfProfilesOpen"
                 class="btn btn-sm btn-ghost"
                 :disabled="cfProfilesLoading"
                 @click="loadCfProfiles"
@@ -402,7 +410,7 @@
               </button>
             </div>
 
-            <div class="profiles-actions">
+            <div v-if="cfProfilesOpen" class="profiles-actions">
               <input
                 v-model.trim="newProfileName"
                 class="form-input"
@@ -457,13 +465,13 @@
               </label>
             </div>
 
-            <div v-if="profilesMsg" class="success-msg" style="margin: 6px 0">{{ profilesMsg }}</div>
-            <div v-if="profilesError" class="error-msg" style="margin: 6px 0">{{ profilesError }}</div>
+            <div v-if="cfProfilesOpen && profilesMsg" class="success-msg" style="margin: 6px 0">{{ profilesMsg }}</div>
+            <div v-if="cfProfilesOpen && profilesError" class="error-msg" style="margin: 6px 0">{{ profilesError }}</div>
 
-            <div v-if="!cfProfiles.length" style="font-size: 12px; color: #888">
+            <div v-if="cfProfilesOpen && !cfProfiles.length" style="font-size: 12px; color: #888">
               {{ t("settings.profiles.empty") }}
             </div>
-            <table v-else class="profiles-table">
+            <table v-else-if="cfProfilesOpen" class="profiles-table">
               <thead>
                 <tr>
                   <th style="width: 28px">
@@ -508,7 +516,7 @@
                 </tr>
               </tbody>
             </table>
-            <div style="font-size: 11px; color: #888; margin-top: 6px">
+            <div v-if="cfProfilesOpen" style="font-size: 11px; color: #888; margin-top: 6px">
               {{ t("settings.profiles.hint") }}
             </div>
           </div>
@@ -2599,6 +2607,9 @@ async function clearCfProfiles() {
 // one at a time.
 
 const cfProfiles = ref<CfProfile[]>([]);
+// Folded by default: the list runs to a screenful, and the header's count and total size
+// are all there is to see on the way past
+const cfProfilesOpen = ref(false);
 const cfProfilesLoading = ref(false);
 const selectedProfiles = ref<string[]>([]);
 const newProfileName = ref("");
