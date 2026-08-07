@@ -39,6 +39,16 @@
         >
           <i class="fa-solid fa-arrow-down"></i>
         </button>
+        <!-- A step usually belongs somewhere in the middle; adding at the end and walking it
+             up is the same thing, several clicks longer -->
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm btn-icon"
+          :title="t('common.insertAfter')"
+          @click="insertAfter(i)"
+        >
+          <i class="fa-solid fa-plus"></i>
+        </button>
         <button type="button" class="btn btn-danger btn-sm btn-icon" @click="remove(i)">
           <i class="fa-solid fa-xmark"></i>
         </button>
@@ -653,6 +663,10 @@ function hintPlaceholder(type: WebStepType): string {
 
 function add() {
   props.steps.push(defaultWebStep());
+}
+
+function insertAfter(i: number) {
+  props.steps.splice(i + 1, 0, defaultWebStep());
 }
 
 function remove(i: number) {

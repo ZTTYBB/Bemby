@@ -285,6 +285,7 @@
                   </select>
                   <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === 0" @click="moveUp(i)"><i class="fa-solid fa-arrow-up"></i></button>
                   <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === customActions.length - 1" @click="moveDown(i)"><i class="fa-solid fa-arrow-down"></i></button>
+                  <button type="button" class="btn btn-ghost btn-sm btn-icon" :title="t('common.insertAfter')" @click="insertAction(i)"><i class="fa-solid fa-plus"></i></button>
                   <button type="button" class="btn btn-danger btn-sm btn-icon" @click="removeAction(i)"><i class="fa-solid fa-xmark"></i></button>
                 </div>
 
@@ -1488,6 +1489,8 @@ function defaultAction(): CustomActionForm {
 }
 
 function addAction() { customActions.value.push(defaultAction()); }
+/** Puts a new action straight after this one, rather than at the end to be walked up. */
+function insertAction(i: number) { customActions.value.splice(i + 1, 0, defaultAction()); }
 function removeAction(i: number) { customActions.value.splice(i, 1); }
 function moveUp(i: number) {
   if (i === 0) return;
