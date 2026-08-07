@@ -254,6 +254,12 @@ export type LoadOptions = {
    */
   miniApp?: boolean;
   /**
+   * Drop what the app itself kept in the profile before loading it, so the signed init data
+   * is the only account it can see. Mini App only, and Cloudflare's own cookies are left
+   * alone: the point is a fresh app session, not a fresh visitor.
+   */
+  clearAppSession?: boolean;
+  /**
    * Steps to run inside the Mini App, in order. Each entry is the visible text of a
    * control to press, or a placeholder: `{input}` solves an arithmetic captcha locally,
    * `{aiInput}` hands the question to `solveQuestion`, and `scroll(x, y)` moves the page
@@ -934,6 +940,89 @@ const WEBVIEW_PROXY_SHIM = `
     },
   };
 `;
+
+/**
+ * Cookies Cloudflare issues, which are the whole reason several accounts share a profile:
+ * the clearance is the exit's, not the account's, and dropping it buys a fresh challenge
+ * on every run for nothing.
+ */
+const CF_COOKIE_RE = /^(cf_clearance|__cf_bm|__cflb|cf_chl_)/;
+
+/** Would a request to `host` carry a cookie scoped to `domain`? The usual matching rule. */
+function cookieAppliesTo(host: string, domain: string): boolean {
+  const bare = domain.replace(/^\./, "").toLowerCase();
+  const h = host.toLowerCase();
+  return h === bare || h.endsWith(`.${bare}`);
+}
+
+/**
+ * Of everything in the jar, the cookies that speak for the account rather than for the exit:
+ * the app's own, and nothing belonging to another site or to Cloudflare.
+ */
+export function miniAppCookiesToDrop<T extends { name: string; domain: string }>(
+  host: string,
+  cookies: T[],
+): T[] {
+  return cookies.filter((c) => cookieAppliesTo(host, c.domain) && !CF_COOKIE_RE.test(c.name));
+}
+
+/**
+ * Wipes the account the Mini App remembers, leaving the exit's clearance in place.
+ *
+ * A signed URL names one account, but that is only what the app sees on a first visit. Most
+ * keep their own token afterwards -- localStorage, IndexedDB, a cookie of their own -- and
+ * read that in preference on the next load. In a profile shared by several accounts (`{ip}`
+ * with everything on one exit, above all) every run then lands on whoever signed in first,
+ * however carefully Telegram signed the init data. A Mini App has no other way in, so with
+ * nothing kept it must take the account it was handed.
+ *
+ * Scoped to the app's own origin, so nothing else in the profile is touched, and Cloudflare's
+ * cookies are left where they are: the clearance belongs to the exit, not to the account.
+ */
+async function clearMiniAppSession(page: Page, url: string): Promise<string | null> {
+  let origin: string;
+  let host: string;
+  try {
+    const parsed = new URL(url);
+    origin = parsed.origin;
+    host = parsed.hostname;
+  } catch {
+    return null; // not an address we can scope anything to
+  }
+
+  const cleared: string[] = [];
+  try {
+    // Where an app's token usually is. Service workers go too: one can hand back a cached
+    // response (or a stashed token) after everything else has been dropped.
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      await cdp.send("Storage.clearDataForOrigin", {
+        origin,
+        storageTypes: "local_storage,indexeddb,websql,cache_storage,service_workers",
+      });
+      cleared.push("site storage");
+    } finally {
+      await cdp.detach().catch(() => {});
+    }
+  } catch (err: any) {
+    // Without CDP the cookie pass below still does most of the work, so this is worth
+    // recording rather than failing the step over
+    cleared.push(`site storage failed (${err?.message ?? err})`);
+  }
+
+  try {
+    const context = page.context();
+    const drop = miniAppCookiesToDrop(host, await context.cookies());
+    for (const c of drop) {
+      await context.clearCookies({ name: c.name, domain: c.domain, path: c.path });
+    }
+    if (drop.length) cleared.push(`${drop.length} cookie(s)`);
+  } catch (err: any) {
+    cleared.push(`cookies failed (${err?.message ?? err})`);
+  }
+
+  return cleared.length ? `cleared for ${host}: ${cleared.join(", ")}` : null;
+}
 
 // Labels that clearly mean "check in", and the states that mean it is already done.
 // Deliberately narrow: only a control carrying such a label is pressed, so nothing
@@ -3263,6 +3352,11 @@ async function attemptLoad(
 
     if (opts.miniApp) {
       await page.addInitScript(WEBVIEW_PROXY_SHIM).catch(() => {});
+      // Before the app loads, so it has nothing to prefer over the account just signed for
+      if (opts.clearAppSession) {
+        const said = await clearMiniAppSession(page, url);
+        if (said) console.log(`[cf] app session ${said}`);
+      }
     }
 
     await page

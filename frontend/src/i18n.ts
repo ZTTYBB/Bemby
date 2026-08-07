@@ -779,6 +779,9 @@ const zh = {
       miniAppProxyHint: "浏览器（而非 Telegram）出口 IP，Cloudflare 会据此判断。默认跟随任务代理",
       labelMiniAppTryAll: "被拒时轮换所有可用代理",
       miniAppTryAllHint: "验证被拒绝时依次尝试代理列表中的其他代理（每次重新签名小程序链接）。同一次运行中每个代理只会尝试一次，重试会继续尝试尚未用过的代理（包括从代理商导入的）；关闭则只使用上面选定的代理",
+      labelKeepAppSession: "保留小程序上次的登录态",
+      keepAppSessionHint:
+        "默认不保留：打开页面前先清掉该小程序在此配置文件中存下的登录信息（localStorage、IndexedDB、自身 Cookie 与 Service Worker），只保留 Cloudflare 的 cf_clearance，让小程序只能认 Telegram 本次签名的账号。多个账号共用同一配置文件（如 {ip}）时，正是这份残留导致页面一直显示第一个登录的账号。仅当该小程序有值得保留的本地状态时才勾选 —— 勾选后同一配置文件下会重新出现串号",
     },
     web: {
       labelUrl: "网址",
@@ -2367,6 +2370,9 @@ const en: typeof zh = {
       miniAppProxyHint: "Exit IP the browser uses (not Telegram), which is what Cloudflare judges. Follows the job proxy by default",
       labelMiniAppTryAll: "Try every proxy when refused",
       miniAppTryAllHint: "Works through the rest of the proxy list when an exit is refused, re-signing the Mini App link each time. Each proxy is tried once per run, so a retry carries on into proxies not used yet (imported ones included). Off keeps to the proxy chosen above",
+      labelKeepAppSession: "Keep the app's login from last run",
+      keepAppSessionHint:
+        "Off by default: whatever the app stored in this profile -- localStorage, IndexedDB, its own cookies, service workers -- is dropped before the page loads, Cloudflare's cf_clearance excepted, so the app has nothing to go on but the account Telegram signed for this run. That leftover is exactly why several accounts sharing one profile (an {ip} name, above all) keep landing on whoever signed in first. Tick it only for an app whose local state is worth keeping, and expect the crossed account back",
     },
     web: {
       labelUrl: "URL",

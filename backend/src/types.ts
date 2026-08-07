@@ -202,6 +202,15 @@ export type CustomAction =
        * Blank takes the default from Settings.
        */
       profileId?: string;
+      /**
+       * Keep whatever the app itself stored in the profile last run. Off by default: the
+       * signed URL names this account, but an app that kept its own login in localStorage
+       * (or a cookie) reads that instead and shows whoever signed in first -- which is what
+       * several accounts sharing an `{ip}` profile all end up looking like. Cleared before
+       * the page loads, Cloudflare's own cookies excepted, so the app has nothing to go on
+       * but the init data. Tick this only for an app whose stored state is worth keeping.
+       */
+      keepAppSession?: boolean;
     }
   | {
       // Same as `open_mini_app`, but the address is given rather than hunted from a button
@@ -235,6 +244,15 @@ export type CustomAction =
        * Blank takes the default from Settings.
        */
       profileId?: string;
+      /**
+       * Keep whatever the app itself stored in the profile last run. Off by default: the
+       * signed URL names this account, but an app that kept its own login in localStorage
+       * (or a cookie) reads that instead and shows whoever signed in first -- which is what
+       * several accounts sharing an `{ip}` profile all end up looking like. Cleared before
+       * the page loads, Cloudflare's own cookies excepted, so the app has nothing to go on
+       * but the init data. Tick this only for an app whose stored state is worth keeping.
+       */
+      keepAppSession?: boolean;
     }
   | {
       // Open the Mini App a bot pins beside the composer -- the button at the bottom left
@@ -267,6 +285,15 @@ export type CustomAction =
        * Blank takes the default from Settings.
        */
       profileId?: string;
+      /**
+       * Keep whatever the app itself stored in the profile last run. Off by default: the
+       * signed URL names this account, but an app that kept its own login in localStorage
+       * (or a cookie) reads that instead and shows whoever signed in first -- which is what
+       * several accounts sharing an `{ip}` profile all end up looking like. Cleared before
+       * the page loads, Cloudflare's own cookies excepted, so the app has nothing to go on
+       * but the init data. Tick this only for an app whose stored state is worth keeping.
+       */
+      keepAppSession?: boolean;
     }
   | {
       // Open a plain web page in the installed browser, passing any Cloudflare challenge,

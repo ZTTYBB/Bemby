@@ -2475,6 +2475,9 @@ export async function runCustom(
 
                 const cf = await loadCheckinUrl(url, webProxyUrl, {
                   miniApp: true,
+                  // The signed URL names this account; anything the app kept from the last
+                  // run would speak for another one, so it goes unless asked for
+                  clearAppSession: !action.keepAppSession,
                   inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
                   maxWaitMs: budgetLeft,
                   profile: { template: action.profileId, vars: cfProfileVars(cfRun) },
@@ -2649,6 +2652,9 @@ export async function runCustom(
 
                 const cf = await loadCheckinUrl(url, webProxyUrl, {
                   miniApp: true,
+                  // The signed URL names this account; anything the app kept from the last
+                  // run would speak for another one, so it goes unless asked for
+                  clearAppSession: !action.keepAppSession,
                   inAppClicks: (action.appButtons ?? []).map((b) => b.trim()).filter(Boolean),
                   maxWaitMs: budgetLeft,
                   profile: { template: action.profileId, vars: cfProfileVars(cfRun) },

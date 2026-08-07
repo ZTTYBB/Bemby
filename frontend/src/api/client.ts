@@ -435,6 +435,11 @@ export type CustomAction =
        * {ip}, {jobId}, {templateId}, {tgId} and any text. Blank takes the Settings default.
        */
       profileId?: string;
+      /**
+       * Keep what the app itself stored in the profile last run. Off by default, so the
+       * signed init data is the only account the app can see.
+       */
+      keepAppSession?: boolean;
     }
   | {
       /** The Mini App a bot pins beside the composer, opened without naming an address. */
@@ -453,6 +458,11 @@ export type CustomAction =
        * {ip}, {jobId}, {templateId}, {tgId} and any text. Blank takes the Settings default.
        */
       profileId?: string;
+      /**
+       * Keep what the app itself stored in the profile last run. Off by default, so the
+       * signed init data is the only account the app can see.
+       */
+      keepAppSession?: boolean;
     }
   | {
       type: "open_mini_app";
@@ -473,6 +483,11 @@ export type CustomAction =
        * {ip}, {jobId}, {templateId}, {tgId} and any text. Blank takes the Settings default.
        */
       profileId?: string;
+      /**
+       * Keep what the app itself stored in the profile last run. Off by default, so the
+       * signed init data is the only account the app can see.
+       */
+      keepAppSession?: boolean;
     }
   | {
       type: "open_url";
