@@ -345,6 +345,7 @@ export type EmbywatchConfig = {
   sequencePlay?: boolean;
   library?: string;
   proxyId?: string;
+  ignoreSslErrors?: boolean;
 };
 
 export type Proxy = {
@@ -1072,6 +1073,7 @@ export const jobsApi = {
     password: string;
     userAgent?: string;
     proxyId?: string;
+    ignoreSslErrors?: boolean;
   }) =>
     api
       .post<{ ok: boolean; userName?: string; error?: string }>(

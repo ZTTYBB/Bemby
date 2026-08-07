@@ -156,4 +156,37 @@ describe('testEmbyConnection', () => {
     expect(MockProxyAgent).not.toHaveBeenCalled();
     expect((mockUndiciFetch.mock.calls[0][1] as any).dispatcher).toBeInstanceOf(MockAgent);
   });
+
+  it('uses a separate dispatcher when ignoreSslErrors is set', async () => {
+    mockAuthSuccess();
+
+    await testEmbyConnection('https://emby.example.com', creds);
+    await testEmbyConnection('https://emby.example.com', { ...creds, ignoreSslErrors: true });
+
+    const [secure, insecure] = mockUndiciFetch.mock.calls.map((c: any) => c[1].dispatcher);
+    expect(insecure).toBeInstanceOf(MockAgent);
+    expect(insecure).not.toBe(secure);
+  });
+
+  it('disables certificate checks on the tunnelled request when proxied', async () => {
+    vi.mocked(db.prepare).mockReturnValue({
+      get: vi.fn().mockImplementation((key: string) =>
+        key === 'proxies'
+          ? { value: JSON.stringify([{ id: 'p1', name: 'P', url: 'http://proxy.local:3128' }]) }
+          : undefined,
+      ),
+    } as any);
+    mockAuthSuccess();
+
+    await testEmbyConnection('https://emby.example.com', {
+      ...creds,
+      proxyId: 'p1',
+      ignoreSslErrors: true,
+    });
+
+    expect(MockProxyAgent).toHaveBeenCalledWith({
+      uri: 'http://proxy.local:3128',
+      requestTls: { rejectUnauthorized: false },
+    });
+  });
 });

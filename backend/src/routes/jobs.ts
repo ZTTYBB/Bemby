@@ -137,10 +137,10 @@ router.get("/", (req, res) => {
 
 // Verify Emby server reachability and credentials without creating a job
 router.post("/test-emby", async (req, res) => {
-  const { serverUrl, username, password, userAgent, proxyId } = req.body as Record<
-    string,
-    string | undefined
-  >;
+  const { serverUrl, username, password, userAgent, proxyId } =
+    req.body as Record<string, string | undefined>;
+  const ignoreSslErrors = (req.body as { ignoreSslErrors?: boolean })
+    .ignoreSslErrors;
   if (!serverUrl || !username || !password) {
     res
       .status(400)
@@ -158,6 +158,7 @@ router.post("/test-emby", async (req, res) => {
     password,
     userAgent,
     proxyId,
+    ignoreSslErrors: ignoreSslErrors === true,
   });
   res.json(result);
 });

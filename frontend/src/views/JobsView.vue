@@ -271,6 +271,13 @@
             />
           </div>
           <div class="form-group">
+            <label class="form-check">
+              <input v-model="embyCfg.ignoreSslErrors" type="checkbox" />
+              <span>{{ t('jobs.labelIgnoreSslErrors') }}</span>
+            </label>
+            <div style="font-size:11px;color:#aaa;margin-top:4px;padding-left:24px">{{ t('jobs.ignoreSslErrorsHint') }}</div>
+          </div>
+          <div class="form-group">
             <label class="form-label">{{ t('jobs.labelLibrary') }}</label>
             <input v-model.trim="embyCfg.library" class="form-input" type="text" :placeholder="t('jobs.libraryPlaceholder')" />
             <div style="font-size:11px;color:#aaa;margin-top:4px">{{ t('jobs.libraryHint') }}</div>
@@ -1363,7 +1370,7 @@ const extractSource = ref<Job | null>(null);
 const extractName = ref('');
 const extractError = ref('');
 const extractSaving = ref(false);
-const embyCfg = reactive<{ username: string; password: string; playDuration: number | string; userAgent: string; markWatched: boolean; verifyPlayable: boolean; realWatch: boolean; sequencePlay: boolean; library: string }>({
+const embyCfg = reactive<{ username: string; password: string; playDuration: number | string; userAgent: string; markWatched: boolean; verifyPlayable: boolean; realWatch: boolean; sequencePlay: boolean; library: string; ignoreSslErrors: boolean }>({
   username: '',
   password: '',
   playDuration: '',
@@ -1373,6 +1380,7 @@ const embyCfg = reactive<{ username: string; password: string; playDuration: num
   realWatch: false,
   sequencePlay: false,
   library: '',
+  ignoreSslErrors: false,
 });
 const embyUaDropdown = ref('');
 const embyServer = reactive<{ protocol: 'https' | 'http'; host: string; port: number | '' }>({
@@ -1499,7 +1507,7 @@ function onUaDropdownChange() {
 }
 
 function onJobTypeChange() {
-  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
+  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '', ignoreSslErrors: false });
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
   form.accountId = (form.jobType === 'checkin' || form.jobType === 'custom' || form.jobType === 'autoreg')
@@ -1578,7 +1586,7 @@ function applyTemplate(tpl: JobTemplate) {
         let c = JSON.parse(tpl.config) as EmbywatchConfig | string;
         if (typeof c === 'string') c = JSON.parse(c) as EmbywatchConfig;
         // username/password are job-specific; only apply playback settings from template
-        Object.assign(embyCfg, { playDuration: c.playDuration ?? '', userAgent: c.userAgent ?? '', markWatched: c.markWatched !== false, verifyPlayable: c.verifyPlayable !== false, realWatch: c.realWatch === true, sequencePlay: c.sequencePlay === true, library: c.library ?? '' });
+        Object.assign(embyCfg, { playDuration: c.playDuration ?? '', userAgent: c.userAgent ?? '', markWatched: c.markWatched !== false, verifyPlayable: c.verifyPlayable !== false, realWatch: c.realWatch === true, sequencePlay: c.sequencePlay === true, library: c.library ?? '', ignoreSslErrors: c.ignoreSslErrors === true });
         setUaState(c.userAgent ?? '');
       } catch { /* ignore */ }
     }
@@ -1633,7 +1641,7 @@ function applyTemplate(tpl: JobTemplate) {
     }
   } else if (tpl.jobType === 'autoreg') {
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '', ignoreSslErrors: false });
     customActions.value = [];
     Object.assign(autoregCfg, defaultAutoregCfg());
     if (tpl.config) {
@@ -1666,7 +1674,7 @@ function applyTemplate(tpl: JobTemplate) {
     }
   } else {
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '', ignoreSslErrors: false });
     customActions.value = [];
   }
 }
@@ -1791,7 +1799,7 @@ function openAdd() {
     runEveryDaysMax: null,
   });
   runEveryDaysText.value = '1';
-  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
+  Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '', ignoreSslErrors: false });
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
   customActions.value = [];
@@ -1850,19 +1858,20 @@ function openEdit(j: Job) {
           verifyPlayable: c.verifyPlayable !== false,
           realWatch: c.realWatch === true,
           sequencePlay: c.sequencePlay === true,
+          ignoreSslErrors: c.ignoreSslErrors === true,
           library: c.library ?? '',
         });
         setUaState(c.userAgent ?? '');
       } catch {
-        Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
+        Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '', ignoreSslErrors: false });
         embyUaDropdown.value = '';
       }
     } else {
-      Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
+      Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '', ignoreSslErrors: false });
       embyUaDropdown.value = '';
     }
   } else if (j.jobType === 'custom') {
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '', ignoreSslErrors: false });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     if (j.config) {
       try {
@@ -1927,7 +1936,7 @@ function openEdit(j: Job) {
       customJobMaxRetries.value = 1;
     }
   } else if (j.jobType === 'autoreg') {
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '', ignoreSslErrors: false });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     customActions.value = [];
     Object.assign(autoregCfg, defaultAutoregCfg());
@@ -1960,7 +1969,7 @@ function openEdit(j: Job) {
       } catch { /* ignore */ }
     }
   } else {
-    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '' });
+    Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '', ignoreSslErrors: false });
     Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
     customActions.value = [];
   }
@@ -2033,6 +2042,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
     cfg.verifyPlayable = embyCfg.verifyPlayable;
     cfg.realWatch = embyCfg.realWatch;
     cfg.sequencePlay = embyCfg.sequencePlay;
+    cfg.ignoreSslErrors = embyCfg.ignoreSslErrors;
     if (embyCfg.library) cfg.library = embyCfg.library;
     return cfg;
   }
@@ -2205,11 +2215,13 @@ async function saveJob() {
     if (form.jobType === 'embywatch') {
       let proxyId: string | undefined;
       let userAgent: string | undefined = embyCfg.userAgent || undefined;
+      let ignoreSslErrors = embyCfg.ignoreSslErrors;
       if (form.templateId && linkedTemplate.value?.config) {
         try {
-          const c = JSON.parse(linkedTemplate.value.config) as { proxyId?: string; userAgent?: string };
+          const c = JSON.parse(linkedTemplate.value.config) as { proxyId?: string; userAgent?: string; ignoreSslErrors?: boolean };
           proxyId = c.proxyId;
           userAgent = c.userAgent || undefined;
+          ignoreSslErrors = c.ignoreSslErrors === true;
         } catch { /* ignore bad template config */ }
       }
       const test = await jobsApi.testEmby({
@@ -2218,6 +2230,7 @@ async function saveJob() {
         password: embyCfg.password,
         ...(userAgent ? { userAgent } : {}),
         ...(proxyId ? { proxyId } : {}),
+        ...(ignoreSslErrors ? { ignoreSslErrors: true } : {}),
       });
       if (!test.ok) {
         formError.value = `${t('jobs.errors.embyVerifyFailed')}${test.error ? `: ${test.error}` : ''}`;

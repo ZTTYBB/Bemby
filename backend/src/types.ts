@@ -748,6 +748,11 @@ export type EmbywatchConfig = {
    * the user's library list. If it doesn't resolve, the whole server is used.
    */
   library?: string;
+  /**
+   * Skip TLS certificate verification for this server (self-signed or expired
+   * certificates). Only affects this job's requests. Defaults to false.
+   */
+  ignoreSslErrors?: boolean;
 };
 
 /**

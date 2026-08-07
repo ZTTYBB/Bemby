@@ -92,6 +92,7 @@ describe('POST /jobs/test-emby', () => {
       password: 'pass',
       userAgent: undefined,
       proxyId: undefined,
+      ignoreSslErrors: false,
     });
   });
 
@@ -109,7 +110,20 @@ describe('POST /jobs/test-emby', () => {
       password: 'pass',
       userAgent: 'MyPlayer/1.0',
       proxyId: 'p1',
+      ignoreSslErrors: false,
     });
+  });
+
+  it('passes ignoreSslErrors through to the verification', async () => {
+    vi.mocked(testEmbyConnection).mockResolvedValue({ ok: true });
+    const res = makeRes();
+
+    await handler({ body: { ...validBody, ignoreSslErrors: true } }, res);
+
+    expect(testEmbyConnection).toHaveBeenCalledWith(
+      'https://emby.example.com',
+      expect.objectContaining({ ignoreSslErrors: true }),
+    );
   });
 
   it('returns ok false with the failure reason when verification fails', async () => {
