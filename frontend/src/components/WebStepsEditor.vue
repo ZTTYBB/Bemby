@@ -44,7 +44,7 @@
         </button>
       </div>
 
-      <!-- CSS selector: every type but the AI ones and the plain delay -->
+      <!-- CSS selector: every type but the screenshot-driven AI ones and the plain delay -->
       <div
         v-if="
           s.type === 'web_input' ||
@@ -52,17 +52,82 @@
           s.type === 'web_wait_element' ||
           s.type === 'web_scroll_to' ||
           s.type === 'web_pick' ||
-          s.type === 'web_read'
+          s.type === 'web_collect' ||
+          s.type === 'web_read' ||
+          s.type === 'web_select' ||
+          s.type === 'web_press' ||
+          s.type === 'web_hold' ||
+          s.type === 'web_drag' ||
+          s.type === 'web_ai_input'
         "
       >
-        <label class="form-label">{{ t("jobs.web.labelSelector") }}</label>
+        <label class="form-label">{{
+          s.type === "web_drag" ? t("jobs.web.labelDragFrom") : t("jobs.web.labelSelector")
+        }}</label>
         <input
           v-model.trim="s.selector"
           class="form-input"
           :placeholder="t('jobs.web.selectorPlaceholder')"
         />
         <div style="font-size: 11px; color: #aaa; margin-top: 3px">
-          {{ t("jobs.web.selectorHint") }}
+          {{ s.type === "web_press" ? t("jobs.web.pressSelectorHint") : t("jobs.web.selectorHint") }}
+        </div>
+      </div>
+
+      <div v-if="s.type === 'web_hold'" style="margin-top: 8px">
+        <label class="form-label">{{ t("jobs.web.labelHoldMs") }}</label>
+        <input v-model.number="s.holdMs" class="form-input" type="number" min="0" step="500" />
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.holdHint") }}
+        </div>
+      </div>
+
+      <div v-if="s.type === 'web_drag'" style="margin-top: 8px">
+        <label class="form-label">{{ t("jobs.web.labelDragTo") }}</label>
+        <input
+          v-model.trim="s.toSelector"
+          class="form-input"
+          :placeholder="t('jobs.web.dragToPlaceholder')"
+        />
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.dragToHint") }}
+        </div>
+        <div v-if="!s.toSelector" class="form-row" style="margin-top: 8px">
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelDragX") }}</label>
+            <input v-model.number="s.dragX" class="form-input" type="number" step="10" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelDragY") }}</label>
+            <input v-model.number="s.dragY" class="form-input" type="number" step="10" />
+          </div>
+        </div>
+        <div class="form-group" style="margin-top: 8px">
+          <label class="form-label">{{ t("jobs.web.labelDragDuration") }}</label>
+          <input v-model.number="s.durationMs" class="form-input" type="number" min="0" step="100" />
+          <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+            {{ t("jobs.web.dragDurationHint") }}
+          </div>
+        </div>
+      </div>
+
+      <div v-if="s.type === 'web_press'" style="margin-top: 8px">
+        <label class="form-label">{{ t("jobs.web.labelKey") }}</label>
+        <input v-model.trim="s.key" class="form-input" :placeholder="t('jobs.web.keyPlaceholder')" />
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.keyHint") }}
+        </div>
+      </div>
+
+      <div v-if="s.type === 'web_select'" style="margin-top: 8px">
+        <label class="form-label">{{ t("jobs.web.labelOption") }}</label>
+        <input
+          v-model.trim="s.option"
+          class="form-input"
+          :placeholder="t('jobs.web.optionPlaceholder')"
+        />
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.optionHint") }}
         </div>
       </div>
 
@@ -87,10 +152,15 @@
         </div>
       </div>
 
-      <div v-if="s.type === 'web_pick' || s.type === 'web_read'" style="margin-top: 8px">
+      <div
+        v-if="s.type === 'web_pick' || s.type === 'web_collect' || s.type === 'web_read'"
+        style="margin-top: 8px"
+      >
         <div class="form-row">
           <div class="form-group">
-            <label class="form-label">{{ t("jobs.web.labelVarName") }}</label>
+            <label class="form-label">{{
+              s.type === "web_collect" ? t("jobs.web.labelListName") : t("jobs.web.labelVarName")
+            }}</label>
             <input
               v-model.trim="s.varName"
               class="form-input"
@@ -101,7 +171,7 @@
               "
             />
           </div>
-          <div v-if="s.type === 'web_pick'" class="form-group">
+          <div v-if="s.type !== 'web_read'" class="form-group">
             <label class="form-label">{{ t("jobs.web.labelAttribute") }}</label>
             <input
               v-model.trim="s.attribute"
@@ -115,11 +185,17 @@
           </div>
         </div>
         <div style="font-size: 11px; color: #aaa; margin-top: 3px">
-          {{ s.type === "web_read" ? t("jobs.web.readHint") : t("jobs.web.pickHint") }}
+          {{
+            s.type === "web_read"
+              ? t("jobs.web.readHint")
+              : s.type === "web_collect"
+                ? t("jobs.web.collectHint")
+                : t("jobs.web.pickHint")
+          }}
         </div>
       </div>
 
-      <div v-if="s.type === 'web_pick'" style="margin-top: 8px">
+      <div v-if="s.type === 'web_pick' || s.type === 'web_collect'" style="margin-top: 8px">
         <div class="form-group">
           <label class="form-label">{{ t("jobs.web.labelContainsText") }}</label>
           <input
@@ -143,7 +219,7 @@
               {{ t("jobs.web.patternHint") }}
             </div>
           </div>
-          <div class="form-group">
+          <div v-if="s.type === 'web_pick'" class="form-group">
             <label class="form-label">{{ t("jobs.web.labelChoose") }}</label>
             <select v-model="s.choose" class="form-select">
               <option value="first">{{ t("jobs.web.chooseFirst") }}</option>
@@ -151,6 +227,13 @@
             </select>
             <div style="font-size: 11px; color: #aaa; margin-top: 3px">
               {{ t("jobs.web.chooseHint") }}
+            </div>
+          </div>
+          <div v-else class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelLimit") }}</label>
+            <input v-model.number="s.limit" class="form-input" type="number" min="0" step="1" />
+            <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+              {{ t("jobs.web.limitHint") }}
             </div>
           </div>
         </div>
@@ -269,6 +352,52 @@
         </div>
       </div>
 
+      <div v-if="s.type === 'web_for_each'">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelForEachName") }}</label>
+            <input
+              v-model.trim="s.varName"
+              class="form-input"
+              :placeholder="t('jobs.web.varNamePlaceholder')"
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelMaxRounds") }}</label>
+            <input v-model.number="s.max" class="form-input" type="number" min="0" step="1" />
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.forEachHint") }}
+        </div>
+
+        <div style="margin-top: 8px">
+          <label class="form-label">{{ t("jobs.web.labelBetween") }}</label>
+          <input v-model.number="s.betweenMs" class="form-input" type="number" min="0" step="1000" />
+          <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+            {{ t("jobs.web.betweenHint") }}
+          </div>
+        </div>
+
+        <label class="form-checkbox-label" style="margin-top: 8px">
+          <input v-model="s.continueOnError" type="checkbox" />
+          {{ t("jobs.web.labelContinueOnError") }}
+        </label>
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.continueOnErrorHint") }}
+        </div>
+
+        <div class="web-loop-body">
+          <WebStepsEditor
+            :steps="s.steps"
+            :ai-key-missing="aiKeyMissing"
+            :depth="(depth ?? 0) + 1"
+            in-loop
+            role="loop"
+          />
+        </div>
+      </div>
+
       <div
         v-if="
           s.type === 'web_delay' ||
@@ -339,6 +468,38 @@
         />
         <div style="font-size: 11px; color: #aaa; margin-top: 3px">
           {{ t("jobs.web.aiTextHint") }}
+        </div>
+      </div>
+
+      <!-- AI writes into a field the config names: what to write, and how much of it -->
+      <div v-if="s.type === 'web_ai_input'" style="margin-top: 8px">
+        <label class="form-label">{{ t("jobs.web.labelWriteHint") }}</label>
+        <textarea
+          v-model="s.hint"
+          class="form-input"
+          rows="2"
+          style="resize: vertical"
+          :placeholder="t('jobs.web.writeHintPlaceholder')"
+        />
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.writeHintHint") }}
+        </div>
+        <div class="form-row" style="margin-top: 8px">
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelMaxChars") }}</label>
+            <input v-model.number="s.maxChars" class="form-input" type="number" min="0" step="100" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelWriteVarName") }}</label>
+            <input
+              v-model.trim="s.varName"
+              class="form-input"
+              :placeholder="t('jobs.web.writeVarNamePlaceholder')"
+            />
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.writeVarNameHint") }}
         </div>
       </div>
     </div>

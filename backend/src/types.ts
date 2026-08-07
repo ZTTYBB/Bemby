@@ -347,6 +347,12 @@ export type CustomAction =
  * goes stale, and a round that falls over does not cost the post it was working on. `web_pick`
  * leaves out what has already been replied to, both on earlier runs and earlier rounds of
  * this one, and `{name}` in any later field of the round stands for what it chose.
+ *
+ * `web_collect` and `web_for_each` are the other pair, for when the list is what matters
+ * rather than the page it came from: the collect reads every match into a name, and the loop
+ * runs its steps once per value, `{name}` standing for the one in hand. Reach for these when
+ * the round leaves the list page behind (open each post in turn), and for the `web_pick` pair
+ * when it does not.
  */
 export type WebStep =
   | {
@@ -491,6 +497,53 @@ export type WebStep =
     }
   | {
       /**
+       * Read every match off the page into a named list, for a `web_for_each` to work
+       * through. Unlike `web_pick` this is read once and kept, so the loop can leave the page
+       * it came from: collect the post ids on a forum's front page, then open each in turn.
+       */
+      type: "web_collect";
+      /** Matches every candidate, e.g. `.post-list-item a`. */
+      selector: string;
+      /** Name to hold the list under; `{name}` is the value in hand inside the loop. */
+      varName: string;
+      /** Attribute to read from each match, e.g. `href`. Blank reads the element's text. */
+      attribute?: string;
+      /**
+       * Regular expression narrowing each value down to the part worth keeping, e.g.
+       * `/post-(\d+)` against an href. Capture group 1 is kept when there is one, otherwise
+       * the whole match; a value the expression does not match is dropped.
+       */
+      pattern?: string;
+      /** Only keep candidates whose own text contains this. Case is ignored. */
+      containsText?: string;
+      /** Keep at most this many, in page order. Blank/0 keeps everything it found. */
+      limit?: number;
+      /**
+       * Leave out what this job has already been through, and remember each value once the
+       * round that had it finishes cleanly. Kept per job, the same store `web_pick` uses.
+       */
+      skipUsed?: boolean;
+    }
+  | {
+      /**
+       * Run the sub-steps once per value of a list a `web_collect` put together, `{name}`
+       * standing for the one in hand. A loop cannot go inside another loop, though it may go
+       * inside an `if`.
+       */
+      type: "web_for_each";
+      /** Name of the collected list to work through. */
+      varName: string;
+      /** Steps run per value, in order. */
+      steps?: WebStep[];
+      /** Stop after this many values. Blank/0 works through the whole list. */
+      max?: number;
+      /** Carry on with the next value when one round fails. Defaults to true. */
+      continueOnError?: boolean;
+      /** Wait between rounds, so the site is not hit as fast as the browser can go. */
+      betweenMs?: number;
+    }
+  | {
+      /**
        * Read text off the page and hold it under a name, written `{name}` in any later field
        * of the round -- an AI hint, most usefully, so the model is given the post it is
        * replying to as text rather than having to make it out in a screenshot.
@@ -518,6 +571,76 @@ export type WebStep =
       type: "web_back";
       /** How long to wait for the page to come back. Blank/0 waits 30s. */
       waitMs?: number;
+    }
+  | {
+      /**
+       * Hold the pointer down on something and let go after a while, which is what a
+       * "press and hold to verify" control wants. A plain click presses and releases in the
+       * same instant, so it never satisfies one.
+       */
+      type: "web_hold";
+      selector: string;
+      /** How long to keep it down. Blank/0 holds 1s. */
+      holdMs?: number;
+    }
+  | {
+      /**
+       * Press on something, drag it, and let go -- a slider puzzle's handle pulled to the
+       * right, or a piece dropped on its slot. The pointer is walked across in small moves
+       * with a slight arc rather than teleported, since an instant jump from one point to
+       * another is exactly what a slider check is watching for.
+       */
+      type: "web_drag";
+      /** What to take hold of. */
+      selector: string;
+      /** Where to drop it. Blank drags by the offset below instead. */
+      toSelector?: string;
+      /** Horizontal distance in pixels, when there is no drop target. May be negative. */
+      x?: number;
+      /** Vertical distance in pixels, when there is no drop target. May be negative. */
+      y?: number;
+      /** How long the drag itself takes. Blank/0 takes 600ms. */
+      durationMs?: number;
+    }
+  | {
+      /**
+       * Press a key, which is how a box that has no send button is sent: a comment field
+       * that takes Ctrl+Enter, a search box that takes Enter. With a selector the key goes to
+       * that element; without one it goes wherever the focus already is, which is the field
+       * the step before it typed into.
+       */
+      type: "web_press";
+      /** Key to press, Playwright's spelling: `Enter`, `Control+Enter`, `Escape`, `Tab`. */
+      key: string;
+      /** CSS selector to press it on. Blank presses wherever the focus is. */
+      selector?: string;
+    }
+  | {
+      /**
+       * Choose an option in a dropdown. A `<select>` is not a field that can be typed into,
+       * so `web_input` cannot work one.
+       */
+      type: "web_select";
+      selector: string;
+      /** The option's visible label, or its value. Whichever matches is used. */
+      option: string;
+    }
+  | {
+      /**
+       * AI writes what belongs in a field named by a CSS selector, and types it. The field is
+       * the caller's to name -- unlike `ai_web_input`, which has the model pick it off a
+       * screenshot -- so this is what a page whose reply box is known but whose wording is not
+       * wants: the hint says what to write, and `{name}` in it hands the model what a
+       * `web_read` put there, e.g. the post being replied to.
+       */
+      type: "web_ai_input";
+      selector: string;
+      /** What to write, e.g. "a short friendly reply to this post: {postText}". */
+      hint: string;
+      /** Cut the model's answer to this many characters. Blank/0 types all of it. */
+      maxChars?: number;
+      /** Hold what was written under this name too, for a later step to reuse. */
+      varName?: string;
     }
   | {
       /** AI reads a screenshot and decides which control to press. */

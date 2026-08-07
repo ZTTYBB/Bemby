@@ -18,18 +18,35 @@ export type WebStepForm = {
   url: string;
   varName: string;
   attribute: string;
-  /** web_pick: only consider candidates whose text contains this. */
+  /** web_pick / web_collect: only consider candidates whose text contains this. */
   containsText: string;
   pattern: string;
   choose: "first" | "random";
   skipUsed: boolean;
+  /** web_collect: keep at most this many values. 0 keeps the lot. */
+  limit: number;
   maxChars: number;
   times: number;
+  /** web_for_each: stop after this many values. 0 works through the whole list. */
+  max: number;
+  /** web_press: the key to press, e.g. `Enter` or `Control+Enter`. */
+  key: string;
+  /** web_select: the option to choose, by its label or its value. */
+  option: string;
+  /** web_hold: how long to keep the pointer down. */
+  holdMs: number;
+  /** web_drag: what to drop it on; blank drags by the offset below. */
+  toSelector: string;
+  /** web_drag: how far to drag when there is no drop target. */
+  dragX: number;
+  dragY: number;
+  /** web_drag: how long the drag itself takes. */
+  durationMs: number;
   continueOnError: boolean;
   betweenMs: number;
   check: "element" | "text" | "url";
   negate: boolean;
-  /** A `web_repeat`'s steps, or a `web_if`'s then branch; empty for every other type. */
+  /** A loop's steps, or a `web_if`'s then branch; empty for every other type. */
   steps: WebStepForm[];
   /** A `web_if`'s else branch. */
   elseSteps: WebStepForm[];
@@ -39,6 +56,10 @@ export type WebStepForm = {
 export const WEB_STEP_TYPES: WebStepType[] = [
   "web_input",
   "web_button",
+  "web_press",
+  "web_hold",
+  "web_drag",
+  "web_select",
   "web_wait_element",
   "web_delay",
   "web_scroll",
@@ -47,9 +68,12 @@ export const WEB_STEP_TYPES: WebStepType[] = [
   "web_goto",
   "web_back",
   "web_pick",
+  "web_collect",
   "web_read",
   "web_if",
   "web_repeat",
+  "web_for_each",
+  "web_ai_input",
   "ai_web_input",
   "ai_web_button",
   "ai_web_click_xy",
@@ -57,30 +81,28 @@ export const WEB_STEP_TYPES: WebStepType[] = [
 
 /** Types that need the vision model, so the editor can gate them on a configured key. */
 export const AI_WEB_STEP_TYPES: WebStepType[] = [
+  "web_ai_input",
   "ai_web_input",
   "ai_web_button",
   "ai_web_click_xy",
 ];
 
 /** Types that hold other steps, and so decide what may be offered inside them. */
-export const LOOP_WEB_STEP_TYPE: WebStepType = "web_repeat";
+export const LOOP_WEB_STEP_TYPES: WebStepType[] = ["web_repeat", "web_for_each"];
 export const BRANCH_WEB_STEP_TYPE: WebStepType = "web_if";
 
 /** Matches the backend: containers may not nest deeper than this. */
 export const MAX_WEB_STEP_DEPTH = 3;
 
 /**
- * What the editor may offer at this point in the nesting. A loop cannot go inside another
- * loop, though it may go inside a branch; nothing may go past the depth limit.
+ * What the editor may offer at this point in the nesting. Neither loop can go inside a loop,
+ * though both may go inside a branch; nothing may go past the depth limit.
  */
 export function offeredWebStepTypes(depth: number, inLoop: boolean): WebStepType[] {
   return WEB_STEP_TYPES.filter((ty) => {
-    if (ty === LOOP_WEB_STEP_TYPE && inLoop) return false;
-    if (
-      (ty === LOOP_WEB_STEP_TYPE || ty === BRANCH_WEB_STEP_TYPE) &&
-      depth >= MAX_WEB_STEP_DEPTH
-    )
-      return false;
+    const container = LOOP_WEB_STEP_TYPES.includes(ty) || ty === BRANCH_WEB_STEP_TYPE;
+    if (LOOP_WEB_STEP_TYPES.includes(ty) && inLoop) return false;
+    if (container && depth >= MAX_WEB_STEP_DEPTH) return false;
     return true;
   });
 }
@@ -101,8 +123,17 @@ export function defaultWebStep(): WebStepForm {
     pattern: "",
     choose: "first",
     skipUsed: true,
+    limit: 0,
     maxChars: 1000,
     times: 3,
+    max: 0,
+    key: "Enter",
+    option: "",
+    holdMs: 1000,
+    toSelector: "",
+    dragX: 260,
+    dragY: 0,
+    durationMs: 600,
     continueOnError: true,
     betweenMs: 45000,
     check: "element",
@@ -160,12 +191,57 @@ export function webStepToConfig(s: WebStepForm): WebStep {
         ...(s.choose === "random" ? { choose: "random" as const } : {}),
         ...(s.skipUsed ? { skipUsed: true } : {}),
       };
+    case "web_collect":
+      return {
+        type: "web_collect",
+        selector: s.selector.trim(),
+        varName: s.varName.trim(),
+        ...(s.attribute.trim() ? { attribute: s.attribute.trim() } : {}),
+        ...(s.containsText.trim() ? { containsText: s.containsText.trim() } : {}),
+        ...(s.pattern.trim() ? { pattern: s.pattern.trim() } : {}),
+        ...(s.limit > 0 ? { limit: s.limit } : {}),
+        ...(s.skipUsed ? { skipUsed: true } : {}),
+      };
     case "web_read":
       return {
         type: "web_read",
         selector: s.selector.trim(),
         varName: s.varName.trim(),
         ...(s.maxChars > 0 ? { maxChars: s.maxChars } : {}),
+      };
+    case "web_press":
+      return {
+        type: "web_press",
+        key: s.key.trim(),
+        ...(s.selector.trim() ? { selector: s.selector.trim() } : {}),
+      };
+    case "web_hold":
+      return {
+        type: "web_hold",
+        selector: s.selector.trim(),
+        ...(s.holdMs > 0 ? { holdMs: s.holdMs } : {}),
+      };
+    case "web_drag":
+      return {
+        type: "web_drag",
+        selector: s.selector.trim(),
+        ...(s.toSelector.trim()
+          ? { toSelector: s.toSelector.trim() }
+          : {
+              ...(s.dragX ? { x: s.dragX } : {}),
+              ...(s.dragY ? { y: s.dragY } : {}),
+            }),
+        ...(s.durationMs > 0 ? { durationMs: s.durationMs } : {}),
+      };
+    case "web_select":
+      return { type: "web_select", selector: s.selector.trim(), option: s.option.trim() };
+    case "web_ai_input":
+      return {
+        type: "web_ai_input",
+        selector: s.selector.trim(),
+        hint: s.hint.trim(),
+        ...(s.maxChars > 0 ? { maxChars: s.maxChars } : {}),
+        ...(s.varName.trim() ? { varName: s.varName.trim() } : {}),
       };
     case "web_if":
       return {
@@ -182,6 +258,15 @@ export function webStepToConfig(s: WebStepForm): WebStep {
         type: "web_repeat",
         times: s.times,
         ...(s.steps.length ? { steps: webStepsToConfig(s.steps) } : {}),
+        ...(s.continueOnError ? {} : { continueOnError: false }),
+        ...(s.betweenMs > 0 ? { betweenMs: s.betweenMs } : {}),
+      };
+    case "web_for_each":
+      return {
+        type: "web_for_each",
+        varName: s.varName.trim(),
+        ...(s.steps.length ? { steps: webStepsToConfig(s.steps) } : {}),
+        ...(s.max > 0 ? { max: s.max } : {}),
         ...(s.continueOnError ? {} : { continueOnError: false }),
         ...(s.betweenMs > 0 ? { betweenMs: s.betweenMs } : {}),
       };
@@ -236,6 +321,18 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
         choose: s.choose ?? "first",
         skipUsed: s.skipUsed ?? false,
       };
+    case "web_collect":
+      return {
+        ...base,
+        type: s.type,
+        selector: s.selector,
+        varName: s.varName,
+        attribute: s.attribute ?? "",
+        containsText: s.containsText ?? "",
+        pattern: s.pattern ?? "",
+        limit: s.limit ?? 0,
+        skipUsed: s.skipUsed ?? false,
+      };
     case "web_read":
       return {
         ...base,
@@ -243,6 +340,31 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
         selector: s.selector,
         varName: s.varName,
         maxChars: s.maxChars ?? 0,
+      };
+    case "web_press":
+      return { ...base, type: s.type, key: s.key, selector: s.selector ?? "" };
+    case "web_hold":
+      return { ...base, type: s.type, selector: s.selector, holdMs: s.holdMs ?? 1000 };
+    case "web_drag":
+      return {
+        ...base,
+        type: s.type,
+        selector: s.selector,
+        toSelector: s.toSelector ?? "",
+        dragX: s.x ?? 0,
+        dragY: s.y ?? 0,
+        durationMs: s.durationMs ?? 600,
+      };
+    case "web_select":
+      return { ...base, type: s.type, selector: s.selector, option: s.option };
+    case "web_ai_input":
+      return {
+        ...base,
+        type: s.type,
+        selector: s.selector,
+        hint: s.hint,
+        maxChars: s.maxChars ?? 0,
+        varName: s.varName ?? "",
       };
     case "web_if":
       return {
@@ -262,6 +384,16 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
         type: s.type,
         times: s.times,
         steps: webStepsFromConfig(s.steps),
+        continueOnError: s.continueOnError ?? true,
+        betweenMs: s.betweenMs ?? 0,
+      };
+    case "web_for_each":
+      return {
+        ...base,
+        type: s.type,
+        varName: s.varName,
+        steps: webStepsFromConfig(s.steps),
+        max: s.max ?? 0,
         continueOnError: s.continueOnError ?? true,
         betweenMs: s.betweenMs ?? 0,
       };

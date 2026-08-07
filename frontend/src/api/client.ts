@@ -538,17 +538,74 @@ export type WebStep =
       betweenMs?: number;
     }
   | {
+      type: "web_for_each";
+      /** Name of the collected list to work through. */
+      varName: string;
+      steps?: WebStep[];
+      /** Stop after this many values. Blank/0 works through the whole list. */
+      max?: number;
+      continueOnError?: boolean;
+      betweenMs?: number;
+    }
+  | {
       type: "web_pick";
       selector: string;
       varName: string;
       attribute?: string;
       pattern?: string;
+      /** Only consider candidates whose own text contains this. */
+      containsText?: string;
       choose?: "first" | "random";
+      skipUsed?: boolean;
+    }
+  | {
+      /** Read every match into a named list, for a `web_for_each` to work through. */
+      type: "web_collect";
+      selector: string;
+      varName: string;
+      attribute?: string;
+      pattern?: string;
+      containsText?: string;
+      /** Keep at most this many, in page order. Blank/0 keeps everything. */
+      limit?: number;
       skipUsed?: boolean;
     }
   | { type: "web_read"; selector: string; varName: string; maxChars?: number }
   | { type: "web_goto"; url: string; waitMs?: number }
   | { type: "web_back"; waitMs?: number }
+  | {
+      /** Hold the pointer down on something and let go after a while. */
+      type: "web_hold";
+      selector: string;
+      /** How long to keep it down. Blank/0 holds 1s. */
+      holdMs?: number;
+    }
+  | {
+      /** Press on something, drag it to a target or by a distance, and let go. */
+      type: "web_drag";
+      selector: string;
+      /** Where to drop it. Blank drags by the offset below instead. */
+      toSelector?: string;
+      x?: number;
+      y?: number;
+      /** How long the drag itself takes. Blank/0 takes 600ms. */
+      durationMs?: number;
+    }
+  | {
+      /** Press a key, e.g. to send a box that has no button. Blank selector uses the focus. */
+      type: "web_press";
+      key: string;
+      selector?: string;
+    }
+  | { type: "web_select"; selector: string; option: string }
+  | {
+      /** AI writes what belongs in the field this selector names, and types it. */
+      type: "web_ai_input";
+      selector: string;
+      hint: string;
+      maxChars?: number;
+      varName?: string;
+    }
   | { type: "ai_web_button"; hint?: string }
   | { type: "ai_web_click_xy"; hint?: string }
   | { type: "ai_web_input"; hint?: string; text?: string };

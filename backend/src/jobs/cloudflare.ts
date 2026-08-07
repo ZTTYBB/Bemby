@@ -496,8 +496,11 @@ async function launchAlignedBrowser(
  * page and dispatching real pointer events avoids the wait entirely, and is closer to what
  * a person does anyway.
  */
-async function clickElement(page: Page, selector: string): Promise<boolean> {
-  const box = await page
+async function elementCentre(
+  page: Page,
+  selector: string,
+): Promise<{ x: number; y: number } | null> {
+  return page
     .evaluate((sel: string) => {
       const el = document.querySelector(sel) as HTMLElement | null;
       if (!el) return null;
@@ -507,6 +510,48 @@ async function clickElement(page: Page, selector: string): Promise<boolean> {
       return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
     }, selector)
     .catch(() => null);
+}
+
+/**
+ * Walks the pointer from one point to another with the button already down, in small moves
+ * that start slow, run on, and ease off, with a slight arc across the line of travel.
+ *
+ * A slider check does not only look at where the handle ended up: it watches the moves that
+ * got it there, and a single jump -- or a constant speed in a dead straight line -- is what
+ * marks one out as not a hand. The arc is a couple of pixels, enough to be there and not
+ * enough to drag the handle off its rail.
+ */
+async function glideTo(
+  page: Page,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  durationMs: number,
+  deadline: number,
+): Promise<void> {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const span = Math.hypot(dx, dy);
+  const moves = Math.max(8, Math.min(40, Math.round(span / 12)));
+  const pause = Math.max(0, Math.round(durationMs / moves));
+  // Across the line of travel, so the arc bows off the path rather than along it
+  const arc = Math.min(3, span / 20);
+  const nx = span ? -dy / span : 0;
+  const ny = span ? dx / span : 0;
+
+  for (let i = 1; i <= moves; i++) {
+    const t = i / moves;
+    // Slow away, quick through the middle, slow into the target
+    const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+    const bow = Math.sin(t * Math.PI) * arc;
+    await page.mouse.move(from.x + dx * eased + nx * bow, from.y + dy * eased + ny * bow);
+    if (pause) await sleep(pause, deadline);
+  }
+  // Land exactly on the target, whatever the arc did on the way
+  await page.mouse.move(to.x, to.y);
+}
+
+async function clickElement(page: Page, selector: string): Promise<boolean> {
+  const box = await elementCentre(page, selector);
   if (!box) return false;
   // Approach then press, as a pointer would
   let failure: string | undefined;
@@ -2203,6 +2248,8 @@ type WebStepRun = {
   tune: ReturnType<typeof cfTuning>;
   /** What each name is holding for the round in progress. Cleared between rounds. */
   current: Map<string, string>;
+  /** Lists a `web_collect` put together, for a `web_for_each` to work through. */
+  lists: Map<string, string[]>;
   /** What a `web_pick` chose this round, for the loop to remember once the round is clean. */
   picked: Map<string, string>;
   /** `name value` for everything picked so far this run, so no two rounds coincide. */
@@ -2217,7 +2264,7 @@ type WebStepRun = {
   shots: number;
 };
 
-/** A hard ceiling on the candidates one `web_pick` reads off a page. */
+/** A hard ceiling on the candidates one `web_pick` or `web_collect` reads off a page. */
 const MAX_COLLECTED = 200;
 
 /** Characters of page text a `web_read` keeps when it is not told a length. */
@@ -2267,6 +2314,33 @@ export function keepMatchingText(
     );
   }
   return kept.map((c) => c.value);
+}
+
+/**
+ * Everything a selector matches, as what each element is worth and what it reads -- both raw.
+ * The text filter and the regular expression are far easier to get right in Node than
+ * serialised into the page, so this only reads. Shared by `web_pick` and `web_collect`.
+ */
+async function readCandidates(
+  page: Page,
+  selector: string,
+  attribute: string | undefined,
+): Promise<Array<{ value: string; text: string }>> {
+  return page
+    .evaluate(
+      (arg: { sel: string; attr: string; cap: number }) =>
+        Array.from(document.querySelectorAll(arg.sel))
+          .slice(0, arg.cap)
+          .map((el) => {
+            const value = arg.attr ? el.getAttribute(arg.attr) : (el as HTMLElement).innerText;
+            return {
+              value: (value ?? "").trim(),
+              text: ((el as HTMLElement).innerText ?? "").trim(),
+            };
+          }),
+      { sel: selector, attr: attribute?.trim() ?? "", cap: MAX_COLLECTED },
+    )
+    .catch(() => [] as Array<{ value: string; text: string }>);
 }
 
 export function narrowCollected(
@@ -2336,6 +2410,7 @@ export async function runWebSteps(
     hooks,
     tune: cfTuning(),
     current: new Map(),
+    lists: new Map(),
     picked: new Map(),
     taken: new Set(),
     remember: new Set(),
@@ -2390,7 +2465,8 @@ async function runStepList(
     let marked = false;
     // A loop or a branch only holds other steps: what it runs does the waiting and
     // capturing itself
-    const container = step.type === "web_repeat" || step.type === "web_if";
+    const container =
+      step.type === "web_repeat" || step.type === "web_for_each" || step.type === "web_if";
 
     // A challenge raised by the previous step (a login press is exactly what raises one)
     // leaves nothing of the site on screen for this one to act on
@@ -2495,26 +2571,7 @@ async function runStepList(
           const name = step.varName.trim();
           if (!name) throw new Error("no name given to hold the chosen value under");
 
-          // Each match comes back as what it is worth and what it reads, both raw: the text
-          // filter and the regular expression are far easier to get right in Node than
-          // serialised into the page
-          const collected = await page
-            .evaluate(
-              (arg: { sel: string; attr: string; cap: number }) =>
-                Array.from(document.querySelectorAll(arg.sel))
-                  .slice(0, arg.cap)
-                  .map((el) => {
-                    const value = arg.attr
-                      ? el.getAttribute(arg.attr)
-                      : (el as HTMLElement).innerText;
-                    return {
-                      value: (value ?? "").trim(),
-                      text: ((el as HTMLElement).innerText ?? "").trim(),
-                    };
-                  }),
-              { sel: selector, attr: step.attribute?.trim() ?? "", cap: MAX_COLLECTED },
-            )
-            .catch(() => [] as Array<{ value: string; text: string }>);
+          const collected = await readCandidates(page, selector, step.attribute);
 
           const raw = keepMatchingText(
             collected,
@@ -2566,6 +2623,120 @@ async function runStepList(
           log.outcome =
             `picked ${value} for {${name}}, out of ${values.length} to choose from` +
             (skipped ? ` (${skipped} of ${found} already used)` : "");
+          break;
+        }
+
+        case "web_collect": {
+          const selector = fillVars(step.selector, run.current).trim();
+          if (!selector) throw new Error("no CSS selector given");
+          const name = step.varName.trim();
+          if (!name) throw new Error("no name given to hold the list under");
+
+          const collected = await readCandidates(page, selector, step.attribute);
+          const raw = keepMatchingText(
+            collected,
+            fillVars(step.containsText ?? "", run.current).trim(),
+            selector,
+          );
+
+          // The loop marks a value used once the round holding it finishes cleanly, so what
+          // to remember is decided here and read there
+          if (step.skipUsed) run.remember.add(name);
+          else run.remember.delete(name);
+
+          const { values, found, skipped } = narrowCollected(raw, {
+            selector,
+            pattern: step.pattern,
+            used: step.skipUsed ? (hooks.usedValues?.(name) ?? []) : undefined,
+          });
+
+          const limit = Math.floor(step.limit || 0);
+          const kept = limit > 0 ? values.slice(0, limit) : values;
+          run.lists.set(name, kept);
+
+          // Nothing new is not a failure: it is what a job that has already been through
+          // everything on the page looks like, and the loop over it simply runs no rounds
+          log.outcome = kept.length
+            ? `collected ${kept.length} value(s) into {${name}}` +
+              (skipped ? ` (${skipped} of ${found} already used)` : "") +
+              (limit > 0 && values.length > limit ? `, capped at ${limit}` : "") +
+              `: ${kept.slice(0, 5).join(", ")}${kept.length > 5 ? " ..." : ""}`
+            : `nothing left to collect into {${name}}: all ${found} value(s) on the page have been used`;
+          break;
+        }
+
+        case "web_for_each": {
+          if (nest.inLoop) throw new Error("a loop cannot be put inside another loop");
+          if (nest.depth >= MAX_WEB_DEPTH)
+            throw new Error(`steps cannot be nested more than ${MAX_WEB_DEPTH} deep`);
+          const inner = step.steps ?? [];
+          if (!inner.length) throw new Error("the loop has no steps to run");
+          const name = step.varName.trim();
+          if (!name) throw new Error("no list name given to work through");
+          const list = run.lists.get(name);
+          if (!list)
+            throw new Error(
+              `nothing has been collected into {${name}} -- put a collect step before the loop`,
+            );
+
+          const max = Math.floor(step.max || 0);
+          const values = max > 0 ? list.slice(0, max) : list;
+          const carryOn = step.continueOnError ?? true;
+          const between = Math.max(0, step.betweenMs || 0);
+          let done = 0;
+          const failures: string[] = [];
+
+          for (let n = 1; n <= values.length; n++) {
+            if (msLeft(deadline) <= 0) {
+              failures.push(`ran out of time after ${done} of ${values.length}`);
+              break;
+            }
+            const value = values[n - 1];
+            // Each round starts clean but for the value it is on, so nothing a previous one
+            // read is still standing when this one fills a field in
+            run.current.clear();
+            run.picked.clear();
+            run.current.set(name, value);
+            run.picked.set(name, value);
+            run.round = `${n}/${values.length} ${value}`;
+            const roundFailure = await runStepList(page, inner, run, {
+              depth: nest.depth + 1,
+              inLoop: true,
+            });
+            const label = run.round;
+            run.round = undefined;
+
+            // A `web_pick` inside the round saying the page holds nothing new ends the loop,
+            // the same as it does in a repeat: the rounds after it have nothing to work on
+            if (run.exhausted) break;
+            if (roundFailure) {
+              failures.push(`${label}: ${roundFailure}`);
+              if (!carryOn) break;
+            } else {
+              done++;
+              // Only a clean round counts as used, the same rule the repeat loop follows: a
+              // round that fell over halfway may not have got as far as doing anything
+              for (const [pickedName, pickedValue] of run.picked)
+                if (run.remember.has(pickedName)) hooks.markUsed?.(pickedName, pickedValue);
+            }
+            if (between && n < values.length) await sleep(between, deadline);
+          }
+          run.current.clear();
+          run.picked.clear();
+
+          if (!values.length) {
+            log.outcome = `{${name}} holds nothing to work through`;
+            break;
+          }
+          const summary = `${done} of ${values.length} round(s) got through`;
+          if (run.exhausted) {
+            log.outcome = `${summary}; nothing left to pick`;
+            break;
+          }
+          if (!done) throw new Error(`${summary} (${failures[0] ?? "no round ran"})`);
+          log.outcome = failures.length
+            ? `${summary}; ${failures.length} failed (${failures[0]})`
+            : summary;
           break;
         }
 
@@ -2774,6 +2945,137 @@ async function runStepList(
           break;
         }
 
+        case "web_hold": {
+          const selector = fillVars(step.selector, run.current).trim();
+          if (!selector) throw new Error("no CSS selector given");
+          const at = await elementCentre(page, selector);
+          if (!at) throw new Error(`nothing matching \`${selector}\` is on the page`);
+          const ms = step.holdMs && step.holdMs > 0 ? step.holdMs : 1_000;
+
+          // Approach as a pointer would, then keep it down. The release is in a `finally`:
+          // a button left held would sit under every step that follows.
+          await page.mouse.move(at.x - 6, at.y + 4);
+          await page.mouse.move(at.x, at.y);
+          await page.mouse.down();
+          try {
+            await sleep(Math.min(ms, Math.max(0, msLeft(deadline))), deadline);
+          } finally {
+            await page.mouse.up().catch(() => {});
+          }
+          log.outcome = `held \`${selector}\` down for ${(ms / 1000).toFixed(1)}s`;
+          break;
+        }
+
+        case "web_drag": {
+          const selector = fillVars(step.selector, run.current).trim();
+          if (!selector) throw new Error("no CSS selector given");
+          const from = await elementCentre(page, selector);
+          if (!from) throw new Error(`nothing matching \`${selector}\` is on the page`);
+
+          const toSelector = fillVars(step.toSelector ?? "", run.current).trim();
+          let to: { x: number; y: number };
+          let where: string;
+          if (toSelector) {
+            const target = await elementCentre(page, toSelector);
+            if (!target) throw new Error(`nothing matching \`${toSelector}\` is on the page`);
+            to = target;
+            where = `onto \`${toSelector}\``;
+          } else {
+            const dx = Math.round(step.x || 0);
+            const dy = Math.round(step.y || 0);
+            if (!dx && !dy)
+              throw new Error("no drop target and no distance to drag were given");
+            to = { x: from.x + dx, y: from.y + dy };
+            where = `by ${dx},${dy}px`;
+          }
+
+          const ms = step.durationMs && step.durationMs > 0 ? step.durationMs : 600;
+          await page.mouse.move(from.x, from.y);
+          await page.mouse.down();
+          try {
+            await glideTo(page, from, to, ms, deadline);
+          } finally {
+            await page.mouse.up().catch(() => {});
+          }
+          log.outcome = `dragged \`${selector}\` ${where}`;
+          break;
+        }
+
+        case "web_press": {
+          const key = fillVars(step.key ?? "", run.current).trim();
+          if (!key) throw new Error("no key given to press");
+          const selector = fillVars(step.selector ?? "", run.current).trim();
+          const timeout = Math.max(1_000, capped(5_000, deadline));
+          let pressError: string | undefined;
+          if (selector) {
+            await page.press(selector, key, { timeout }).catch((err: any) => {
+              pressError = err?.message ?? String(err);
+            });
+          } else {
+            await page.keyboard.press(key).catch((err: any) => {
+              pressError = err?.message ?? String(err);
+            });
+          }
+          if (pressError)
+            throw new Error(
+              selector
+                ? `\`${key}\` could not be pressed on \`${selector}\` (${oneLine(pressError)})`
+                : `\`${key}\` could not be pressed (${oneLine(pressError)})`,
+            );
+          log.outcome = selector ? `pressed ${key} on \`${selector}\`` : `pressed ${key}`;
+          break;
+        }
+
+        case "web_select": {
+          const selector = fillVars(step.selector, run.current).trim();
+          if (!selector) throw new Error("no CSS selector given");
+          const option = fillVars(step.option ?? "", run.current).trim();
+          if (!option) throw new Error("no option given to choose");
+          const timeout = Math.max(1_000, capped(5_000, deadline));
+          const choose = (arg: { label: string } | { value: string }) =>
+            page.selectOption(selector, arg, { timeout }).catch(() => [] as string[]);
+          // A dropdown is written either way round -- the label is what a person reads, the
+          // value what the form sends -- so whichever of them matches is taken
+          let picked = await choose({ label: option });
+          if (!picked.length) picked = await choose({ value: option });
+          if (!picked.length)
+            throw new Error(`\`${selector}\` has no option reading "${option}"`);
+          log.outcome = `chose "${option}" in \`${selector}\``;
+          break;
+        }
+
+        case "web_ai_input": {
+          if (!hooks.aiLocate) throw new Error("no AI model is configured for this step");
+          const selector = fillVars(step.selector, run.current).trim();
+          if (!selector) throw new Error("no CSS selector given");
+          // The hint takes the round's values, so a reply can be asked for in terms of the
+          // post a `web_read` put in `{postText}` rather than left to a screenshot
+          const hint = fillVars(step.hint ?? "", run.current).trim();
+          if (!hint) throw new Error("nothing was said about what to write");
+
+          const shot = await screenshotOf(page, 60);
+          if (!shot) throw new Error("the page could not be captured for the AI");
+          const prompt = buildWebWritePrompt(hint);
+          log.aiPrompt = prompt;
+          const reply = await hooks.aiLocate(shot, prompt);
+          log.aiResponse = reply;
+
+          const written = parseWebAiText(reply ?? "");
+          if (!written)
+            throw new Error(`the AI wrote nothing usable (replied "${oneLine(reply)}")`);
+          const max = step.maxChars && step.maxChars > 0 ? step.maxChars : 0;
+          const typed = max > 0 ? written.slice(0, max) : written;
+          if (!(await typeInto(page, selector, typed)))
+            throw new Error(`nothing matching \`${selector}\` could be typed into`);
+          const holdAs = step.varName?.trim();
+          if (holdAs) run.current.set(holdAs, typed);
+          log.outcome =
+            `AI wrote ${typed.length} character(s) into \`${selector}\`` +
+            (holdAs ? ` and into {${holdAs}}` : "") +
+            `: ${oneLine(typed).slice(0, 120)}`;
+          break;
+        }
+
         case "ai_web_button":
         case "ai_web_input": {
           if (!hooks.aiLocate) throw new Error("no AI model is configured for this step");
@@ -2965,10 +3267,36 @@ function describeWebStep(step: WebStep, run: WebStepRun): string {
         `${step.containsText?.trim() ? ` reading "${fill(step.containsText.trim())}"` : ""}` +
         ` into {${step.varName}}`
       );
+    case "web_collect":
+      return (
+        `Collect every \`${fill(step.selector)}\`` +
+        `${step.attribute?.trim() ? ` [${step.attribute.trim()}]` : ""}` +
+        `${step.containsText?.trim() ? ` reading "${fill(step.containsText.trim())}"` : ""}` +
+        ` into {${step.varName}}`
+      );
     case "web_read":
       return `Read \`${fill(step.selector)}\` into {${step.varName}}`;
     case "web_repeat":
       return `Repeat ${step.steps?.length ?? 0} step(s) ${Math.floor(step.times || 0)} time(s)`;
+    case "web_for_each":
+      return `For each {${step.varName}}, run ${step.steps?.length ?? 0} step(s)`;
+    case "web_hold":
+      return `Press and hold \`${fill(step.selector)}\``;
+    case "web_drag":
+      return (
+        `Drag \`${fill(step.selector)}\` ` +
+        (step.toSelector?.trim()
+          ? `onto \`${fill(step.toSelector)}\``
+          : `by ${Math.round(step.x || 0)},${Math.round(step.y || 0)}px`)
+      );
+    case "web_press":
+      return (
+        `Press ${step.key}` + (step.selector?.trim() ? ` on \`${fill(step.selector)}\`` : "")
+      );
+    case "web_select":
+      return `Choose "${fill(step.option ?? "")}" in \`${fill(step.selector)}\``;
+    case "web_ai_input":
+      return `AI writes into \`${fill(step.selector)}\`${step.hint?.trim() ? ` (${step.hint.trim()})` : ""}`;
     case "web_if": {
       const what =
         step.check === "element"
@@ -2987,6 +3315,44 @@ function describeWebStep(step: WebStep, run: WebStepRun): string {
     case "ai_web_click_xy":
       return `AI clicks a position${step.hint?.trim() ? ` (${step.hint.trim()})` : ""}`;
   }
+}
+
+/**
+ * What to write, for a `web_ai_input`. The field is already named by a selector, so nothing
+ * has to be found on the screenshot -- it is there for context, as what the page looks like
+ * says a good deal about the register a reply should be in.
+ */
+export function buildWebWritePrompt(hint: string): string {
+  return [
+    "The screenshot is a web page. Write the text that belongs in one of its fields.",
+    "",
+    `What to write: ${hint}`,
+    "",
+    'Reply with ONLY a JSON object: {"text": "<what to write>"}. Write it as the person using',
+    "this page would: no quotes around it, no preamble, no explanation of your answer, and",
+    "nothing that reads as though a machine wrote it. No code fences.",
+  ].join("\n");
+}
+
+/**
+ * Pulls the written text out of the model's reply. The JSON object asked for is the good
+ * case; a model that simply writes the sentence back is just as usable, so a plain reply is
+ * taken as it stands once any code fence around it is off.
+ */
+export function parseWebAiText(reply: string): string {
+  const obj = /\{[\s\S]*\}/.exec(reply);
+  if (obj) {
+    try {
+      const parsed = JSON.parse(obj[0]) as { text?: unknown };
+      if (typeof parsed.text === "string" && parsed.text.trim()) return parsed.text.trim();
+    } catch {
+      // fall through: a reply that is not JSON is still an answer
+    }
+  }
+  return reply
+    .replace(/^\s*```[a-z]*\s*/i, "")
+    .replace(/```\s*$/, "")
+    .trim();
 }
 
 function buildWebAiPrompt(
