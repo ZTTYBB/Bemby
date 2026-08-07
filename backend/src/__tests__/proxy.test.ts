@@ -82,6 +82,20 @@ function makeAccount(): TgAccount {
 
 const stubLog = { attempt: 1, commandSent: '/start', hasMedia: false, commandResponseHtml: '', availableButtons: [] };
 
+/** Template 42 carries `tpl-px`; both it and `job-px` are known proxies. */
+function mockTemplateProxy() {
+  vi.mocked(db.prepare).mockImplementation((sql: string) => ({
+    get: vi.fn().mockImplementation(() => {
+      if (sql.includes('job_templates')) return { config: JSON.stringify({ proxyId: 'tpl-px' }) };
+      // settings lookup
+      return { value: JSON.stringify([
+        { id: 'tpl-px', name: 'Template proxy', url: 'socks5://tpl.proxy:1080' },
+        { id: 'job-px', name: 'Job proxy', url: 'socks5://job.proxy:1080' },
+      ]) };
+    }),
+  } as any));
+}
+
 beforeEach(() => vi.clearAllMocks());
 
 describe('runJob proxy resolution — checkin', () => {
@@ -115,23 +129,25 @@ describe('runJob proxy resolution — checkin', () => {
 
   it('keeps Telegram off a template proxy, handing it to the browser instead', async () => {
     vi.mocked(runCheckin).mockResolvedValue(stubLog as any);
+    mockTemplateProxy();
 
-    vi.mocked(db.prepare).mockImplementation((sql: string) => ({
-      get: vi.fn().mockImplementation(() => {
-        if (sql.includes('job_templates')) return { config: JSON.stringify({ proxyId: 'tpl-px' }) };
-        // settings lookup
-        return { value: JSON.stringify([
-          { id: 'tpl-px', name: 'Template proxy', url: 'socks5://tpl.proxy:1080' },
-          { id: 'job-px', name: 'Job proxy', url: 'socks5://job.proxy:1080' },
-        ]) };
-      }),
-    } as any));
+    const job = makeCheckinJob({ templateId: 42 });
+    await runJob(job, makeAccount());
+
+    expect(vi.mocked(runCheckin).mock.calls[0][10]).toBeUndefined();
+    expect(vi.mocked(runCheckin).mock.calls[0][14]).toBe('socks5://tpl.proxy:1080');
+  });
+
+  // A template-linked job may pick its own exit; the template is only the fallback
+  it('lets the job config proxy override the template proxy', async () => {
+    vi.mocked(runCheckin).mockResolvedValue(stubLog as any);
+    mockTemplateProxy();
 
     const job = makeCheckinJob({ templateId: 42, config: JSON.stringify({ proxyId: 'job-px' }) });
     await runJob(job, makeAccount());
 
     expect(vi.mocked(runCheckin).mock.calls[0][10]).toBeUndefined();
-    expect(vi.mocked(runCheckin).mock.calls[0][14]).toBe('socks5://tpl.proxy:1080');
+    expect(vi.mocked(runCheckin).mock.calls[0][14]).toBe('socks5://job.proxy:1080');
   });
 
   it('does not pass a TgProxy when the account proxy URL is HTTP (not SOCKS)', async () => {

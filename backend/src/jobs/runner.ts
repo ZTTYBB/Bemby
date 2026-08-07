@@ -31,7 +31,10 @@ function proxyUrlById(proxyId: string | null | undefined): string | undefined {
   }
 }
 
-/** The proxy id a job or its template carries, if any. */
+/**
+ * The proxy id a job or its template carries, if any. The job's own config wins, so a
+ * template-linked job can pick its own exit; with none set it follows the template.
+ */
 function configProxyId(
   jobConfig: string | null,
   templateId: number | null | undefined,
@@ -47,14 +50,12 @@ function configProxyId(
     }
   };
 
-  let fromTemplate: string | undefined;
-  if (templateId) {
-    const row = db
-      .prepare("SELECT config FROM job_templates WHERE id = ?")
-      .get(templateId) as { config: string | null } | undefined;
-    fromTemplate = readProxyId(row?.config);
-  }
-  return fromTemplate ?? readProxyId(jobConfig);
+  const fromJob = readProxyId(jobConfig);
+  if (fromJob || !templateId) return fromJob;
+  const row = db
+    .prepare("SELECT config FROM job_templates WHERE id = ?")
+    .get(templateId) as { config: string | null } | undefined;
+  return readProxyId(row?.config);
 }
 
 /**

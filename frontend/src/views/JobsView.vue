@@ -175,6 +175,16 @@
           </div>
         </div>
 
+        <!-- Proxy override: this job's own exit, or the template's when left blank -->
+        <div v-if="form.templateId && proxiesList.length" class="form-group">
+          <label class="form-label">{{ t('jobs.labelProxy') }}</label>
+          <select v-model="jobProxyId" class="form-select">
+            <option value="">{{ t('jobs.proxyFollowTemplate') }}{{ templateProxyName ? ` (${templateProxyName})` : '' }}</option>
+            <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
+          </select>
+          <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.proxyBrowserOnlyHint') }}</div>
+        </div>
+
         <!-- Name + Type (no template) | Name + Account (template, checkin/custom) -->
         <div class="form-row">
           <div class="form-group">
@@ -1350,6 +1360,31 @@ const form = reactive({
 
 const linkedTemplate = computed(() => templates.value.find(t => t.id === form.templateId) ?? null);
 
+// Proxy override for a template-linked job: blank follows the template's own choice
+const jobProxyId = ref('');
+
+/** The proxy id stored in a job or template config, '' when there is none. */
+function readConfigProxyId(raw: string | null | undefined): string {
+  if (!raw) return '';
+  try {
+    let c = JSON.parse(raw) as { proxyId?: string } | string;
+    if (typeof c === 'string') c = JSON.parse(c) as { proxyId?: string };
+    return typeof c?.proxyId === 'string' ? c.proxyId : '';
+  } catch { return ''; }
+}
+
+// Named in the "follow template" option so the inherited exit is visible without
+// opening the template
+const templateProxyName = computed(() => {
+  const id = readConfigProxyId(linkedTemplate.value?.config);
+  return id ? (proxiesList.value.find(p => p.id === id)?.name ?? id) : '';
+});
+
+/** Config fragment carrying this job's proxy override, empty when it follows the template. */
+function proxyOverride(): { proxyId?: string } {
+  return form.templateId && jobProxyId.value ? { proxyId: jobProxyId.value } : {};
+}
+
 // "Run every days" accepts a single number (7) or a range (7-15). The range is
 // stored as runEveryDays (min) + runEveryDaysMax; the scheduler picks a random
 // value in the range each cycle.
@@ -1522,6 +1557,7 @@ function onJobTypeChange() {
   btnAiHint.value = '';
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
+  jobProxyId.value = '';
   setCmdState(''); setBtnState('');
 }
 
@@ -1681,6 +1717,7 @@ function applyTemplate(tpl: JobTemplate) {
 
 function onTemplateChange() {
   const tpl = linkedTemplate.value;
+  jobProxyId.value = '';
   if (!tpl) return;
   applyTemplate(tpl);
   // accountId is job-specific — never reset it when a template is assigned
@@ -1806,6 +1843,7 @@ function openAdd() {
   Object.assign(autoregCfg, defaultAutoregCfg());
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
+  jobProxyId.value = '';
   setCmdState(''); setBtnState('');
   formError.value = '';
   showForm.value = true;
@@ -1814,6 +1852,7 @@ function openAdd() {
 function openEdit(j: Job) {
   void loadSettings();
   editTarget.value = j;
+  jobProxyId.value = j.templateId ? readConfigProxyId(j.config) : '';
   Object.assign(form, {
     name: j.name, accountId: j.accountId, jobType: j.jobType,
     botUsername: j.botUsername, scheduleWindowStart: j.scheduleWindowStart,
@@ -1998,10 +2037,13 @@ function handleEmbyHostPaste(event: ClipboardEvent) {
   if (portStr) embyServer.port = Number(portStr);
 }
 
-function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | CheckinConfig | null {
+function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | CheckinConfig | { proxyId: string } | null {
   if (form.jobType === 'autoreg') {
-    // Template-linked jobs take their whole config from the template
-    if (form.templateId) return null;
+    // Template-linked jobs take their whole config from the template, bar a proxy override
+    if (form.templateId) {
+      const override = proxyOverride();
+      return override.proxyId ? { proxyId: override.proxyId } : null;
+    }
     const cfg: AutoregConfig = {
       groupId: autoregCfg.groupId,
       codePrefix: autoregCfg.codePrefix,
@@ -2032,8 +2074,8 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
   }
   if (form.jobType === 'embywatch') {
     if (form.templateId) {
-      // Template provides all settings; job only stores credentials
-      return { username: embyCfg.username, password: embyCfg.password } as EmbywatchConfig;
+      // Template provides all settings; job only stores credentials and any proxy override
+      return { username: embyCfg.username, password: embyCfg.password, ...proxyOverride() } as EmbywatchConfig;
     }
     const cfg: EmbywatchConfig = { username: embyCfg.username, password: embyCfg.password };
     if (embyCfg.playDuration !== '') cfg.playDuration = Number(embyCfg.playDuration as string | number);
@@ -2170,13 +2212,18 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
       }),
     };
     if (customJobMaxRetries.value > 1) cfg.maxRetries = customJobMaxRetries.value;
+    Object.assign(cfg, proxyOverride());
     return cfg;
   }
   if (form.jobType === 'checkin') {
     const s = checkinSuccessContains.value.trim();
     const f = checkinFailContains.value.trim();
-    if (s || f)
-      return { ...(s ? { successContains: s } : {}), ...(f ? { failContains: f } : {}) };
+    const cfg: CheckinConfig = {
+      ...(s ? { successContains: s } : {}),
+      ...(f ? { failContains: f } : {}),
+      ...proxyOverride(),
+    };
+    if (Object.keys(cfg).length) return cfg;
   }
   return null;
 }
@@ -2224,6 +2271,8 @@ async function saveJob() {
           ignoreSslErrors = c.ignoreSslErrors === true;
         } catch { /* ignore bad template config */ }
       }
+      // The job's own exit, when it overrides the template's
+      proxyId = proxyOverride().proxyId ?? proxyId;
       const test = await jobsApi.testEmby({
         serverUrl: form.botUsername,
         username: embyCfg.username,

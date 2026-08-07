@@ -76,6 +76,7 @@ Bemby可签到市面上所有的服（需要正确配置）。无论是TG内，�
 - **TG 通知** — 在设置中填入 BotFather 提供的机器人 Token 与默认目标（Chat ID 或频道 @名称）及触发时机（失败/成功），任务结束后由该机器人发送通知，不依赖任务账号是否已登录；可"查找会话"从机器人最近的对话中直接选取 Chat ID，并可发送测试通知验证整条链路；支持发送到群组中的指定话题（Topic）：在会话后加上话题 ID，如 `-1001234567890/12`、`@群组名/12`，或直接粘贴复制的话题链接；未配置 Token 时沿用旧方式：由任务关联账号发送（**已弃用**，将在后续版本中移除，请尽早改用机器人 Token）
 - **停止运行中的任务** — 可在日志列表中随时中止正在执行的任务
 - **复制任务 / 复制模板** — 在任务列表或模板列表中一键复制为新任务/新模板
+- **任务级代理覆盖** — 由模板创建的任务可单独选择代理：下拉默认为"跟随模板代理设置"（并显示模板当前使用的代理名称），选定其它代理后仅该任务改用自己的出口。代理仍只作用于浏览器侧（Cloudflare 验证 / 小程序），Telegram 连接始终跟随账户代理
 - **任务筛选与搜索** — 任务列表支持按账号、机器人/网址筛选，并可按名称搜索；账号、任务、日志、模板列表均为服务端分页与筛选，支持大数据量浏览，账户与模板支持搜索框（模板为模糊匹配），日志支持按状态筛选
 - **批量运行任务** — 勾选多个任务后点击"运行 (N)"，按顺序依次执行，支持自定义任务间延迟（默认 70 秒）
 - **批量修改时间窗口** — 勾选多个任务后可一键将其时间窗口批量设置为相同的开始/结束时间
@@ -423,6 +424,7 @@ A self-hosted automation tool for managing daily Telegram bot check-ins (签到)
 - **TG notifications** — set a bot token from BotFather plus a default target (chat ID, or a channel's @name) and trigger events (failed / success) in Settings; the bot sends when a job finishes, so notifications no longer depend on the job's account being authenticated. **Find chats** reads the chat IDs the bot has heard from lately so you can pick one, and **Send test** proves the whole path. A forum group can be narrowed to one topic by appending its topic id to the chat (`-1001234567890/12`, `@groupname/12`, or a pasted topic link). With no token set, the old sender still applies — the linked account sends to the configured target, falling back to Saved Messages — but it is **deprecated and will be removed in a future release**, so set a token
 - **Stop running jobs** — cancel an in-progress job directly from the log list
 - **Duplicate job / template** — copy any existing job or template into a new one with one click from its list
+- **Per-job proxy override** — a job created from a template can pick a proxy of its own: the dropdown defaults to *Follow template proxy setting* (naming the proxy the template uses), and picking another exit applies to that one job. The proxy still covers the browser side only (Cloudflare checks / Mini Apps); the Telegram connection always follows the account's proxy
 - **Job filters and search** — filter the jobs list by account or by bot / URL, and search by name; Accounts, Jobs, Logs, and Templates all use server-side pagination and filtering to handle large datasets, with search boxes on Accounts and Templates (fuzzy-matched on Templates) and a status filter on Logs
 - **Bulk run jobs** — select multiple jobs and run them sequentially with a configurable delay between each (default 70 s)
 - **Bulk change time window** — select multiple jobs and set them all to the same start/end window in one action
