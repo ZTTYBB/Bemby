@@ -608,6 +608,9 @@
       <div class="modal">
         <h3 class="modal-title">
           {{ t(editTarget ? "accounts.editTitle" : "accounts.addTitle") }}
+          <span v-if="editTarget" class="modal-title-ids" :title="t('common.dbIdsHint')">{{
+            `{tgId} ${editTarget.id}`
+          }}</span>
         </h3>
 
         <!-- Tabs: only shown when editing an authenticated account -->

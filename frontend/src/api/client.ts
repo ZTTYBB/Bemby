@@ -1443,6 +1443,14 @@ export const settingsApi = {
     api
       .post<{ ok: boolean; profiles?: CfProfile[] }>("/settings/cf-solver/profiles", { name })
       .then((r) => r.data),
+  /** Moves a profile to another name, keeping its cookies, storage and device. */
+  renameCfProfile: (from: string, to: string) =>
+    api
+      .post<{ ok: boolean; profiles?: CfProfile[] }>("/settings/cf-solver/profiles/rename", {
+        from,
+        to,
+      })
+      .then((r) => r.data),
   deleteCfProfiles: (names: string[]) =>
     api
       .post<CfProfileDeleteResult>("/settings/cf-solver/profiles/delete", { names })

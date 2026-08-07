@@ -135,7 +135,10 @@
     <!-- Add / Edit modal -->
     <div v-if="showForm" class="modal-backdrop">
       <div class="modal" style="width:560px">
-        <h3 class="modal-title">{{ t(editTarget ? 'jobs.editTitle' : 'jobs.addTitle') }}</h3>
+        <h3 class="modal-title">
+          {{ t(editTarget ? 'jobs.editTitle' : 'jobs.addTitle') }}
+          <span v-if="profileVarIds" class="modal-title-ids" :title="t('common.dbIdsHint')">{{ profileVarIds }}</span>
+        </h3>
         <div class="modal-body">
         <div v-if="formError" class="error-msg">{{ formError }}</div>
 
@@ -1424,6 +1427,20 @@ function defaultAutoregCfg(): AutoregCfgForm {
   };
 }
 const autoregCfg = reactive<AutoregCfgForm>(defaultAutoregCfg());
+/**
+ * The database ids a browser profile name is built from, shown beside the panel title: with
+ * `{ip}-{jobId}` in the profile field, this is what the run's profile will be called. The
+ * template and account are read off the form rather than off the saved job, so changing
+ * either here says at once which profile the job moves to.
+ */
+const profileVarIds = computed(() => {
+  const parts: string[] = [];
+  if (editTarget.value) parts.push(`{jobId} ${editTarget.value.id}`);
+  if (form.templateId) parts.push(`{templateId} ${form.templateId}`);
+  if (form.accountId) parts.push(`{tgId} ${form.accountId}`);
+  return parts.join(' · ');
+});
+
 const formError = ref('');
 const saving = ref(false);
 const aiKeyMissing = computed(() => settings.value?.ai_key_configured !== 'true');

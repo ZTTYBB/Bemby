@@ -39,6 +39,7 @@ import {
   createCfProfile,
   deleteCfProfiles,
   listCfProfiles,
+  renameCfProfile,
   CF_BROWSER_LANG_KEY,
   CF_PROFILE_ID_KEY,
   CF_PROFILE_NAME_RE,
@@ -518,6 +519,18 @@ router.post("/cf-solver/profiles", (req, res) => {
     return;
   }
   res.status(201).json({ ok: true, profiles: listCfProfiles() });
+});
+
+// POST /cf-solver/profiles/rename -- move a profile to another name, session and device
+// intact. How a jar built up under a pooled name is put somewhere a job can target by name.
+router.post("/cf-solver/profiles/rename", (req, res) => {
+  const { from, to } = req.body as { from?: string; to?: string };
+  const result = renameCfProfile(String(from ?? ""), String(to ?? ""));
+  if (!result.ok) {
+    res.status(400).json({ ok: false, error: result.error });
+    return;
+  }
+  res.json({ ok: true, profiles: listCfProfiles() });
 });
 
 // POST /cf-solver/profiles/delete -- remove the named profiles. A body rather than DELETE

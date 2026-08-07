@@ -24,6 +24,7 @@ import {
   createCfProfile,
   deleteCfProfiles,
   listCfProfiles,
+  renameCfProfile,
   cfProfilesRoot,
 } from "../jobs/cfBrowser";
 import { exportCfProfiles, importCfProfiles } from "../jobs/cfProfileArchive";
@@ -195,5 +196,67 @@ describe("export / import round trip", () => {
     expect(result.error).toBeTruthy();
     // Nothing left behind: no staging directory, no partial profile
     expect(listCfProfiles()).toEqual([]);
+  });
+});
+
+// The name is what a job's profile field resolves to, so renaming is how the session one job
+// built up is handed to another: `direct-104` becomes `direct-105` and job 105 picks it up
+// already signed in. What must survive the move is everything that makes the site treat the
+// browser as the same returning visitor -- the cookies, and the device they were issued to.
+describe("renameCfProfile", () => {
+  it("moves a job's session to another job's profile name", () => {
+    seedProfile("direct-104", { used: true });
+    expect(renameCfProfile("direct-104", "direct-105")).toEqual({ ok: true });
+
+    expect(namesOf(listCfProfiles())).toEqual(["direct-105"]);
+    expect(existsSync(path.join(profiles(), "direct-104"))).toBe(false);
+    // The jar came with it, which is the whole point
+    expect(readFileSync(path.join(profiles(), "direct-105", "Default", "Cookies"), "utf8")).toBe(
+      "cf_clearance=abc",
+    );
+  });
+
+  it("pins the device to the old name, so the session comes back on the same machine", () => {
+    seedProfile("direct-104");
+    renameCfProfile("direct-104", "direct-105");
+    expect(readFileSync(path.join(profiles(), "direct-105", ".bemby-seed"), "utf8")).toBe(
+      "direct-104",
+    );
+  });
+
+  it("keeps the original seed through a second rename", () => {
+    seedProfile("direct-104");
+    renameCfProfile("direct-104", "direct-105");
+    renameCfProfile("direct-105", "direct-106");
+    expect(readFileSync(path.join(profiles(), "direct-106", ".bemby-seed"), "utf8")).toBe(
+      "direct-104",
+    );
+  });
+
+  it("exempts the new name from LRU trimming: a name chosen by hand is meant to stay", () => {
+    seedProfile("direct-104");
+    renameCfProfile("direct-104", "direct-105");
+    expect(listCfProfiles()[0]).toMatchObject({ name: "direct-105", managed: true });
+  });
+
+  it("refuses to overwrite a profile that already exists", () => {
+    seedProfile("direct-104");
+    seedProfile("direct-105");
+    expect(renameCfProfile("direct-104", "direct-105").ok).toBe(false);
+    expect(namesOf(listCfProfiles())).toEqual(["direct-104", "direct-105"]);
+  });
+
+  it("refuses a name that could not be a directory, or one that is not there", () => {
+    seedProfile("direct-104");
+    expect(renameCfProfile("direct-104", "../escape").ok).toBe(false);
+    expect(renameCfProfile("direct-104", "").ok).toBe(false);
+    expect(renameCfProfile("nothing-here", "direct-105").ok).toBe(false);
+    expect(namesOf(listCfProfiles())).toEqual(["direct-104"]);
+  });
+
+  it("is nothing to do when the name is unchanged", () => {
+    seedProfile("direct-104");
+    expect(renameCfProfile("direct-104", "direct-104")).toEqual({ ok: true });
+    expect(namesOf(listCfProfiles())).toEqual(["direct-104"]);
   });
 });

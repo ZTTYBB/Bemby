@@ -484,7 +484,7 @@
                   <th>{{ t("settings.profiles.colName") }}</th>
                   <th style="width: 90px">{{ t("settings.profiles.colSize") }}</th>
                   <th style="width: 140px">{{ t("settings.profiles.colLastUsed") }}</th>
-                  <th style="width: 110px"></th>
+                  <th style="width: 150px"></th>
                 </tr>
               </thead>
               <tbody>
@@ -492,26 +492,66 @@
                   <td>
                     <input type="checkbox" :value="p.name" v-model="selectedProfiles" />
                   </td>
-                  <td style="font-family: monospace; font-size: 12px">{{ p.name }}</td>
+                  <!-- Renaming in place: the name is what a job's profile field targets, so
+                       this is how one job's session is handed to another -->
+                  <td style="font-family: monospace; font-size: 12px">
+                    <input
+                      v-if="renamingProfile === p.name"
+                      v-model.trim="renameValue"
+                      autofocus
+                      class="form-input"
+                      style="height: 26px; font-family: monospace; font-size: 12px"
+                      :placeholder="t('settings.profiles.namePlaceholder')"
+                      @keyup.enter="saveRename"
+                      @keyup.esc="renamingProfile = ''"
+                    />
+                    <template v-else>{{ p.name }}</template>
+                  </td>
                   <td>{{ formatBytes(p.sizeBytes) }}</td>
                   <td style="font-size: 12px; color: #666">
                     {{ p.lastUsedAt ? formatWhen(p.lastUsedAt) : t("settings.profiles.neverUsed") }}
                   </td>
-                  <td>
-                    <span
-                      v-if="p.inUse"
-                      class="badge badge-red"
-                      style="font-size: 10px"
-                      :title="t('settings.profiles.inUseTip')"
-                      >{{ t("settings.profiles.inUse") }}</span
-                    >
-                    <span
-                      v-else-if="p.managed"
-                      class="badge badge-purple"
-                      style="font-size: 10px"
-                      :title="t('settings.profiles.managedTip')"
-                      >{{ t("settings.profiles.managed") }}</span
-                    >
+                  <td style="white-space: nowrap">
+                    <template v-if="renamingProfile === p.name">
+                      <button
+                        class="btn btn-sm btn-ghost"
+                        :disabled="!renameValue || renameValue === p.name || profilesBusy"
+                        @click="saveRename"
+                      >
+                        <i class="fa-solid fa-check"></i>
+                      </button>
+                      <button class="btn btn-sm btn-ghost" @click="renamingProfile = ''">
+                        <i class="fa-solid fa-xmark"></i>
+                      </button>
+                    </template>
+                    <template v-else>
+                      <button
+                        class="btn btn-sm btn-ghost"
+                        :disabled="p.inUse || profilesBusy"
+                        :title="
+                          p.inUse
+                            ? t('settings.profiles.inUseTip')
+                            : t('settings.profiles.renameTip')
+                        "
+                        @click="startRename(p.name)"
+                      >
+                        <i class="fa-solid fa-pen"></i>
+                      </button>
+                      <span
+                        v-if="p.inUse"
+                        class="badge badge-red"
+                        style="font-size: 10px"
+                        :title="t('settings.profiles.inUseTip')"
+                        >{{ t("settings.profiles.inUse") }}</span
+                      >
+                      <span
+                        v-else-if="p.managed"
+                        class="badge badge-purple"
+                        style="font-size: 10px"
+                        :title="t('settings.profiles.managedTip')"
+                        >{{ t("settings.profiles.managed") }}</span
+                      >
+                    </template>
                   </td>
                 </tr>
               </tbody>
@@ -2611,6 +2651,9 @@ const cfProfiles = ref<CfProfile[]>([]);
 // are all there is to see on the way past
 const cfProfilesOpen = ref(false);
 const cfProfilesLoading = ref(false);
+/** The profile whose name is being edited in place, and what it is being changed to. */
+const renamingProfile = ref("");
+const renameValue = ref("");
 const selectedProfiles = ref<string[]>([]);
 const newProfileName = ref("");
 const importReplaceProfiles = ref(false);
@@ -2680,6 +2723,42 @@ async function addProfile() {
     if (res.profiles) setProfiles(res.profiles);
     profilesMsg.value = t("settings.profiles.added").replace("{name}", newProfileName.value);
     newProfileName.value = "";
+  } catch (e: any) {
+    profilesError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
+  } finally {
+    profilesBusy.value = false;
+  }
+}
+
+/**
+ * Renaming in place. The name is what a job's profile field resolves to, so moving a profile
+ * from `direct-104` to `direct-105` is how the session one job built up is handed to another.
+ * The browser keeps its cookies and its device across the move; only the name changes.
+ */
+function startRename(name: string) {
+  profilesMsg.value = "";
+  profilesError.value = "";
+  renamingProfile.value = name;
+  renameValue.value = name;
+}
+
+async function saveRename() {
+  const from = renamingProfile.value;
+  const to = renameValue.value;
+  if (!from || !to || to === from) {
+    renamingProfile.value = "";
+    return;
+  }
+  profilesMsg.value = "";
+  profilesError.value = "";
+  profilesBusy.value = true;
+  try {
+    const res = await settingsApi.renameCfProfile(from, to);
+    if (res.profiles) setProfiles(res.profiles);
+    profilesMsg.value = t("settings.profiles.renamed")
+      .replace("{from}", from)
+      .replace("{to}", to);
+    renamingProfile.value = "";
   } catch (e: any) {
     profilesError.value = e?.response?.data?.error ?? e?.message ?? t("settings.saveFailed");
   } finally {

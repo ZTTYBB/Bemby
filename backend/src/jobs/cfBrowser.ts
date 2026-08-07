@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -460,6 +461,25 @@ export function cfProfileCount(): number {
 /** Marks a profile as made or imported by hand, which keeps LRU trimming off it. */
 const MANAGED_MARKER = ".bemby-managed";
 
+/**
+ * The name a profile's device was seeded from, written only once it stops being the
+ * directory's own name -- which is what a rename does. Without it a renamed profile keeps its
+ * cookies but comes back on a different machine, and a session returning to a device that has
+ * changed is exactly what a site watches for.
+ */
+const SEED_MARKER = ".bemby-seed";
+
+/** What this profile's device is derived from: the name it was first known by. */
+function seedKeyFor(dir: string, key: string): string {
+  try {
+    const stored = readFileSync(path.join(dir, SEED_MARKER), "utf8").trim();
+    if (stored) return stored;
+  } catch {
+    /* never renamed, so the directory name is the seed */
+  }
+  return key;
+}
+
 /** What a profile directory may be called: the same alphabet cfProfileKey produces. */
 export const CF_PROFILE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
@@ -573,6 +593,50 @@ export function createCfProfile(name: string): { ok: boolean; error?: string } {
   } catch (err: any) {
     return { ok: false, error: `Could not create ${dir}: ${err?.message ?? err}` };
   }
+}
+
+/**
+ * Renames a profile, session and device intact.
+ *
+ * The name is what a job's profile field targets, so this is how a jar built up under a
+ * pooled name (`direct`, an exit hash) is moved somewhere a job can ask for it by name --
+ * and how the pooled name is freed for a fresh start. The device seed is pinned to the old
+ * name on the way, since it is derived from the name and the cookies were issued to the
+ * machine it produced. The result is marked managed: a name chosen by hand is not the LRU's
+ * to evict.
+ *
+ * Refused while a browser has it open. A rename under a running job would take the directory
+ * out from under it, and Chromium does not survive that.
+ */
+export function renameCfProfile(from: string, to: string): { ok: boolean; error?: string } {
+  const target = to.trim();
+  const source = cfProfileDir(from);
+  if (!source) return { ok: false, error: `"${from}" is not a valid profile name` };
+  if (!CF_PROFILE_NAME_RE.test(target))
+    return {
+      ok: false,
+      error: "Name must be 1-64 characters of letters, digits, hyphen or underscore",
+    };
+  if (target === from) return { ok: true };
+  if (!existsSync(source)) return { ok: false, error: `No profile called "${from}"` };
+  if (profilesInUse.has(from))
+    return { ok: false, error: `A browser has "${from}" open; close it and try again` };
+  const dest = path.join(cfProfilesRoot(), target);
+  if (existsSync(dest)) return { ok: false, error: `Profile "${target}" already exists` };
+
+  try {
+    // Written before the move, while the old name is still what the device came from
+    writeFileSync(path.join(source, SEED_MARKER), seedKeyFor(source, from));
+  } catch {
+    /* the rename is still worth doing; the profile comes back on a new device */
+  }
+  try {
+    renameSync(source, dest);
+  } catch (err: any) {
+    return { ok: false, error: `Could not rename: ${err?.message ?? err}` };
+  }
+  markCfProfileManaged(dest);
+  return { ok: true };
 }
 
 /**
@@ -1077,7 +1141,9 @@ function claimProfile(key: string): ClaimedProfile {
     writeFileSync(path.join(dir, USED_MARKER), "");
     profilesInUse.add(key);
     pruneProfiles(cfProfilesRoot());
-    return { dir, release: () => profilesInUse.delete(key), seedKey: key };
+    // The name it was first known by, which a rename leaves behind: the cookies were issued
+    // to the device that name produced, and they have to come back on it
+    return { dir, release: () => profilesInUse.delete(key), seedKey: seedKeyFor(dir, key) };
   } catch (err: any) {
     console.warn(`[cfBrowser] no persistent profile (${err?.message ?? err})`);
     return throwaway(key);

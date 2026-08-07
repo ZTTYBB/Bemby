@@ -18,6 +18,7 @@ const zh = {
   common: {
     save: "保存",
     saving: "保存中...",
+    dbIdsHint: "数据库 ID —— 浏览器配置文件名中的 {jobId}、{templateId}、{tgId} 就取这些值，据此可推算出本次运行会落在哪个配置文件上",
     cancel: "取消",
     close: "关闭",
     edit: "编辑",
@@ -1254,6 +1255,8 @@ const zh = {
       managed: "手动",
       managedTip: "手动新建或导入的配置，不会被自动清理（LRU）删除。",
       added: "已创建配置 {name}",
+      renameTip: "重命名 —— 配置文件名就是任务「浏览器配置文件名」解析出的名字，改名即可把这份登录态从一个任务交给另一个任务（如 direct-104 改为 direct-105）。Cookie、登录态与设备指纹一并保留，改名后不再被自动清理（LRU）淘汰",
+      renamed: "已将配置 {from} 改名为 {to}",
       deleted: "已删除 {n} 个配置",
       deleteConfirm: "将删除所选的 {n} 个浏览器配置，其中的 Cookie 与登录状态会一并丢失（可先导出备份）。",
       exported: "已导出 {n} 个配置",
@@ -1585,6 +1588,7 @@ const en: typeof zh = {
   common: {
     save: "Save",
     saving: "Saving...",
+    dbIdsHint: "Database ids -- what {jobId}, {templateId} and {tgId} in a browser profile name are filled in from, so this says which profile a run will land on",
     cancel: "Cancel",
     close: "Close",
     edit: "Edit",
@@ -2860,6 +2864,8 @@ const en: typeof zh = {
       managed: "manual",
       managedTip: "Added or imported by hand, so automatic (LRU) trimming leaves it alone.",
       added: "Created profile {name}",
+      renameTip: "Rename. The name is what a job's browser profile field resolves to, so renaming hands this session from one job to another -- direct-104 to direct-105, say. The cookies, logins and device come with it, and the new name is left out of automatic (LRU) trimming",
+      renamed: "Renamed {from} to {to}",
       deleted: "Deleted {n} profile(s)",
       deleteConfirm: "Deletes the {n} selected profile(s). The cookies and logins they hold go with them — export them first if you want a copy.",
       exported: "Exported {n} profile(s)",

@@ -122,7 +122,10 @@
     <!-- Add / Edit modal -->
     <div v-if="showForm" class="modal-backdrop">
       <div class="modal" style="width:560px">
-        <h3 class="modal-title">{{ t(editTarget ? 'templates.editTitle' : 'templates.addTitle') }}</h3>
+        <h3 class="modal-title">
+          {{ t(editTarget ? 'templates.editTitle' : 'templates.addTitle') }}
+          <span v-if="editTarget" class="modal-title-ids" :title="t('common.dbIdsHint')">{{ `{templateId} ${editTarget.id}` }}</span>
+        </h3>
         <div class="modal-body">
           <div v-if="formError" class="error-msg">{{ formError }}</div>
 

@@ -381,6 +381,17 @@ tr:hover td {
 	margin-bottom: 20px;
 }
 
+/* Database ids beside a panel title: what a browser profile name is filled in from, so
+   secondary to the title itself but worth reading off without opening anything. */
+.modal-title-ids {
+	margin-left: 10px;
+	font-family: monospace;
+	font-size: 12px;
+	font-weight: 400;
+	color: #888;
+	white-space: nowrap;
+}
+
 .modal-footer {
 	display: flex;
 	justify-content: flex-end;
