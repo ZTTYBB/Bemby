@@ -1320,6 +1320,8 @@ export type Settings = {
   account_display_with_tg_name?: string;
   /** "true" moves the upcoming-runs list to its own menu entry. */
   schedule_separate_page?: string;
+  /** "true" adds a template-edit button to templated jobs on the jobs page. */
+  jobs_template_edit_button?: string;
   /** Days to keep job logs; "0" keeps all logs. */
   log_retention_days?: string;
   /** Minimum minutes between scheduled runs; "0" disables staggering. */

@@ -118,6 +118,14 @@
                     <i class="fa-solid fa-desktop"></i>
                   </button>
                   <button class="btn btn-sm btn-ghost btn-icon" :title="t('common.edit')" @click="openEdit(j)"><i class="fa-solid fa-pen"></i></button>
+                  <button
+                    v-if="templateEditButton && j.templateId"
+                    class="btn btn-sm btn-ghost btn-icon"
+                    :title="t('jobs.editTemplateBtn')"
+                    @click="openTemplateEdit(j)"
+                  >
+                    <i class="fa-solid fa-file-pen"></i>
+                  </button>
                   <button class="btn btn-sm btn-ghost btn-icon" :title="t('common.duplicate')" @click="openDuplicate(j)"><i class="fa-solid fa-copy"></i></button>
                   <button class="btn btn-sm btn-danger btn-icon" :title="t('common.retire')" @click="retire(j.id)"><i class="fa-solid fa-box-archive"></i></button>
                 </div>
@@ -1145,6 +1153,13 @@
         <button class="action-sheet-btn" @click="openEdit(actionMenuJob); actionMenuJob = null">
           <i class="fa-solid fa-pen"></i> {{ t('common.edit') }}
         </button>
+        <button
+          v-if="templateEditButton && actionMenuJob.templateId"
+          class="action-sheet-btn"
+          @click="openTemplateEdit(actionMenuJob); actionMenuJob = null"
+        >
+          <i class="fa-solid fa-file-pen"></i> {{ t('jobs.editTemplateBtn') }}
+        </button>
         <button class="action-sheet-btn" @click="openDuplicate(actionMenuJob); actionMenuJob = null">
           <i class="fa-solid fa-copy"></i> {{ t('common.duplicate') }}
         </button>
@@ -1164,6 +1179,12 @@
     <!-- Bulk run error toast -->
     <div v-if="bulkRunToast" class="job-toast">{{ bulkRunToast }}</div>
   </div>
+  <TemplateFormModal
+    v-if="templateEditTarget"
+    :template="templateEditTarget"
+    @close="templateEditTarget = null"
+    @saved="onTemplateSaved"
+  />
   <ManualBrowser
     v-if="manualBrowserJobId || manualBrowserRunId"
     :job-id="manualBrowserJobId ?? undefined"
@@ -1180,6 +1201,8 @@ import { regexValid } from '../utils/regexCheck';
 import { usePersistedRef } from '../composables/usePersistedRef';
 import { formatAccountLabel, loadAccountDisplaySetting } from '../composables/accountDisplay';
 import { loadSchedulePageSetting, scheduleSeparatePage } from '../composables/schedulePage';
+import { loadTemplateEditButtonSetting, templateEditButton } from '../composables/templateEditButton';
+import TemplateFormModal from '../components/TemplateFormModal.vue';
 import ScheduleList from '../components/ScheduleList.vue';
 import { debounce } from '../composables/useDebounce';
 import PaginationBar from '../components/PaginationBar.vue';
@@ -1238,6 +1261,8 @@ type CustomActionForm = {
 const jobs = ref<Job[]>([]);
 const accounts = ref<Account[]>([]);
 const templates = ref<JobTemplate[]>([]);
+/** Template opened from a job row; null keeps the template editor closed. */
+const templateEditTarget = ref<JobTemplate | null>(null);
 const settings = ref<Settings | null>(null);
 const uaPresets = computed<UAPreset[]>(() => {
   try { return JSON.parse(settings.value?.ua_presets ?? '[]'); } catch { return []; }
@@ -1594,6 +1619,7 @@ function moveDown(i: number) {
 onMounted(async () => {
   loadAccountDisplaySetting();
   loadSchedulePageSetting();
+  loadTemplateEditButtonSetting();
   await Promise.all([loadJobs(), loadAccounts(), loadStatus(), loadSettings(), loadTemplates()]);
   pollLiveRuns();
 });
@@ -1611,6 +1637,16 @@ async function loadSettings() {
 
 async function loadTemplates() {
   try { templates.value = await templatesApi.list(); } catch { /* ignore */ }
+}
+
+function openTemplateEdit(j: Job) {
+  const tpl = templates.value.find(t => t.id === j.templateId);
+  if (tpl) templateEditTarget.value = tpl;
+}
+
+/** A template edit changes what every linked job runs, so refresh both lists. */
+async function onTemplateSaved() {
+  await Promise.all([loadTemplates(), loadJobs()]);
 }
 
 function applyTemplate(tpl: JobTemplate) {

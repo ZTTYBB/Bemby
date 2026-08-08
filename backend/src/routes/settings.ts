@@ -94,6 +94,7 @@ export const ALLOWED_KEYS = [
   "default_tg_api_hash",
   "account_display_with_tg_name",
   "schedule_separate_page",
+  "jobs_template_edit_button",
   "log_retention_days",
   "schedule_min_gap_minutes",
   "cf_solver_enabled",

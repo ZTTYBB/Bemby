@@ -520,6 +520,7 @@ const zh = {
     colEnabled: "启用",
     colLastSuccess: "上次成功",
     toggleLastSuccessHint: "显示/隐藏上次成功运行时间",
+    editTemplateBtn: "编辑模版",
     neverSucceeded: "从未成功",
     since: {
       justNow: "刚刚",
@@ -1248,6 +1249,9 @@ const zh = {
     schedulePageSection: "计划列表",
     schedulePageToggle: "把“计划”放到左侧独立菜单",
     schedulePageHint: "开启后左侧菜单会多出“计划”一项，显示完整的下次运行列表；任务页面内的折叠面板同时隐藏。关闭则保持在任务页面内",
+    jobsTemplateEditSection: "模版快捷编辑",
+    jobsTemplateEditToggle: "在任务列表中直接编辑模版",
+    jobsTemplateEditHint: "开启后，使用模版的任务会多出一个模版编辑按钮，无需切换到模版页面。注意：修改会影响所有使用该模版的任务",
     accountDisplaySection: "TG 账号显示",
     accountDisplayToggle: "以「Bemby 账户名 - TG 账号名」显示账户",
     accountDisplayHint:
@@ -2189,6 +2193,7 @@ const en: typeof zh = {
     colEnabled: "Enabled",
     colLastSuccess: "Last Success",
     toggleLastSuccessHint: "Show or hide the last successful run",
+    editTemplateBtn: "Edit template",
     neverSucceeded: "Never",
     since: {
       justNow: "just now",
@@ -2945,6 +2950,9 @@ const en: typeof zh = {
     schedulePageSection: "Schedule list",
     schedulePageToggle: "Give Schedule its own menu entry",
     schedulePageHint: "Adds a Schedule entry to the left menu showing the full list of upcoming runs, and hides the collapsible panel on the jobs page. Off keeps it inside the jobs page",
+    jobsTemplateEditSection: "Template quick edit",
+    jobsTemplateEditToggle: "Edit templates straight from the jobs list",
+    jobsTemplateEditHint: "Adds a template-edit button to jobs that use a template, so there is no need to switch to the templates page. Note that an edit affects every job on that template",
     accountDisplaySection: "TG account display",
     accountDisplayToggle: "Show accounts as {Bemby name} - {TG name}",
     accountDisplayHint:
