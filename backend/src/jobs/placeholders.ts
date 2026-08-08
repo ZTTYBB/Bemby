@@ -10,6 +10,9 @@ const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const DIGITS = "0123456789";
 const ALNUM = LOWER + UPPER + DIGITS;
 
+/** Longest run of random characters a placeholder may ask for. */
+const MAX_RANDOM_LEN = 4096;
+
 function pick(chars: string, len: number): string {
   return Array.from(
     { length: len },
@@ -45,11 +48,46 @@ function randomOf(list: string[]): string {
   return list[Math.floor(Math.random() * list.length)];
 }
 
+/** Bounds of a `{num:1-30}`, and the width to pad the result to (0 for none). */
+type NumRange = { low: number; high: number; width: number };
+
+/**
+ * Reads the bounds out of `1-30`, or nothing when the argument is a plain length.
+ *
+ * A leading zero is what asks for a fixed width: `{num:01-30}` gives `07`, `{num:1-30}` gives
+ * `7`. Writing the low bound the way the output should look needs no second parameter, and a
+ * lone `0` (`{num:0-30}`) is a bound rather than a padding request. Bounds either way round
+ * mean the same range.
+ */
+function parseNumRange(arg: string): NumRange | undefined {
+  const m = /^(\d+)-(\d+)$/.exec(arg);
+  if (!m) return undefined;
+  const low = Number(m[1]);
+  const high = Number(m[2]);
+  if (!Number.isSafeInteger(low) || !Number.isSafeInteger(high)) return undefined;
+  const padded = /^0\d/.test(m[1]) || /^0\d/.test(m[2]);
+  return {
+    low: Math.min(low, high),
+    high: Math.max(low, high),
+    width: padded ? Math.max(m[1].length, m[2].length) : 0,
+  };
+}
+
+function randomInRange(r: NumRange): string {
+  const n = r.low + Math.floor(Math.random() * (r.high - r.low + 1));
+  return String(n).padStart(r.width, "0");
+}
+
 /**
  * Expands template placeholders before a value is used.
- * Syntax: {type} or {type:length}
+ * Syntax: {type}, {type:length}, or {num:low-high}
  * Types: word (lowercase), WORD (uppercase), num (digits), alpha (mixed alnum), uuid,
  * randomFirstName, randomLastName (an ordinary given name / surname; no length to give)
+ *
+ * `num` also takes a range: `{num:1-30}` is a number from 1 to 30, and `{num:01-30}` the same
+ * range padded to two digits. A range given to any other type is left alone rather than read
+ * as a length, so a template that means something else is visible instead of quietly wrong.
+ *
  * An optional context map supplies named tokens (e.g. {name}) that take
  * precedence over the built-in random types.
  *
@@ -60,18 +98,24 @@ function randomOf(list: string[]): string {
  * contain braces is used as it stands rather than expanded again.
  */
 export function expandCommand(template: string, context?: Record<string, string>): string {
-  const expanded = template.replace(/\{(\w+)(?::(\d+))?\}/g, (match, type: string, lenStr?: string) => {
+  const expanded = template.replace(/\{(\w+)(?::(\d+(?:-\d+)?))?\}/g, (match, type: string, arg?: string) => {
     if (context && Object.prototype.hasOwnProperty.call(context, type)) {
       return context[type];
     }
-    const len = lenStr ? parseInt(lenStr, 10) : 0;
+    const hasRange = !!arg && arg.includes("-");
+    const range = hasRange ? parseNumRange(arg!) : undefined;
+    // A range means nothing to the other types, and bounds past a safe integer are no range
+    // at all: either way the placeholder is left as it stands rather than read as a length
+    if (hasRange && (!range || type !== "num")) return match;
+    // A length is capped: a slip of the keyboard should not ask for a gigabyte of digits
+    const len = arg && !hasRange ? Math.min(parseInt(arg, 10), MAX_RANDOM_LEN) : 0;
     switch (type) {
       case "word":
         return pick(LOWER, len || 6);
       case "WORD":
         return pick(UPPER, len || 6);
       case "num":
-        return pick(DIGITS, len || 6);
+        return range ? randomInRange(range) : pick(DIGITS, len || 6);
       case "alpha":
         return pick(ALNUM, len || 8);
       case "randomFirstName":

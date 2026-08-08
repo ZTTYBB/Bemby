@@ -996,6 +996,16 @@
                   <td>N 位随机数字（默认 6 位）</td>
                 </tr>
                 <tr>
+                  <td>
+                    <code>{num:1-30}</code> / <code>{num:01-30}</code>
+                  </td>
+                  <td>
+                    指定范围内的随机整数（含两端）。低位补零的写法（<code>01-30</code>）表示固定位数，输出
+                    <code>01</code>–<code>30</code>；不补零则输出
+                    <code>1</code>–<code>30</code>。两端顺序可颠倒
+                  </td>
+                </tr>
+                <tr>
                   <td><code>{alpha}</code> / <code>{alpha:N}</code></td>
                   <td>N 位随机大小写字母与数字混合（默认 8 位）</td>
                 </tr>
@@ -1404,6 +1414,18 @@
                 <tr>
                   <td><code>{num}</code> / <code>{num:N}</code></td>
                   <td>N random digits (default 6)</td>
+                </tr>
+                <tr>
+                  <td>
+                    <code>{num:1-30}</code> / <code>{num:01-30}</code>
+                  </td>
+                  <td>
+                    A whole number in that range, both ends included. Writing the
+                    low bound with a leading zero (<code>01-30</code>) fixes the
+                    width, giving <code>01</code>–<code>30</code>; without one it
+                    gives <code>1</code>–<code>30</code>. The bounds may be given
+                    either way round
+                  </td>
                 </tr>
                 <tr>
                   <td><code>{alpha}</code> / <code>{alpha:N}</code></td>

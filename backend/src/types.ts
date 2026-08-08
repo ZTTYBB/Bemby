@@ -894,7 +894,7 @@ export type AutoregConfig = {
    * what a bot that only sometimes asks for the extra click needs.
    */
   afterCodeRequired?: boolean;
-  /** Username sent to finish signup; supports {word:N} {num:N} {alpha:N} {uuid} placeholders */
+  /** Username sent to finish signup; supports {word:N} {num:N} {num:1-30} {alpha:N} {uuid} placeholders */
   signupUsername: string;
   /** How long to keep listening for codes before giving up, in minutes. Default 30. */
   listenMinutes?: number;

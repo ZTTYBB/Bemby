@@ -56,6 +56,67 @@ describe("expandCommand", () => {
     expect(expandCommand("{num:4}")).toMatch(/^\d{4}$/);
   });
 
+  it("{num:low-high} stays inside the range, both bounds included", () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      const got = expandCommand("{num:1-30}");
+      expect(got).toMatch(/^\d{1,2}$/);
+      const n = Number(got);
+      expect(n).toBeGreaterThanOrEqual(1);
+      expect(n).toBeLessThanOrEqual(30);
+      seen.add(got);
+    }
+    // Both ends come up: an off-by-one at either would show here
+    expect(seen.has("1")).toBe(true);
+    expect(seen.has("30")).toBe(true);
+  });
+
+  it("a leading zero pads the range to a fixed width", () => {
+    for (let i = 0; i < 100; i++) {
+      const got = expandCommand("{num:01-30}");
+      expect(got).toMatch(/^\d{2}$/);
+      expect(Number(got)).toBeGreaterThanOrEqual(1);
+      expect(Number(got)).toBeLessThanOrEqual(30);
+    }
+    expect(expandCommand("{num:0001-9}")).toMatch(/^000\d$/);
+  });
+
+  it("a lone zero bound is a bound, not a request to pad", () => {
+    const got = new Set(Array.from({ length: 100 }, () => expandCommand("{num:0-9}")));
+    expect([...got].every((v) => /^\d$/.test(v))).toBe(true);
+    expect(got.has("0")).toBe(true);
+  });
+
+  it("bounds either way round mean the same range", () => {
+    for (let i = 0; i < 50; i++) {
+      const n = Number(expandCommand("{num:30-1}"));
+      expect(n).toBeGreaterThanOrEqual(1);
+      expect(n).toBeLessThanOrEqual(30);
+    }
+  });
+
+  it("a single-value range always gives that value", () => {
+    expect(expandCommand("{num:7-7}")).toBe("7");
+    expect(expandCommand("{num:07-07}")).toBe("07");
+  });
+
+  it("a range reads as a range only for num, and never as a length", () => {
+    expect(expandCommand("{word:1-3}")).toBe("{word:1-3}");
+    expect(expandCommand("{alpha:2-4}")).toBe("{alpha:2-4}");
+    // Bounds past a safe integer are no range at all, and must not be read as a length either
+    expect(expandCommand("{num:99999999999999999999-1}")).toBe(
+      "{num:99999999999999999999-1}",
+    );
+  });
+
+  it("a plain length is capped rather than allocating whatever was typed", () => {
+    expect(expandCommand("{num:999999999}")).toHaveLength(4096);
+  });
+
+  it("mixes a range with the other placeholders in one string", () => {
+    expect(expandCommand("day-{num:01-31} {word:3}")).toMatch(/^day-\d{2} [a-z]{3}$/);
+  });
+
   it("{alpha} produces 8 alphanumeric characters by default", () => {
     expect(expandCommand("{alpha}")).toMatch(/^[a-zA-Z0-9]{8}$/);
   });
