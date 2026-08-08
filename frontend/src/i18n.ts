@@ -581,6 +581,12 @@ const zh = {
     labelProxy: "代理",
     proxyNone: "不使用代理",
     proxyFollowTemplate: "跟随模板代理设置",
+    proxyRandom: "随机代理（每次运行抽取）",
+    proxyRandomPoolLabel: "随机池",
+    proxyRandomPoolAll: "全部代理",
+    proxyRandomPoolClear: "清空选择",
+    proxyRandomPoolHint:
+      "勾选可参与抽取的代理；全部不勾选则从整个代理列表中抽取。每次运行抽取一次，因此各次运行的出口 IP 不同；由于浏览器配置文件默认按 {ip} 命名，出口变化也意味着换一套 Cookie 与设备指纹。若同时开启了“拒绝时轮换所有可用代理”，轮换按抽取顺序在本池内进行，不会用到池外的代理。",
     proxyBrowserOnlyHint:
       "此代理用于浏览器（Cloudflare 验证 / 小程序）。Telegram 连接始终使用账户上的代理，与登录时保持一致；若两者不同会导致同一会话出现两个 IP，触发 AUTH_KEY_DUPLICATED 并使会话失效。要让 Telegram 也走某个代理，请在账户上设置该代理（必要时重新登录）。",
     playbackRulesHint:
@@ -2372,6 +2378,12 @@ const en: typeof zh = {
     labelProxy: "Proxy",
     proxyNone: "No proxy",
     proxyFollowTemplate: "Follow template proxy setting",
+    proxyRandom: "Random proxy (drawn each run)",
+    proxyRandomPoolLabel: "Random pool",
+    proxyRandomPoolAll: "Whole list",
+    proxyRandomPoolClear: "Clear",
+    proxyRandomPoolHint:
+      "Tick the proxies the draw may pick from; with none ticked it draws from the whole list. The draw happens once per run, so runs go out through different exits -- and since a browser profile is named after {ip} by default, a different exit also means different cookies and a different device fingerprint. With \"rotate through all proxies\" on as well, a refused exit falls through the rest of this pool in the order drawn, never to a proxy outside it.",
     proxyBrowserOnlyHint:
       "Used by the browser (Cloudflare checks / Mini Apps). The Telegram connection always follows the proxy set on the account, matching what login used: two exits for one session is what Telegram answers with AUTH_KEY_DUPLICATED, invalidating it. To route Telegram through a proxy, set it on the account (and re-authenticate if needed).",
     playbackRulesHint:

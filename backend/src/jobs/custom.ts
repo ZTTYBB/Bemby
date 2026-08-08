@@ -39,7 +39,12 @@ import {
   type WebButton,
 } from "../tg/miniApp";
 import { resolvePeerTarget } from "../tg/peerTarget";
-import { cfMaxCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/proxyProviders";
+import {
+  cfMaxCandidates,
+  cfProxyCandidatesFor,
+  rememberCfProxy,
+  type ProxyChoice,
+} from "../tg/proxyProviders";
 import { cfTuning } from "./cfTuning";
 import { rememberWebValue, usedWebValues } from "./webMemory";
 import { getNotifyConfig, sendBotNotify } from "./notify";
@@ -724,9 +729,21 @@ export async function runCustom(
   // Shared with the runner's outer retries, so an exit refused on an earlier attempt of
   // this run is not offered again and an action's browser budget spans its retries
   cfRun: CfRunState = newCfRunState(),
+  // What the job (or its template) picked, so an action left on "follow the job's proxy"
+  // draws from the same pool a random job pick draws from
+  jobProxy: ProxyChoice = {},
 ): Promise<CustomJobLog> {
   const log: CustomJobLog = { steps: [] };
   const jobMaxRetries = config.maxRetries ?? 1;
+
+  /** The action's own pick when it has one, and the job's when it is left blank. */
+  const proxyChoiceFor = (action: {
+    proxyId?: string;
+    proxyPool?: string[];
+  }): { proxyId?: string; proxyPool?: string[] } =>
+    action.proxyId
+      ? { proxyId: action.proxyId, proxyPool: action.proxyPool }
+      : { proxyId: jobProxy.proxyId, proxyPool: jobProxy.pool };
 
   const missing = stepNeedingBot(config.actions ?? [], botUsername);
   if (missing) {
@@ -2463,7 +2480,7 @@ export async function runCustom(
                 const candidates = cfProxyCandidatesFor({
                   primaryUrl: webProxyUrl,
                   host: cfHost,
-                  proxyId: action.proxyId,
+                  ...proxyChoiceFor(action),
                   tryAll: action.tryAllProxies ?? true,
                   // An exit that was already refused this run is not offered again, so a
                   // retry moves further into the pool instead of replaying the same few
@@ -2645,7 +2662,7 @@ export async function runCustom(
                 const candidates = cfProxyCandidatesFor({
                   primaryUrl: webProxyUrl,
                   host: cfHost,
-                  proxyId: action.proxyId,
+                  ...proxyChoiceFor(action),
                   tryAll: action.tryAllProxies ?? true,
                   exclude: refused,
                   max: action.tryAllProxies === false ? 1 : cfMaxCandidates(),
@@ -2764,7 +2781,7 @@ export async function runCustom(
                 const candidates = cfProxyCandidatesFor({
                   primaryUrl: webProxyUrl,
                   host: cfHost,
-                  proxyId: action.proxyId,
+                  ...proxyChoiceFor(action),
                   tryAll: action.tryAllProxies ?? true,
                   exclude: refused,
                   max: action.tryAllProxies === false ? 1 : cfMaxCandidates(),

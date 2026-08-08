@@ -512,13 +512,15 @@
                 </div>
                 <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppMaxWaitHint') }}</div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                  <label class="form-label">{{ t('jobs.custom.labelMiniAppProxy') }}</label>
-                  <select v-model="action.miniAppProxyId" class="form-select">
-                    <option value="">{{ t('jobs.custom.miniAppProxyJob') }}</option>
-                    <option value="direct">{{ t('jobs.custom.miniAppProxyDirect') }}</option>
-                    <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
-                  </select>
-                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppProxyHint') }}</div>
+                  <ProxyPicker
+                    v-model="action.miniAppProxyId"
+                    :pool="action.miniAppProxyPool"
+                    :proxies="proxiesList"
+                    :label="t('jobs.custom.labelMiniAppProxy')"
+                    :blank-label="t('jobs.custom.miniAppProxyJob')"
+                    :hint="t('jobs.custom.miniAppProxyHint')"
+                    allow-direct
+                  />
                 </div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
                   <label class="form-checkbox-label">
@@ -573,13 +575,15 @@
                 </div>
                 <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppMaxWaitHint') }}</div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                  <label class="form-label">{{ t('jobs.custom.labelMiniAppProxy') }}</label>
-                  <select v-model="action.miniAppProxyId" class="form-select">
-                    <option value="">{{ t('jobs.custom.miniAppProxyJob') }}</option>
-                    <option value="direct">{{ t('jobs.custom.miniAppProxyDirect') }}</option>
-                    <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
-                  </select>
-                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppProxyHint') }}</div>
+                  <ProxyPicker
+                    v-model="action.miniAppProxyId"
+                    :pool="action.miniAppProxyPool"
+                    :proxies="proxiesList"
+                    :label="t('jobs.custom.labelMiniAppProxy')"
+                    :blank-label="t('jobs.custom.miniAppProxyJob')"
+                    :hint="t('jobs.custom.miniAppProxyHint')"
+                    allow-direct
+                  />
                 </div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
                   <label class="form-checkbox-label">
@@ -803,14 +807,15 @@
           </div>
         </template>
 
-        <div v-if="proxiesList.length" class="form-group">
-          <label class="form-label">{{ t('jobs.labelProxy') }}</label>
-          <select v-model="tplProxyId" class="form-select">
-            <option value="">{{ t('jobs.proxyNone') }}</option>
-            <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
-          <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.proxyBrowserOnlyHint') }}</div>
-        </div>
+        <ProxyPicker
+          v-if="proxiesList.length"
+          v-model="tplProxyId"
+          :pool="tplProxyPool"
+          :proxies="proxiesList"
+          :label="t('jobs.labelProxy')"
+          :blank-label="t('jobs.proxyNone')"
+          :hint="t('jobs.proxyBrowserOnlyHint')"
+        />
 
       </div><!-- end modal-body -->
       <div class="modal-footer">
@@ -833,6 +838,8 @@ import MiniAppStepsEditor from './MiniAppStepsEditor.vue';
 import RowControls from './RowControls.vue';
 import { webStepsFromConfig, webStepsToConfig, type WebStepForm } from '../composables/webSteps';
 import { appButtonsOf } from '../composables/miniAppSteps';
+import { proxyFields } from '../composables/proxyPick';
+import ProxyPicker from './ProxyPicker.vue';
 
 type CustomActionForm = {
   type: 'send_command' | 'send_contact_message' | 'wait_reply' | 'delay' | 'click_button' | 'click_message_button' | 'ai_multiple_btn' | 'enter_captcha' | 'join_group' | 'subscribe_channel' | 'open_mini_app' | 'open_mini_app_url' | 'open_bot_menu_app' | 'open_url';
@@ -869,6 +876,8 @@ type CustomActionForm = {
   /** open_mini_app: pinned browser proxy id, 'direct', or '' for the job proxy */
   miniAppProxyId: string;
   miniAppTryAllProxies: boolean;
+  /** Ids a 'random' pick draws from; empty draws from the whole list */
+  miniAppProxyPool: string[];
   profileId: string;
   /** Mini App actions: keep what the app stored last run instead of signing in afresh */
   keepAppSession: boolean;
@@ -996,6 +1005,8 @@ const embyCfg = reactive<{ username: string; password: string; playDuration: num
   ignoreSslErrors: false,
 });
 const tplProxyId = ref('');
+// Ids a 'random' template pick draws from; empty draws from the whole list
+const tplProxyPool = ref<string[]>([]);
 const embyUaDropdown = ref('');
 const embyServer = reactive<{ protocol: 'https' | 'http'; host: string; port: number | '' }>({
   protocol: 'https',
@@ -1049,6 +1060,7 @@ function onJobTypeChange() {
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
   tplProxyId.value = '';
+  tplProxyPool.value = [];
   customActions.value = [];
   customJobMaxRetries.value = 1;
   btnAiHint.value = '';
@@ -1065,7 +1077,7 @@ function defaultAction(): CustomActionForm {
     buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0,
     captchaLength: '', successContains: '', failContains: '', messageContains: '', contact: '', groupId: '', checkMembership: false,
     verifyButton: '', verifyWaitMs: 30000, verifyMentionsMe: false, channelId: '', appSteps: [],
-    miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppTryAllProxies: true,
+    miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppProxyPool: [], miniAppTryAllProxies: true,
     url: '', webSteps: [], profileId: '', keepAppSession: false,
   };
 }
@@ -1122,7 +1134,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
     if (autoregCfg.usernameReadyContains.trim()) cfg.usernameReadyContains = autoregCfg.usernameReadyContains.trim();
     if (autoregCfg.successContains.trim()) cfg.successContains = autoregCfg.successContains.trim();
     if (autoregCfg.failContains.trim()) cfg.failContains = autoregCfg.failContains.trim();
-    if (tplProxyId.value) cfg.proxyId = tplProxyId.value;
+    Object.assign(cfg, proxyFields(tplProxyId.value, tplProxyPool.value));
     return cfg;
   }
   if (form.jobType === 'embywatch') {
@@ -1136,7 +1148,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
     cfg.sequencePlay = embyCfg.sequencePlay;
     cfg.ignoreSslErrors = embyCfg.ignoreSslErrors;
     if (embyCfg.library) cfg.library = embyCfg.library;
-    if (tplProxyId.value) cfg.proxyId = tplProxyId.value;
+    Object.assign(cfg, proxyFields(tplProxyId.value, tplProxyPool.value));
     return cfg as EmbywatchConfig;
   }
   if (form.jobType === 'custom') {
@@ -1192,7 +1204,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
-          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...proxyFields(a.miniAppProxyId, a.miniAppProxyPool),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
           ...(a.profileId ? { profileId: a.profileId } : {}),
           ...(a.keepAppSession ? { keepAppSession: true } : {}),
@@ -1206,7 +1218,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
-          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...proxyFields(a.miniAppProxyId, a.miniAppProxyPool),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
           ...(a.profileId ? { profileId: a.profileId } : {}),
           ...(a.keepAppSession ? { keepAppSession: true } : {}),
@@ -1219,7 +1231,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
-          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...proxyFields(a.miniAppProxyId, a.miniAppProxyPool),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
           ...(a.profileId ? { profileId: a.profileId } : {}),
           ...(a.keepAppSession ? { keepAppSession: true } : {}),
@@ -1233,7 +1245,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
-          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...proxyFields(a.miniAppProxyId, a.miniAppProxyPool),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
           ...(a.profileId ? { profileId: a.profileId } : {}),
         };
@@ -1275,17 +1287,17 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | null {
       }),
     };
     if (customJobMaxRetries.value > 1) cfg.maxRetries = customJobMaxRetries.value;
-    if (tplProxyId.value) cfg.proxyId = tplProxyId.value;
+    Object.assign(cfg, proxyFields(tplProxyId.value, tplProxyPool.value));
     return cfg;
   }
   if (form.jobType === 'checkin') {
     const s = tplCheckinSuccessContains.value.trim();
     const f = tplCheckinFailContains.value.trim();
-    const proxy = tplProxyId.value;
-    if (s || f || proxy) return {
+    const proxy = proxyFields(tplProxyId.value, tplProxyPool.value);
+    if (s || f || proxy.proxyId) return {
       ...(s ? { successContains: s } : {}),
       ...(f ? { failContains: f } : {}),
-      ...(proxy ? { proxyId: proxy } : {}),
+      ...proxy,
     } as unknown as CustomConfig;
     return null;
   }
@@ -1313,6 +1325,7 @@ function resetForm() {
   Object.assign(embyServer, { protocol: 'https', host: '', port: 443 });
   embyUaDropdown.value = '';
   tplProxyId.value = '';
+  tplProxyPool.value = [];
   customActions.value = [];
   customJobMaxRetries.value = 1;
   tplCheckinSuccessContains.value = '';
@@ -1338,6 +1351,7 @@ function loadFromTemplate(tpl: JobTemplate) {
   setBtnState(tpl.checkinButton === '签到' ? '' : (tpl.checkinButton ?? ''));
 
   tplProxyId.value = '';
+  tplProxyPool.value = [];
   if (tpl.jobType === 'embywatch') {
     const m = tpl.botUsername.match(/^(https?):\/\/([^:/]+)(?::(\d+))?/);
     Object.assign(embyServer, {
@@ -1362,6 +1376,7 @@ function loadFromTemplate(tpl: JobTemplate) {
           library: c.library ?? '',
         });
         tplProxyId.value = c.proxyId ?? '';
+        tplProxyPool.value = [...(c.proxyPool ?? [])];
         setUaState(c.userAgent ?? '');
       } catch {
         Object.assign(embyCfg, { username: '', password: '', playDuration: '', userAgent: '', markWatched: true, verifyPlayable: true, realWatch: false, sequencePlay: false, library: '', ignoreSslErrors: false });
@@ -1378,6 +1393,7 @@ function loadFromTemplate(tpl: JobTemplate) {
       try {
         const cfg = JSON.parse(tpl.config) as CustomConfig & { proxyId?: string };
         tplProxyId.value = cfg.proxyId ?? '';
+        tplProxyPool.value = [...(cfg.proxyPool ?? [])];
         customJobMaxRetries.value = cfg.maxRetries ?? 1;
         customActions.value = cfg.actions.map((a: CustomAction) => {
           const base = defaultAction();
@@ -1402,10 +1418,10 @@ function loadFromTemplate(tpl: JobTemplate) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha' as const, maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group' as const, groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000, verifyMentionsMe: a.verifyMentionsMe ?? false };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel' as const, channelId: a.channelId, checkMembership: a.checkMembership ?? false };
-          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
           if (a.type === 'ai_multiple_btn') return { ...base, type: 'ai_multiple_btn' as const, contact: a.contact ?? '', buttonAiHint: a.hint ?? '', messageContains: a.messageContains ?? '', gapMs: a.gapMs ?? 1000, maxRetries: a.maxRetries, maxWaitMs: a.maxWaitMs, successContains: a.successContains ?? '', failContains: a.failContains ?? '', scope: a.scope ?? 0 };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
@@ -1448,6 +1464,7 @@ function loadFromTemplate(tpl: JobTemplate) {
         let c = JSON.parse(tpl.config) as (AutoregConfig & { proxyId?: string }) | string;
         if (typeof c === 'string') c = JSON.parse(c) as AutoregConfig & { proxyId?: string };
         tplProxyId.value = c.proxyId ?? '';
+        tplProxyPool.value = [...(c.proxyPool ?? [])];
         Object.assign(autoregCfg, {
           groupId: c.groupId ?? '',
           codePrefix: c.codePrefix ?? '',
@@ -1481,8 +1498,9 @@ function loadFromTemplate(tpl: JobTemplate) {
     tplCheckinFailContains.value = '';
     if (tpl.config) {
       try {
-        const cfg = JSON.parse(tpl.config) as { proxyId?: string; successContains?: string; failContains?: string };
+        const cfg = JSON.parse(tpl.config) as { proxyId?: string; proxyPool?: string[]; successContains?: string; failContains?: string };
         tplProxyId.value = cfg.proxyId ?? '';
+        tplProxyPool.value = [...(cfg.proxyPool ?? [])];
         tplCheckinSuccessContains.value = cfg.successContains ?? '';
         tplCheckinFailContains.value = cfg.failContains ?? '';
       } catch { /* ignore */ }

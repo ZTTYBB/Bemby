@@ -345,6 +345,8 @@ export type EmbywatchConfig = {
   sequencePlay?: boolean;
   library?: string;
   proxyId?: string;
+  /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+  proxyPool?: string[];
   ignoreSslErrors?: boolean;
 };
 
@@ -430,6 +432,8 @@ export type CustomAction =
       maxRetries?: number;
       maxWaitMs?: number;
       proxyId?: string;
+      /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+      proxyPool?: string[];
       tryAllProxies?: boolean;
       /**
        * Which browser profile to run on, and so whose cookies this shares: a name built from
@@ -453,6 +457,8 @@ export type CustomAction =
       maxRetries?: number;
       maxWaitMs?: number;
       proxyId?: string;
+      /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+      proxyPool?: string[];
       tryAllProxies?: boolean;
       /**
        * Which browser profile to run on, and so whose cookies this shares: a name built from
@@ -477,6 +483,8 @@ export type CustomAction =
       maxWaitMs?: number;
       /** Proxy the browser exits through: a proxy id, or "direct". Blank uses the job proxy. */
       proxyId?: string;
+      /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+      proxyPool?: string[];
       /** Work through the rest of the proxy list when an exit is refused. */
       tryAllProxies?: boolean;
       /**
@@ -501,6 +509,8 @@ export type CustomAction =
       maxWaitMs?: number;
       /** Proxy the browser exits through: a proxy id, or "direct". Blank uses the job proxy. */
       proxyId?: string;
+      /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+      proxyPool?: string[];
       /** Work through the rest of the proxy list when an exit is refused. */
       tryAllProxies?: boolean;
       /**
@@ -704,12 +714,16 @@ export type CustomConfig = {
   actions: CustomAction[];
   maxRetries?: number;
   proxyId?: string;
+  /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+  proxyPool?: string[];
 };
 
 export type CheckinConfig = {
   successContains?: string;
   failContains?: string;
   proxyId?: string;
+  /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+  proxyPool?: string[];
 };
 
 export type AutoregConfig = {
@@ -743,6 +757,8 @@ export type AutoregConfig = {
   successContains?: string;
   failContains?: string;
   proxyId?: string;
+  /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+  proxyPool?: string[];
 };
 
 export type CustomStepLog = {
@@ -1212,6 +1228,7 @@ export const jobsApi = {
     password: string;
     userAgent?: string;
     proxyId?: string;
+    proxyPool?: string[];
     ignoreSslErrors?: boolean;
   }) =>
     api

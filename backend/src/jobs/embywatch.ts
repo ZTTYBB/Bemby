@@ -3,6 +3,7 @@ import { lookup } from 'node:dns';
 import { db } from '../db/database';
 import type { EmbywatchConfig, EmbywatchEpisode, EmbywatchLog, RealWatchNote } from '../types';
 import { expandCommand } from './checkin';
+import { proxyUrlFor } from '../tg/proxyProviders';
 
 // Per-username cache of the expanded device name. Persisting it keeps random
 // tokens (e.g. {word:4}) stable across runs; we only re-expand when the template
@@ -202,17 +203,12 @@ async function embyRequest<T = any>(
   return text ? JSON.parse(text) : (null as T);
 }
 
-/** Resolves a configured proxy id to its URL from settings, if any. */
-function resolveProxyUrl(proxyId?: string): string | undefined {
-  if (!proxyId) return undefined;
-  try {
-    const raw = getSetting('proxies');
-    if (!raw) return undefined;
-    const list = JSON.parse(raw) as Array<{ id: string; name: string; url: string }>;
-    return list.find(p => p.id === proxyId)?.url;
-  } catch {
-    return undefined;
-  }
+/**
+ * Resolves a configured proxy id to its URL, `random` included -- which draws from the pool
+ * named alongside it, once per run.
+ */
+function resolveProxyUrl(proxyId?: string, proxyPool?: string[]): string | undefined {
+  return proxyUrlFor(proxyId, proxyPool);
 }
 
 // Cap the connection test so the UI isn't stuck waiting on a dead host
@@ -225,11 +221,18 @@ const TEST_TIMEOUT_MS = 12_000;
  */
 export async function testEmbyConnection(
   serverUrl: string,
-  opts: { username: string; password: string; userAgent?: string; proxyId?: string; ignoreSslErrors?: boolean },
+  opts: {
+    username: string;
+    password: string;
+    userAgent?: string;
+    proxyId?: string;
+    proxyPool?: string[];
+    ignoreSslErrors?: boolean;
+  },
 ): Promise<{ ok: boolean; userName?: string; error?: string }> {
   const ua = opts.userAgent || getSetting('default_ua') || DEFAULT_UA;
   const deviceName = resolveDeviceName(getSetting('default_device_name') ?? 'Mac', opts.username);
-  const proxyUrl = resolveProxyUrl(opts.proxyId);
+  const proxyUrl = resolveProxyUrl(opts.proxyId, opts.proxyPool);
   try {
     const auth = await embyRequest<any>(serverUrl, '/Users/AuthenticateByName', {
       method: 'POST',
@@ -1206,7 +1209,7 @@ export async function runEmbywatch(
   const playDuration = config.playDuration ?? Number(getSetting('default_play_duration') ?? 300);
   const deviceName = resolveDeviceName(getSetting('default_device_name') ?? 'Yamby', config.username);
 
-  const proxyUrl = resolveProxyUrl(config.proxyId);
+  const proxyUrl = resolveProxyUrl(config.proxyId, config.proxyPool);
   const insecureTls = config.ignoreSslErrors === true;
   if (insecureTls) console.warn('[embywatch] TLS certificate verification is disabled for this job');
 

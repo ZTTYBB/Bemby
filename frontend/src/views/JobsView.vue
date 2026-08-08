@@ -184,14 +184,15 @@
         </div>
 
         <!-- Proxy override: this job's own exit, or the template's when left blank -->
-        <div v-if="form.templateId && proxiesList.length" class="form-group">
-          <label class="form-label">{{ t('jobs.labelProxy') }}</label>
-          <select v-model="jobProxyId" class="form-select">
-            <option value="">{{ t('jobs.proxyFollowTemplate') }}{{ templateProxyName ? ` (${templateProxyName})` : '' }}</option>
-            <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
-          <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.proxyBrowserOnlyHint') }}</div>
-        </div>
+        <ProxyPicker
+          v-if="form.templateId && proxiesList.length"
+          v-model="jobProxyId"
+          :pool="jobProxyPool"
+          :proxies="proxiesList"
+          :label="t('jobs.labelProxy')"
+          :blank-label="t('jobs.proxyFollowTemplate') + (templateProxyName ? ` (${templateProxyName})` : '')"
+          :hint="t('jobs.proxyBrowserOnlyHint')"
+        />
 
         <!-- Name + Type (no template) | Name + Account (template, checkin/custom) -->
         <div class="form-row">
@@ -691,13 +692,15 @@
                 </div>
                 <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppMaxWaitHint') }}</div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                  <label class="form-label">{{ t('jobs.custom.labelMiniAppProxy') }}</label>
-                  <select v-model="action.miniAppProxyId" class="form-select">
-                    <option value="">{{ t('jobs.custom.miniAppProxyJob') }}</option>
-                    <option value="direct">{{ t('jobs.custom.miniAppProxyDirect') }}</option>
-                    <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
-                  </select>
-                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppProxyHint') }}</div>
+                  <ProxyPicker
+                    v-model="action.miniAppProxyId"
+                    :pool="action.miniAppProxyPool"
+                    :proxies="proxiesList"
+                    :label="t('jobs.custom.labelMiniAppProxy')"
+                    :blank-label="t('jobs.custom.miniAppProxyJob')"
+                    :hint="t('jobs.custom.miniAppProxyHint')"
+                    allow-direct
+                  />
                 </div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
                   <label class="form-checkbox-label">
@@ -752,13 +755,15 @@
                 </div>
                 <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppMaxWaitHint') }}</div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                  <label class="form-label">{{ t('jobs.custom.labelMiniAppProxy') }}</label>
-                  <select v-model="action.miniAppProxyId" class="form-select">
-                    <option value="">{{ t('jobs.custom.miniAppProxyJob') }}</option>
-                    <option value="direct">{{ t('jobs.custom.miniAppProxyDirect') }}</option>
-                    <option v-for="p in proxiesList" :key="p.id" :value="p.id">{{ p.name }}</option>
-                  </select>
-                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppProxyHint') }}</div>
+                  <ProxyPicker
+                    v-model="action.miniAppProxyId"
+                    :pool="action.miniAppProxyPool"
+                    :proxies="proxiesList"
+                    :label="t('jobs.custom.labelMiniAppProxy')"
+                    :blank-label="t('jobs.custom.miniAppProxyJob')"
+                    :hint="t('jobs.custom.miniAppProxyHint')"
+                    allow-direct
+                  />
                 </div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
                   <label class="form-checkbox-label">
@@ -1206,6 +1211,8 @@ import MiniAppStepsEditor from '../components/MiniAppStepsEditor.vue';
 import RowControls from '../components/RowControls.vue';
 import { webStepsFromConfig, webStepsToConfig, type WebStepForm } from '../composables/webSteps';
 import { appButtonsOf } from '../composables/miniAppSteps';
+import { proxyFields } from '../composables/proxyPick';
+import ProxyPicker from '../components/ProxyPicker.vue';
 import ManualBrowser from '../components/ManualBrowser.vue';
 import {
   onBulkTaskFinished,
@@ -1248,6 +1255,8 @@ type CustomActionForm = {
   /** open_mini_app: pinned browser proxy id, 'direct', or '' for the job proxy */
   miniAppProxyId: string;
   miniAppTryAllProxies: boolean;
+  /** Ids a 'random' pick draws from; empty draws from the whole list */
+  miniAppProxyPool: string[];
   profileId: string;
   /** Mini App actions: keep what the app stored last run instead of signing in afresh */
   keepAppSession: boolean;
@@ -1387,27 +1396,35 @@ const linkedTemplate = computed(() => templates.value.find(t => t.id === form.te
 
 // Proxy override for a template-linked job: blank follows the template's own choice
 const jobProxyId = ref('');
+// Ids a 'random' override draws from; empty draws from the whole list
+const jobProxyPool = ref<string[]>([]);
 
-/** The proxy id stored in a job or template config, '' when there is none. */
-function readConfigProxyId(raw: string | null | undefined): string {
-  if (!raw) return '';
+/** The proxy a job or template config picked: '' and an empty pool when it picked none. */
+function readConfigProxy(raw: string | null | undefined): { proxyId: string; pool: string[] } {
+  const none = { proxyId: '', pool: [] };
+  if (!raw) return none;
   try {
-    let c = JSON.parse(raw) as { proxyId?: string } | string;
-    if (typeof c === 'string') c = JSON.parse(c) as { proxyId?: string };
-    return typeof c?.proxyId === 'string' ? c.proxyId : '';
-  } catch { return ''; }
+    let c = JSON.parse(raw) as { proxyId?: string; proxyPool?: string[] } | string;
+    if (typeof c === 'string') c = JSON.parse(c) as { proxyId?: string; proxyPool?: string[] };
+    return {
+      proxyId: typeof c?.proxyId === 'string' ? c.proxyId : '',
+      pool: Array.isArray(c?.proxyPool) ? [...c.proxyPool] : [],
+    };
+  } catch { return none; }
 }
 
 // Named in the "follow template" option so the inherited exit is visible without
 // opening the template
 const templateProxyName = computed(() => {
-  const id = readConfigProxyId(linkedTemplate.value?.config);
-  return id ? (proxiesList.value.find(p => p.id === id)?.name ?? id) : '';
+  const id = readConfigProxy(linkedTemplate.value?.config).proxyId;
+  if (!id) return '';
+  if (id === 'random') return t('jobs.proxyRandom');
+  return proxiesList.value.find(p => p.id === id)?.name ?? id;
 });
 
 /** Config fragment carrying this job's proxy override, empty when it follows the template. */
-function proxyOverride(): { proxyId?: string } {
-  return form.templateId && jobProxyId.value ? { proxyId: jobProxyId.value } : {};
+function proxyOverride(): { proxyId?: string; proxyPool?: string[] } {
+  return form.templateId ? proxyFields(jobProxyId.value, jobProxyPool.value) : {};
 }
 
 // "Run every days" accepts a single number (7) or a range (7-15). The range is
@@ -1583,11 +1600,12 @@ function onJobTypeChange() {
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
   jobProxyId.value = '';
+  jobProxyPool.value = [];
   setCmdState(''); setBtnState('');
 }
 
 function defaultAction(): CustomActionForm {
-  return { type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '', contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到', buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0, captchaLength: '', successContains: '', failContains: '', contact: '', groupId: '', checkMembership: false, verifyButton: '', verifyWaitMs: 30000, verifyMentionsMe: false, channelId: '', appSteps: [], miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppTryAllProxies: true, profileId: '', keepAppSession: false, url: '', webSteps: [] };
+  return { type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '', contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到', buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0, captchaLength: '', successContains: '', failContains: '', contact: '', groupId: '', checkMembership: false, verifyButton: '', verifyWaitMs: 30000, verifyMentionsMe: false, channelId: '', appSteps: [], miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppProxyPool: [], miniAppTryAllProxies: true, profileId: '', keepAppSession: false, url: '', webSteps: [] };
 }
 
 function addAction() {
@@ -1688,10 +1706,10 @@ function applyTemplate(tpl: JobTemplate) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha' as const, maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group' as const, groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000, verifyMentionsMe: a.verifyMentionsMe ?? false };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel' as const, channelId: a.channelId, checkMembership: a.checkMembership ?? false };
-          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
             let buttonDropdown: string, buttonCustom = '', buttonAiHint = '';
@@ -1755,6 +1773,7 @@ function applyTemplate(tpl: JobTemplate) {
 function onTemplateChange() {
   const tpl = linkedTemplate.value;
   jobProxyId.value = '';
+  jobProxyPool.value = [];
   if (!tpl) return;
   applyTemplate(tpl);
   // accountId is job-specific — never reset it when a template is assigned
@@ -1881,6 +1900,7 @@ function openAdd() {
   checkinSuccessContains.value = '';
   checkinFailContains.value = '';
   jobProxyId.value = '';
+  jobProxyPool.value = [];
   setCmdState(''); setBtnState('');
   formError.value = '';
   showForm.value = true;
@@ -1889,7 +1909,9 @@ function openAdd() {
 function openEdit(j: Job) {
   void loadSettings();
   editTarget.value = j;
-  jobProxyId.value = j.templateId ? readConfigProxyId(j.config) : '';
+  const jobProxy = j.templateId ? readConfigProxy(j.config) : { proxyId: '', pool: [] };
+  jobProxyId.value = jobProxy.proxyId;
+  jobProxyPool.value = jobProxy.pool;
   Object.assign(form, {
     name: j.name, accountId: j.accountId, jobType: j.jobType,
     botUsername: j.botUsername, scheduleWindowStart: j.scheduleWindowStart,
@@ -1976,10 +1998,10 @@ function openEdit(j: Job) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha', maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group', groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000, verifyMentionsMe: a.verifyMentionsMe ?? false };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel', channelId: a.channelId, checkMembership: a.checkMembership ?? false };
-          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app', contact: a.contact ?? '', button: a.button ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url', url: a.url ?? '', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_url') return { ...base, type: 'open_url', url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app', contact: a.contact ?? '', button: a.button ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url', url: a.url ?? '', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_url') return { ...base, type: 'open_url', url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppProxyPool: [...(a.proxyPool ?? [])], miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
             let buttonDropdown: string, buttonCustom = '', buttonAiHint = '';
@@ -2074,12 +2096,12 @@ function handleEmbyHostPaste(event: ClipboardEvent) {
   if (portStr) embyServer.port = Number(portStr);
 }
 
-function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | CheckinConfig | { proxyId: string } | null {
+function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | CheckinConfig | { proxyId?: string; proxyPool?: string[] } | null {
   if (form.jobType === 'autoreg') {
     // Template-linked jobs take their whole config from the template, bar a proxy override
     if (form.templateId) {
       const override = proxyOverride();
-      return override.proxyId ? { proxyId: override.proxyId } : null;
+      return override.proxyId ? override : null;
     }
     const cfg: AutoregConfig = {
       groupId: autoregCfg.groupId,
@@ -2178,7 +2200,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
-          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...proxyFields(a.miniAppProxyId, a.miniAppProxyPool),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
           ...(a.profileId ? { profileId: a.profileId } : {}),
           ...(a.keepAppSession ? { keepAppSession: true } : {}),
@@ -2192,7 +2214,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
-          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...proxyFields(a.miniAppProxyId, a.miniAppProxyPool),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
           ...(a.profileId ? { profileId: a.profileId } : {}),
           ...(a.keepAppSession ? { keepAppSession: true } : {}),
@@ -2205,7 +2227,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
-          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...proxyFields(a.miniAppProxyId, a.miniAppProxyPool),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
           ...(a.profileId ? { profileId: a.profileId } : {}),
           ...(a.keepAppSession ? { keepAppSession: true } : {}),
@@ -2219,7 +2241,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
           ...(a.miniAppMaxWaitMs > 0 ? { maxWaitMs: a.miniAppMaxWaitMs } : {}),
-          ...(a.miniAppProxyId ? { proxyId: a.miniAppProxyId } : {}),
+          ...proxyFields(a.miniAppProxyId, a.miniAppProxyPool),
           ...(a.miniAppTryAllProxies ? {} : { tryAllProxies: false }),
           ...(a.profileId ? { profileId: a.profileId } : {}),
         };
@@ -2298,24 +2320,32 @@ async function saveJob() {
     // Verify server reachability and credentials before saving the job
     if (form.jobType === 'embywatch') {
       let proxyId: string | undefined;
+      let proxyPool: string[] | undefined;
       let userAgent: string | undefined = embyCfg.userAgent || undefined;
       let ignoreSslErrors = embyCfg.ignoreSslErrors;
       if (form.templateId && linkedTemplate.value?.config) {
         try {
-          const c = JSON.parse(linkedTemplate.value.config) as { proxyId?: string; userAgent?: string; ignoreSslErrors?: boolean };
+          const c = JSON.parse(linkedTemplate.value.config) as { proxyId?: string; proxyPool?: string[]; userAgent?: string; ignoreSslErrors?: boolean };
           proxyId = c.proxyId;
+          proxyPool = c.proxyPool;
           userAgent = c.userAgent || undefined;
           ignoreSslErrors = c.ignoreSslErrors === true;
         } catch { /* ignore bad template config */ }
       }
-      // The job's own exit, when it overrides the template's
-      proxyId = proxyOverride().proxyId ?? proxyId;
+      // The job's own exit, when it overrides the template's. A random pick is drawn by the
+      // test itself, so the test only proves the pool is reachable, not which exit a run takes
+      const override = proxyOverride();
+      if (override.proxyId) {
+        proxyId = override.proxyId;
+        proxyPool = override.proxyPool;
+      }
       const test = await jobsApi.testEmby({
         serverUrl: form.botUsername,
         username: embyCfg.username,
         password: embyCfg.password,
         ...(userAgent ? { userAgent } : {}),
         ...(proxyId ? { proxyId } : {}),
+        ...(proxyPool?.length ? { proxyPool } : {}),
         ...(ignoreSslErrors ? { ignoreSslErrors: true } : {}),
       });
       if (!test.ok) {

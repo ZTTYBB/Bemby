@@ -197,6 +197,65 @@ describe('runJob proxy resolution — custom', () => {
     // 9th argument (index 8) is the browser proxy URL
     expect(vi.mocked(runCustom).mock.calls[0][8]).toBe('socks5://custom.proxy:1080');
   });
+
+  // An action left on "follow the job's proxy" has to know the job drew its exit, and from
+  // which pool, or its own candidate list would wander outside it
+  it('hands the job proxy pick down, so an action can draw from the same pool', async () => {
+    vi.mocked(runCustom).mockResolvedValue({ steps: [] } as any);
+    vi.mocked(db.prepare).mockReturnValue({ get: vi.fn().mockReturnValue({ value: ALL_PROXIES }) } as any);
+
+    const job = makeCheckinJob({
+      jobType: 'custom',
+      config: JSON.stringify({ actions: [], proxyId: 'random', proxyPool: ['job-px'] }),
+    });
+    await runJob(job, makeAccount());
+
+    expect(vi.mocked(runCustom).mock.calls[0][8]).toBe('socks5://job.proxy:1080');
+    // 11th argument (index 10) is the job's own pick
+    expect(vi.mocked(runCustom).mock.calls[0][10]).toEqual({ proxyId: 'random', pool: ['job-px'] });
+  });
+});
+
+describe('runJob proxy resolution — a random pick', () => {
+  it('draws the browser exit from the pool the job named', async () => {
+    vi.mocked(runCheckin).mockResolvedValue(stubLog as any);
+    vi.mocked(db.prepare).mockReturnValue({ get: vi.fn().mockReturnValue({ value: ALL_PROXIES }) } as any);
+
+    const job = makeCheckinJob({ config: JSON.stringify({ proxyId: 'random', proxyPool: ['tpl-px'] }) });
+    await runJob(job, makeAccount());
+
+    expect(vi.mocked(runCheckin).mock.calls[0][14]).toBe('socks5://tpl.proxy:1080');
+    // Telegram still exits where the session was made, drawn exit or not
+    expect(vi.mocked(runCheckin).mock.calls[0][10]).toBeUndefined();
+  });
+
+  it('draws from the whole list when the job named no pool', async () => {
+    vi.mocked(runCheckin).mockResolvedValue(stubLog as any);
+    vi.mocked(db.prepare).mockReturnValue({ get: vi.fn().mockReturnValue({ value: ALL_PROXIES }) } as any);
+
+    await runJob(makeCheckinJob({ config: JSON.stringify({ proxyId: 'random' }) }), makeAccount());
+
+    expect([
+      'socks5://acct.proxy:1080',
+      'socks5://job.proxy:1080',
+      'socks5://tpl.proxy:1080',
+    ]).toContain(vi.mocked(runCheckin).mock.calls[0][14]);
+  });
+
+  it('follows the template when the job itself picked nothing', async () => {
+    vi.mocked(runCheckin).mockResolvedValue(stubLog as any);
+    vi.mocked(db.prepare).mockImplementation((sql: string) => ({
+      get: vi.fn().mockImplementation(() =>
+        sql.includes('job_templates')
+          ? { config: JSON.stringify({ proxyId: 'random', proxyPool: ['job-px'] }) }
+          : { value: ALL_PROXIES },
+      ),
+    } as any));
+
+    await runJob(makeCheckinJob({ templateId: 42 }), makeAccount());
+
+    expect(vi.mocked(runCheckin).mock.calls[0][14]).toBe('socks5://job.proxy:1080');
+  });
 });
 
 // ---------------------------------------------------------------------------

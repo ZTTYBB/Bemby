@@ -139,8 +139,10 @@ router.get("/", (req, res) => {
 router.post("/test-emby", async (req, res) => {
   const { serverUrl, username, password, userAgent, proxyId } =
     req.body as Record<string, string | undefined>;
-  const ignoreSslErrors = (req.body as { ignoreSslErrors?: boolean })
-    .ignoreSslErrors;
+  const { ignoreSslErrors, proxyPool } = req.body as {
+    ignoreSslErrors?: boolean;
+    proxyPool?: string[];
+  };
   if (!serverUrl || !username || !password) {
     res
       .status(400)
@@ -158,6 +160,7 @@ router.post("/test-emby", async (req, res) => {
     password,
     userAgent,
     proxyId,
+    proxyPool: Array.isArray(proxyPool) ? proxyPool : undefined,
     ignoreSslErrors: ignoreSslErrors === true,
   });
   res.json(result);

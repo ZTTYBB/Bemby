@@ -15,47 +15,39 @@ import { runCustom, CustomJobError, type CustomJobLog } from "./custom";
 import { runAutoreg, AutoregJobError, type AutoregJobLog } from "./autoreg";
 import { db } from "../db/database";
 import { resolveAppClientParams } from "../tg/appClient";
-
-/** Looks a proxy id up in the settings list. */
-function proxyUrlById(proxyId: string | null | undefined): string | undefined {
-  if (!proxyId) return undefined;
-  try {
-    const row = db
-      .prepare("SELECT value FROM settings WHERE key = ?")
-      .get("proxies") as { value: string } | undefined;
-    if (!row?.value) return undefined;
-    const list = JSON.parse(row.value) as Array<{ id: string; url: string }>;
-    return list.find((p) => p.id === proxyId)?.url;
-  } catch {
-    return undefined;
-  }
-}
+import { proxyUrlFor, type ProxyChoice } from "../tg/proxyProviders";
 
 /**
- * The proxy id a job or its template carries, if any. The job's own config wins, so a
- * template-linked job can pick its own exit; with none set it follows the template.
+ * The proxy a job or its template picked, if any. The job's own config wins, so a
+ * template-linked job can pick its own exit; with none set it follows the template. A
+ * `random` pick carries the pool it draws from, so the draw happens against the same list
+ * wherever it is made.
  */
-function configProxyId(
+export function configProxyChoice(
   jobConfig: string | null,
   templateId: number | null | undefined,
-): string | undefined {
-  const readProxyId = (raw: string | null | undefined): string | undefined => {
-    if (!raw) return undefined;
+): ProxyChoice {
+  const readChoice = (raw: string | null | undefined): ProxyChoice => {
+    if (!raw) return {};
     try {
       let c = JSON.parse(raw);
       if (typeof c === "string") c = JSON.parse(c);
-      return c?.proxyId || undefined;
+      if (!c?.proxyId) return {};
+      return {
+        proxyId: c.proxyId as string,
+        pool: Array.isArray(c.proxyPool) ? (c.proxyPool as string[]) : undefined,
+      };
     } catch {
-      return undefined;
+      return {};
     }
   };
 
-  const fromJob = readProxyId(jobConfig);
-  if (fromJob || !templateId) return fromJob;
+  const fromJob = readChoice(jobConfig);
+  if (fromJob.proxyId || !templateId) return fromJob;
   const row = db
     .prepare("SELECT config FROM job_templates WHERE id = ?")
     .get(templateId) as { config: string | null } | undefined;
-  return readProxyId(row?.config);
+  return readChoice(row?.config);
 }
 
 /**
@@ -69,7 +61,7 @@ function resolveTgProxyUrl(
   accountProxyId: string | null | undefined,
   job: Job,
 ): string | undefined {
-  const configured = configProxyId(job.config, job.templateId);
+  const configured = configProxyChoice(job.config, job.templateId).proxyId;
   if (configured && configured !== accountProxyId) {
     console.warn(
       `[runner] Job "${job.name}": proxy "${configured}" is set on the job/template but the ` +
@@ -78,19 +70,24 @@ function resolveTgProxyUrl(
         `route Telegram through it.`,
     );
   }
-  return proxyUrlById(accountProxyId);
+  return proxyUrlFor(accountProxyId);
 }
 
 /**
  * Exit for the browser side (Cloudflare challenges, Mini Apps): the job's or template's
  * proxy when one is set, otherwise the account's. Cloudflare judges the exit IP, so this
  * one is meant to be chosen per job, and the browser holds no Telegram session.
+ *
+ * A `random` pick is drawn here, so each run goes out through a different exit of the pool.
  */
 export function resolveWebProxyUrl(
   accountProxyId: string | null | undefined,
   job: Job,
 ): string | undefined {
-  return proxyUrlById(configProxyId(job.config, job.templateId) ?? accountProxyId);
+  const choice = configProxyChoice(job.config, job.templateId);
+  return choice.proxyId
+    ? proxyUrlFor(choice.proxyId, choice.pool)
+    : proxyUrlFor(accountProxyId);
 }
 
 export function parseTgProxy(
@@ -259,6 +256,7 @@ export async function runJob(
             customDevice,
             customProxyUrl,
             cfRun,
+            configProxyChoice(job.config, job.templateId),
           );
           detailLogs?.push(customLog);
           break;

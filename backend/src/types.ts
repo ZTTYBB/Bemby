@@ -190,8 +190,10 @@ export type CustomAction =
        * Blank/0 uses the built-in default (5 minutes).
        */
       maxWaitMs?: number;
-      /** Proxy the browser exits through: a proxy list id, or "direct" for none. Blank uses the job's proxy. */
+      /** Proxy the browser exits through: a proxy list id, "direct" for none, or "random" for a draw from `proxyPool`. Blank uses the job's. */
       proxyId?: string;
+      /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+      proxyPool?: string[];
       /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
       tryAllProxies?: boolean;
       /**
@@ -232,8 +234,10 @@ export type CustomAction =
       maxRetries?: number;
       /** Budget for the browser part of this action. Blank/0 uses the default. */
       maxWaitMs?: number;
-      /** Proxy the browser exits through: a proxy list id, or "direct". Blank uses the job's. */
+      /** Proxy the browser exits through: a proxy list id, "direct" for none, or "random" for a draw from `proxyPool`. Blank uses the job's. */
       proxyId?: string;
+      /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+      proxyPool?: string[];
       /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
       tryAllProxies?: boolean;
       /**
@@ -273,8 +277,10 @@ export type CustomAction =
       maxRetries?: number;
       /** Budget for the browser part of this action. Blank/0 uses the default. */
       maxWaitMs?: number;
-      /** Proxy the browser exits through: a proxy list id, or "direct". Blank uses the job's. */
+      /** Proxy the browser exits through: a proxy list id, "direct" for none, or "random" for a draw from `proxyPool`. Blank uses the job's. */
       proxyId?: string;
+      /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+      proxyPool?: string[];
       /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
       tryAllProxies?: boolean;
       /**
@@ -311,8 +317,10 @@ export type CustomAction =
        * Blank/0 uses the built-in default (5 minutes).
        */
       maxWaitMs?: number;
-      /** Proxy the browser exits through: a proxy list id, or "direct" for none. Blank uses the job's proxy. */
+      /** Proxy the browser exits through: a proxy list id, "direct" for none, or "random" for a draw from `proxyPool`. Blank uses the job's. */
       proxyId?: string;
+      /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+      proxyPool?: string[];
       /** Work through the rest of the proxy list when an exit is refused. Defaults to true. */
       tryAllProxies?: boolean;
       /**
@@ -830,13 +838,19 @@ export type WebStepLog = {
 export type CustomConfig = {
   actions: CustomAction[];
   maxRetries?: number;
+  /** Exit for the browser side: a proxy list id, or "random" for a draw from `proxyPool`. */
   proxyId?: string;
+  /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+  proxyPool?: string[];
 };
 
 export type CheckinConfig = {
   successContains?: string;
   failContains?: string;
+  /** Exit for the browser side: a proxy list id, or "random" for a draw from `proxyPool`. */
   proxyId?: string;
+  /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+  proxyPool?: string[];
 };
 
 export type AutoregConfig = {
@@ -892,7 +906,10 @@ export type AutoregConfig = {
   successContains?: string;
   /** Reply text marking a code as used/invalid, e.g. 已被使用|错误. Multiple keywords separated by | */
   failContains?: string;
+  /** Exit for the browser side: a proxy list id, or "random" for a draw from `proxyPool`. */
   proxyId?: string;
+  /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+  proxyPool?: string[];
 };
 
 export type CustomStepLog = {
@@ -992,8 +1009,10 @@ export type EmbywatchConfig = {
   userAgent?: string;
   /** Mark the episode as watched after playback completes. Defaults to true. */
   markWatched?: boolean;
-  /** ID of a proxy from the settings proxies list, if any. */
+  /** ID of a proxy from the settings list, or "random" for a draw from `proxyPool`. */
   proxyId?: string;
+  /** Ids a "random" pick draws from. Empty draws from the whole proxy list. */
+  proxyPool?: string[];
   /**
    * Verify the media is actually streamable (disk online) before reporting
    * playback, so an offline file is never reported as watched. Defaults to true.

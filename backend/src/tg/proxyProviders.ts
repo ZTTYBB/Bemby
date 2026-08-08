@@ -365,6 +365,56 @@ export function rememberCfProxy(host: string, proxyId: string): void {
 export const CF_PROXY_DIRECT = "direct";
 
 /**
+ * Value of a pinned proxy id meaning "draw one from the pool". The draw happens where the
+ * exit is needed, so each run gets its own, and a pool that is left empty means the whole
+ * proxy list.
+ */
+export const CF_PROXY_RANDOM = "random";
+
+/** A picked exit: an id from the proxy list, `direct`, or `random` drawing from `pool`. */
+export type ProxyChoice = { proxyId?: string; pool?: string[] };
+
+/**
+ * The proxies a random pick may draw from: the ones `poolIds` names, or every proxy in the
+ * list when it names none. An entry with no url is not an exit and is left out.
+ */
+export function randomProxyPool(poolIds?: string[]): BembyProxy[] {
+  const usable = readProxies().filter((p) => p.url);
+  if (!poolIds?.length) return usable;
+  const wanted = new Set(poolIds);
+  return usable.filter((p) => wanted.has(p.id));
+}
+
+/** One proxy drawn from that pool, or undefined when the pool holds none. */
+export function pickRandomProxy(poolIds?: string[]): BembyProxy | undefined {
+  const pool = randomProxyPool(poolIds);
+  return pool.length ? pool[Math.floor(Math.random() * pool.length)] : undefined;
+}
+
+/**
+ * The exit url a picker's value stands for: an id from the proxy list, `random` for a draw
+ * from `poolIds`, and no url at all for `direct`, a blank, or an id that has since gone.
+ */
+export function proxyUrlFor(
+  proxyId: string | null | undefined,
+  poolIds?: string[],
+): string | undefined {
+  if (!proxyId || proxyId === CF_PROXY_DIRECT) return undefined;
+  if (proxyId === CF_PROXY_RANDOM) return pickRandomProxy(poolIds)?.url;
+  return readProxies().find((p) => p.id === proxyId)?.url;
+}
+
+/** Fisher-Yates over a copy: the caller's list is a setting, not ours to reorder. */
+function shuffled<T>(list: T[]): T[] {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/**
  * Ordered proxies for a Cloudflare attempt, with the caller's own preference honoured:
  * `proxyId` pins one exit from the pool (or `direct` for none) instead of the job's
  * proxy, and `tryAll: false` keeps the run to that single exit rather than working
@@ -374,12 +424,18 @@ export const CF_PROXY_DIRECT = "direct";
  * `exclude` drops exits that have already had their turn, so a retry moves further into
  * the pool instead of cycling the same few -- which is also what lets a pool bigger than
  * one attempt's window (imported proxies sit after the manually added ones) be covered.
+ *
+ * `random` is a pinned exit drawn rather than named: the draw settles which exit leads, and
+ * the same draw orders the fall-through, so a refusal moves on inside `proxyPool` instead of
+ * wandering into exits that were deliberately left out of it.
  */
 export function cfProxyCandidatesFor(opts: {
   primaryUrl?: string;
   host?: string;
-  /** Pool id of a pinned proxy, or `direct`. */
+  /** Pool id of a pinned proxy, `direct`, or `random`. */
   proxyId?: string;
+  /** Ids a `random` pick draws from. Empty draws from the whole list. */
+  proxyPool?: string[];
   /** Fall through the rest of the pool when an exit is refused. Defaults to true. */
   tryAll?: boolean;
   max?: number;
@@ -389,6 +445,17 @@ export function cfProxyCandidatesFor(opts: {
   const { primaryUrl, host, proxyId, tryAll = true, max = candidateCount() } = opts;
   const pool = readProxies();
   const tried = new Set(opts.exclude ?? []);
+  const cap = Math.max(1, Math.min(max, cfMaxCandidates()));
+
+  // A draw with nothing to draw from (no proxies, or a pool naming only proxies that have
+  // since gone) falls through to the job's own exit rather than failing the action
+  const drawn = proxyId === CF_PROXY_RANDOM ? shuffled(randomProxyPool(opts.proxyPool)) : [];
+  if (drawn.length) {
+    const offered = drawn
+      .filter((p) => !tried.has(p.id))
+      .map((p) => ({ id: p.id, label: p.name, url: p.url }));
+    return dedupeByExit(tryAll ? offered : offered.slice(0, 1)).slice(0, cap);
+  }
 
   const pinned = proxyId && proxyId !== CF_PROXY_DIRECT ? pool.find((p) => p.id === proxyId) : undefined;
   const primary: ProxyCandidate = pinned
@@ -416,15 +483,18 @@ export function cfProxyCandidatesFor(opts: {
       ? [rest[winnerIndex], ...head, ...rest.filter((_, i) => i !== winnerIndex)]
       : [...head, ...rest];
 
+  return dedupeByExit(ordered).slice(0, cap);
+}
+
+/** One candidate per exit: the same url reached under two ids is still the same IP. */
+function dedupeByExit(list: ProxyCandidate[]): ProxyCandidate[] {
   const seen = new Set<string>();
-  return ordered
-    .filter((c) => {
-      const key = c.url ?? "direct";
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, Math.max(1, Math.min(max, cfMaxCandidates())));
+  return list.filter((c) => {
+    const key = c.url ?? "direct";
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function readProxies(): BembyProxy[] {

@@ -1,0 +1,138 @@
+// The "random" pick: a draw settles which exit leads, the pool bounds what may be drawn, and
+// the same draw orders the fall-through. Settings live in SQLite; a map stands in for the table.
+const store = new Map<string, string>();
+vi.mock("../db/database", () => ({
+  db: {
+    prepare: (sql: string) => ({
+      get: (key: string) =>
+        sql.includes("SELECT") && store.has(key) ? { value: store.get(key) } : undefined,
+      run: (key: string, value: string) => store.set(key, value),
+      all: () => [],
+    }),
+  },
+}));
+
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  cfProxyCandidatesFor,
+  pickRandomProxy,
+  proxyUrlFor,
+  randomProxyPool,
+  rememberCfProxy,
+} from "../tg/proxyProviders";
+
+const POOL = [
+  { id: "p1", name: "Proxy One", url: "http://u:p@1.1.1.1:8080" },
+  { id: "p2", name: "Proxy Two", url: "http://u:p@2.2.2.2:8080" },
+  { id: "p3", name: "Proxy Three", url: "http://u:p@3.3.3.3:8080" },
+];
+
+beforeEach(() => {
+  store.clear();
+  store.set("proxies", JSON.stringify(POOL));
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("randomProxyPool", () => {
+  it("draws from the whole list when no pool is named", () => {
+    expect(randomProxyPool().map((p) => p.id)).toEqual(["p1", "p2", "p3"]);
+    expect(randomProxyPool([]).map((p) => p.id)).toEqual(["p1", "p2", "p3"]);
+  });
+
+  it("keeps to the ids named, ignoring ones that have since gone", () => {
+    expect(randomProxyPool(["p3", "p1", "gone"]).map((p) => p.id)).toEqual(["p1", "p3"]);
+  });
+
+  it("leaves out an entry with no url: there is nothing to exit through", () => {
+    store.set("proxies", JSON.stringify([...POOL, { id: "p4", name: "Blank", url: "" }]));
+    expect(randomProxyPool().map((p) => p.id)).not.toContain("p4");
+  });
+});
+
+describe("pickRandomProxy", () => {
+  it("picks from inside the pool", () => {
+    for (let i = 0; i < 20; i++) {
+      expect(["p1", "p3"]).toContain(pickRandomProxy(["p1", "p3"])!.id);
+    }
+  });
+
+  it("has nothing to pick when the pool names only proxies that are gone", () => {
+    expect(pickRandomProxy(["gone"])).toBeUndefined();
+  });
+});
+
+describe("proxyUrlFor", () => {
+  it("resolves an id, direct and a blank", () => {
+    expect(proxyUrlFor("p2")).toBe(POOL[1].url);
+    expect(proxyUrlFor("direct")).toBeUndefined();
+    expect(proxyUrlFor("")).toBeUndefined();
+    expect(proxyUrlFor(null)).toBeUndefined();
+  });
+
+  it("draws a url from the pool for random", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    expect(proxyUrlFor("random", ["p3", "p2"])).toBe(POOL[1].url);
+  });
+
+  it("has no url when a random draw comes up empty", () => {
+    store.set("proxies", "[]");
+    expect(proxyUrlFor("random")).toBeUndefined();
+  });
+});
+
+describe("cfProxyCandidatesFor with a random pick", () => {
+  it("offers only the pool, so a refusal never falls through to an exit left out of it", () => {
+    const got = cfProxyCandidatesFor({ primaryUrl: POOL[0].url, proxyId: "random", proxyPool: ["p2", "p3"] });
+    expect(got.map((c) => c.id).sort()).toEqual(["p2", "p3"]);
+  });
+
+  it("draws from the whole list when the pool is empty", () => {
+    const got = cfProxyCandidatesFor({ proxyId: "random" });
+    expect(got.map((c) => c.id).sort()).toEqual(["p1", "p2", "p3"]);
+  });
+
+  it("keeps to the single drawn exit when the pool is not to be tried", () => {
+    const got = cfProxyCandidatesFor({ proxyId: "random", proxyPool: ["p1", "p3"], tryAll: false });
+    expect(got).toHaveLength(1);
+    expect(["p1", "p3"]).toContain(got[0].id);
+  });
+
+  it("does not offer an exit already refused this run", () => {
+    const got = cfProxyCandidatesFor({ proxyId: "random", proxyPool: ["p1", "p2"], exclude: ["p1"] });
+    expect(got.map((c) => c.id)).toEqual(["p2"]);
+  });
+
+  it("draws a different order across runs rather than always leading with the same exit", () => {
+    const leads = new Set<string>();
+    for (let i = 0; i < 60; i++) {
+      leads.add(cfProxyCandidatesFor({ proxyId: "random" })[0].id);
+    }
+    expect(leads.size).toBeGreaterThan(1);
+  });
+
+  it("ignores the host's last winner: a draw is a deliberate pick, like a pinned exit", () => {
+    rememberCfProxy("app.example.com", "p3");
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const got = cfProxyCandidatesFor({ proxyId: "random", host: "app.example.com", tryAll: false });
+    expect(got[0].id).not.toBe("p3");
+  });
+
+  it("falls back to the job's own exit when there is nothing to draw from", () => {
+    store.set("proxies", "[]");
+    const got = cfProxyCandidatesFor({ primaryUrl: "http://u:p@9.9.9.9:8080", proxyId: "random" });
+    expect(got).toEqual([{ id: "job", label: "job proxy", url: "http://u:p@9.9.9.9:8080" }]);
+  });
+
+  it("offers one candidate per exit, so the same url under two ids is not tried twice", () => {
+    store.set(
+      "proxies",
+      JSON.stringify([...POOL, { id: "dup", name: "Same as One", url: POOL[0].url }]),
+    );
+    const got = cfProxyCandidatesFor({ proxyId: "random" });
+    expect(got).toHaveLength(3);
+    expect(got.filter((c) => c.url === POOL[0].url)).toHaveLength(1);
+  });
+});
