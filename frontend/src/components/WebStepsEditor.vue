@@ -109,6 +109,86 @@
         </div>
       </div>
 
+      <!-- Read a code out of a mailbox: the password is a secret's name, never the value -->
+      <div v-if="s.type === 'web_email_code'">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelEmail") }}</label>
+            <input
+              v-model.trim="s.email"
+              class="form-input"
+              :placeholder="t('jobs.web.emailPlaceholder')"
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelCodeVarName") }}</label>
+            <input
+              v-model.trim="s.varName"
+              class="form-input"
+              :placeholder="t('jobs.web.codeVarNamePlaceholder')"
+            />
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.emailCodeHint") }}
+        </div>
+
+        <div class="form-group" style="margin-top: 8px">
+          <label class="form-label">{{ t("jobs.web.labelAppPassword") }}</label>
+          <input
+            v-model.trim="s.appPassword"
+            class="form-input"
+            :placeholder="t('jobs.web.appPasswordPlaceholder')"
+          />
+          <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+            {{ t("jobs.web.appPasswordHint") }}
+          </div>
+        </div>
+
+        <div class="form-row" style="margin-top: 8px">
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelFromContains") }}</label>
+            <input
+              v-model.trim="s.fromContains"
+              class="form-input"
+              :placeholder="t('jobs.web.fromContainsPlaceholder')"
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelSubjectContains") }}</label>
+            <input
+              v-model.trim="s.subjectContains"
+              class="form-input"
+              :placeholder="t('jobs.web.subjectContainsPlaceholder')"
+            />
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.mailFilterHint") }}
+        </div>
+
+        <div class="form-row" style="margin-top: 8px">
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelCodePattern") }}</label>
+            <input
+              v-model.trim="s.pattern"
+              class="form-input"
+              :placeholder="t('jobs.web.codePatternPlaceholder')"
+            />
+            <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+              {{ t("jobs.web.codePatternHint") }}
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelMailWait") }}</label>
+            <input v-model.number="s.waitMs" class="form-input" type="number" min="0" step="1000" />
+            <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+              {{ t("jobs.web.mailWaitHint") }}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div v-if="s.type === 'web_notify'">
         <label class="form-label">{{ t("jobs.web.labelNotifyText") }}</label>
         <textarea

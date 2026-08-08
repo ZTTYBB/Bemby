@@ -307,6 +307,16 @@ runOnce("timezone-follow-default", () => {
   db.exec("UPDATE job_templates SET timezone = ''");
 });
 
+// User-defined secrets, referenced from a config as {name}. Values are only ever read on
+// this side: nothing hands one back to the browser, and the panel is shown the names alone.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS secrets (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
 // AI supplier + model tables
 db.exec(`
   CREATE TABLE IF NOT EXISTS ai_suppliers (

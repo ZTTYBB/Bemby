@@ -15,6 +15,7 @@ import {
   type ProxyCandidate,
 } from "../tg/proxyProviders";
 import { expandCommand } from "./placeholders";
+import { EMAIL_CODE_WAIT_MS } from "./emailCode";
 import type { WebStep, WebStepLog } from "../types";
 
 // Completes a checkin that hands back a URL behind Cloudflare's "I am not a bot"
@@ -297,6 +298,8 @@ export type LoadOptions = {
   markUsed?: (varName: string, value: string) => void;
   /** Sends a message mid-run, for the `web_notify` sub-step. */
   notify?: (text: string, target?: string) => Promise<void>;
+  /** Reads a code out of a mailbox, for the `web_email_code` sub-step. */
+  emailCode?: WebStepHooks["emailCode"];
   /**
    * Which browser profile -- so which cookie jar and which device -- to run on. The name is
    * a template (`{ip}`, `{ip}-{jobId}`, `{tgId}`, free text); blank takes the configured
@@ -2308,6 +2311,20 @@ export type WebStepHooks = {
    */
   notify?: (text: string, target?: string) => Promise<void>;
   /**
+   * Reads a verification code out of a mailbox, for a `web_email_code` step. Supplied by the
+   * caller for the same reason as the rest: the app password is a stored secret, which this
+   * side does not read. Absent, the step says so rather than passing silently.
+   */
+  emailCode?: (query: {
+    email: string;
+    /** As written in the config, e.g. `{gmailAppPassword}`; resolved by the caller. */
+    appPasswordRef: string;
+    fromContains?: string;
+    subjectContains?: string;
+    pattern?: string;
+    waitMs: number;
+  }) => Promise<{ code: string; subject: string; from: string; mailbox?: string } | null>;
+  /**
    * Works any Cloudflare challenge standing on the page right now, or returns null when
    * there is none. Called after a `web_goto`, since a fresh navigation is exactly what
    * raises one mid-run.
@@ -2873,6 +2890,50 @@ async function runStepList(
           break;
         }
 
+        case "web_email_code": {
+          if (!hooks.emailCode)
+            throw new Error("reading a mailbox is not available here");
+          const name = step.varName.trim();
+          if (!name) throw new Error("no name given to hold the code under");
+          const email = fillVars(step.email ?? "", run.current).trim();
+          if (!email) throw new Error("no mailbox given to read");
+          // Only a `{name}` reference: a password pasted in here would sit in the config,
+          // in every export of it, and in anything the template is shared with -- which is
+          // the whole reason the value lives in the secrets store instead
+          const ref = (step.appPassword ?? "").trim();
+          if (!ref) throw new Error("no app-password secret named");
+          if (!/^\{\w+\}$/.test(ref))
+            throw new Error(
+              "the app password must name a secret, e.g. `{gmailAppPassword}`, not the password itself",
+            );
+
+          // Capped at what is left of the action's budget: waiting for mail past the
+          // deadline only means the steps after it have no time to use the code
+          const asked = step.waitMs && step.waitMs > 0 ? step.waitMs : EMAIL_CODE_WAIT_MS;
+          const waitMs = Math.max(0, Math.min(asked, msLeft(deadline)));
+          const found = await hooks.emailCode({
+            email,
+            appPasswordRef: ref,
+            fromContains: fillVars(step.fromContains ?? "", run.current).trim() || undefined,
+            subjectContains:
+              fillVars(step.subjectContains ?? "", run.current).trim() || undefined,
+            pattern: step.pattern?.trim() || undefined,
+            waitMs,
+          });
+          if (!found)
+            throw new Error(
+              `no matching mail reached ${email} within ${Math.round(waitMs / 1000)}s`,
+            );
+          run.current.set(name, found.code);
+          // Where it was found is worth saying when it was not the inbox: a code the
+          // provider files as spam is the difference between a step that is slow and one
+          // that is about to stop working
+          const where =
+            found.mailbox && found.mailbox !== "INBOX" ? `, in ${found.mailbox}` : "";
+          log.outcome = `{${name}} = ${found.code} (from ${oneLine(found.from)}${where})`;
+          break;
+        }
+
         case "web_if": {
           if (nest.depth >= MAX_WEB_DEPTH)
             throw new Error(`conditions cannot be nested more than ${MAX_WEB_DEPTH} deep`);
@@ -3393,6 +3454,8 @@ function describeWebStep(step: WebStep, run: WebStepRun): string {
       return `Send a notification${step.target?.trim() ? ` to ${fill(step.target)}` : ""}`;
     case "web_read":
       return `Read \`${fill(step.selector)}\` into {${step.varName}}`;
+    case "web_email_code":
+      return `Read a code from ${fill(step.email ?? "")} into {${step.varName}}`;
     case "web_repeat":
       return `Repeat ${step.steps?.length ?? 0} step(s) ${Math.floor(step.times || 0)} time(s)`;
     case "web_for_each":
@@ -3989,6 +4052,7 @@ async function attemptLoad(
         usedValues: opts.usedValues,
         markUsed: opts.markUsed,
         notify: opts.notify,
+        emailCode: opts.emailCode,
         // A `web_goto` lands on a page that may have its own challenge, and the solver for
         // this attempt is right here -- so the steps work it through rather than the run
         // only noticing once every step has already failed against an interstitial

@@ -811,6 +811,7 @@ const zh = {
         web_pick: "挑选一个元素（存为变量）",
         web_collect: "收集全部元素（存为列表）",
         web_read: "读取页面文字（存为变量）",
+        web_email_code: "从邮箱获取验证码（存为变量）",
         web_set: "设置变量（自定义取值）",
         web_notify: "发送通知（Telegram 机器人）",
         web_if: "条件分支（if / else）",
@@ -825,6 +826,27 @@ const zh = {
         ai_web_button: "AI 点击按钮（看截图判断）",
         ai_web_click_xy: "AI 点击坐标（看截图定位像素）",
       },
+      labelEmail: "Gmail 邮箱地址",
+      emailPlaceholder: "me@gmail.com",
+      labelCodeVarName: "变量名",
+      codeVarNamePlaceholder: "code",
+      emailCodeHint:
+        "在页面上点击“发送验证码”之后使用：通过 IMAP 读取该 Gmail 邮箱，把取到的验证码存为变量，后续步骤用 {变量名} 输入。收件箱与垃圾邮件都会检查；目前仅支持 Gmail，只会查看最近两分钟内到达的邮件",
+      labelAppPassword: "应用专用密码（密钥名）",
+      appPasswordPlaceholder: "{gmailAppPassword}",
+      appPasswordHint:
+        "这里填的是密钥名称，不是密码本身。请先在【设置 → 密钥】中添加，例如名称 gmailAppPassword，值为 Gmail 的应用专用密码；密码只保存在后端，任务配置与导出内容中都只有名称",
+      labelFromContains: "发件人包含",
+      fromContainsPlaceholder: "no-reply@example.com",
+      labelSubjectContains: "主题包含",
+      subjectContainsPlaceholder: "验证码",
+      mailFilterHint: "留空则不筛选。收件箱里同时有多封邮件时，用它们锁定目标邮件（不区分大小写）",
+      labelCodePattern: "验证码正则",
+      codePatternPlaceholder: "验证码是 (\\d{6})",
+      codePatternHint:
+        "有捕获组时取第 1 组，否则取整个匹配。留空则查找 4-8 位数字，优先取“code / 验证码”附近的那个",
+      labelMailWait: "等待邮件（毫秒）",
+      mailWaitHint: "邮件到达前的等待上限，留空/0 表示 120 秒。不会超过本动作剩余的浏览器时间",
       loopStepsLabel: "循环内的步骤",
       loopStepsHint:
         "每轮按顺序执行一遍。典型用法：跳转到首页 → 挑选一个还没回复过的帖子 → 打开该帖 → 读取正文 → AI 回复 → 返回。任一字段中的 {变量名} 会被替换为本轮挑中的值；某一轮失败不影响其余轮次（见下方开关）。循环内不能再嵌套循环",
@@ -1252,6 +1274,15 @@ const zh = {
     jobsTemplateEditSection: "模版快捷编辑",
     jobsTemplateEditToggle: "在任务列表中直接编辑模版",
     jobsTemplateEditHint: "开启后，使用模版的任务会多出一个模版编辑按钮，无需切换到模版页面。注意：修改会影响所有使用该模版的任务",
+    secretsSection: "密钥",
+    secretsHint:
+      "供任务配置引用的键值对。在配置中写 {名称} 即可引用，例如网页步骤“从邮箱获取验证码”里的应用专用密码",
+    secretsEmpty: "还没有添加密钥",
+    secretNamePlaceholder: "gmailAppPassword",
+    secretValuePlaceholder: "密钥内容（仅保存在后端）",
+    secretsWriteOnlyHint:
+      "密钥内容只写不读：后端不会把它返回给前端，页面也无法查看或导出。已存在的名称会被覆盖",
+    secretSaved: "已保存 {name}",
     accountDisplaySection: "TG 账号显示",
     accountDisplayToggle: "以「Bemby 账户名 - TG 账号名」显示账户",
     accountDisplayHint:
@@ -2497,6 +2528,7 @@ const en: typeof zh = {
         web_pick: "Pick one element (into a name)",
         web_collect: "Collect every element (into a list)",
         web_read: "Read text off the page (into a name)",
+        web_email_code: "Get a verification code from email (into a name)",
         web_set: "Set a variable (a value of your own)",
         web_notify: "Send a notification (Telegram bot)",
         web_if: "Branch on the page (if / else)",
@@ -2511,6 +2543,27 @@ const en: typeof zh = {
         ai_web_button: "AI presses a control (from a screenshot)",
         ai_web_click_xy: "AI clicks a position (pixels from a screenshot)",
       },
+      labelEmail: "Gmail address",
+      emailPlaceholder: "me@gmail.com",
+      labelCodeVarName: "Name",
+      codeVarNamePlaceholder: "code",
+      emailCodeHint:
+        "Runs after the page has been asked to send a code: reads the Gmail mailbox over IMAP and holds the code under the name, for a later step to type as {name}. Both the inbox and the junk folder are checked. Gmail only for now, and only mail that arrived in the last two minutes counts",
+      labelAppPassword: "App password (secret name)",
+      appPasswordPlaceholder: "{gmailAppPassword}",
+      appPasswordHint:
+        "The name of a secret, not the password itself. Add it under Settings → Secrets (e.g. gmailAppPassword holding your Gmail app password); the value stays on the backend, and the job config and any export carry the name alone",
+      labelFromContains: "Sender contains",
+      fromContainsPlaceholder: "no-reply@example.com",
+      labelSubjectContains: "Subject contains",
+      subjectContainsPlaceholder: "verification code",
+      mailFilterHint: "Blank matches any mail. Use these to single out the right message when the inbox has more than one. Case is ignored",
+      labelCodePattern: "Code expression",
+      codePatternPlaceholder: "your code is (\\d{6})",
+      codePatternHint:
+        "Capture group 1 is kept when there is one, otherwise the whole match. Blank looks for a 4-8 digit run, preferring one next to the word \"code\"",
+      labelMailWait: "Wait for the mail (ms)",
+      mailWaitHint: "How long to keep looking. Blank/0 waits 120s, and never past the browser time left for this action",
       loopStepsLabel: "Steps inside the loop",
       loopStepsHint:
         "Run in order once per round. The usual shape: go to the front page, pick a post not yet replied to, open it, read it, have the AI reply, come back. {name} in any field stands for what the round picked. A round that fails does not take the others with it (see the switch below). Loops do not nest",
@@ -2953,6 +3006,15 @@ const en: typeof zh = {
     jobsTemplateEditSection: "Template quick edit",
     jobsTemplateEditToggle: "Edit templates straight from the jobs list",
     jobsTemplateEditHint: "Adds a template-edit button to jobs that use a template, so there is no need to switch to the templates page. Note that an edit affects every job on that template",
+    secretsSection: "Secrets",
+    secretsHint:
+      "Named values a job config can refer to as {name} -- the app password the \"Get a verification code from email\" page step needs, for one",
+    secretsEmpty: "No secrets stored yet",
+    secretNamePlaceholder: "gmailAppPassword",
+    secretValuePlaceholder: "Value (kept on the backend)",
+    secretsWriteOnlyHint:
+      "Write-only: the backend never sends a value back, so nothing here can display or export one. Saving an existing name replaces its value",
+    secretSaved: "Saved {name}",
     accountDisplaySection: "TG account display",
     accountDisplayToggle: "Show accounts as {Bemby name} - {TG name}",
     accountDisplayHint:

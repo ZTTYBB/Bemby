@@ -43,6 +43,8 @@ import { cfMaxCandidates, cfProxyCandidatesFor, rememberCfProxy } from "../tg/pr
 import { cfTuning } from "./cfTuning";
 import { rememberWebValue, usedWebValues } from "./webMemory";
 import { getNotifyConfig, sendBotNotify } from "./notify";
+import { EMAIL_CODE_LOOKBACK_MS, fetchGmailCode } from "./emailCode";
+import { fillSecrets, missingSecretRefs } from "../db/secrets";
 import { displayForRun } from "./runDisplays";
 
 import type { CustomAction, CustomConfig, CustomStepLog } from "../types";
@@ -2797,6 +2799,28 @@ export async function runCustom(
                         "no chat to send to: set a default in Settings, or name one on the step",
                       );
                     await sendBotNotify(cfg.botToken, chat, text);
+                  },
+                  // And once more for a `web_email_code` step: the app password is a stored
+                  // secret, which the browser side neither reads nor is handed. The config
+                  // carries the name of one (`{gmailAppPassword}`) and it is resolved here.
+                  emailCode: async (q) => {
+                    const missing = missingSecretRefs(q.appPasswordRef);
+                    if (missing.length)
+                      throw new Error(
+                        `no secret is stored under ${missing.map((m) => `{${m}}`).join(", ")} (see Settings)`,
+                      );
+                    const appPassword = fillSecrets(q.appPasswordRef).trim();
+                    if (!appPassword) throw new Error("the app-password secret is empty");
+                    return fetchGmailCode({
+                      email: q.email,
+                      appPassword,
+                      fromContains: q.fromContains,
+                      subjectContains: q.subjectContains,
+                      pattern: q.pattern,
+                      waitMs: q.waitMs,
+                      // Look a little before now, so a code sent by an earlier step counts
+                      sinceMs: Date.now() - EMAIL_CODE_LOOKBACK_MS,
+                    });
                   },
                   // Which cookie jar this runs on, and so what a login here belongs to
                   profile: { template: action.profileId, vars: cfProfileVars(cfRun) },

@@ -584,6 +584,23 @@ export type WebStep =
       target?: string;
     }
   | { type: "web_read"; selector: string; varName: string; maxChars?: number }
+  | {
+      /**
+       * Read a verification code out of a Gmail mailbox and hold it under a name. The app
+       * password is not stored here: `appPassword` names a secret set in Settings, written
+       * {gmailAppPassword}, and only the backend ever reads its value.
+       */
+      type: "web_email_code";
+      email: string;
+      appPassword: string;
+      varName: string;
+      fromContains?: string;
+      subjectContains?: string;
+      /** Expression pulling the code out; group 1 wins. Blank looks for a digit run. */
+      pattern?: string;
+      /** How long to wait for the mail. Blank/0 waits 120s. */
+      waitMs?: number;
+    }
   | { type: "web_goto"; url: string; waitMs?: number }
   | { type: "web_back"; waitMs?: number }
   | {
@@ -1473,6 +1490,19 @@ export type CfProfileImportResult = {
   skipped: Array<{ name: string; reason: string }>;
   error?: string;
   profiles?: CfProfile[];
+};
+
+/** A stored secret, as the panel is allowed to see it: the name and when it was written. */
+export type SecretSummary = { key: string; updatedAt: string | null };
+
+// Values are write-only by design -- there is no endpoint that reads one back, so nothing
+// here can display or export a secret.
+export const secretsApi = {
+  list: () => api.get<SecretSummary[]>("/secrets").then((r) => r.data),
+  save: (key: string, value: string) =>
+    api.put<{ ok: boolean }>(`/secrets/${encodeURIComponent(key)}`, { value }).then((r) => r.data),
+  remove: (key: string) =>
+    api.delete<{ ok: boolean }>(`/secrets/${encodeURIComponent(key)}`).then((r) => r.data),
 };
 
 export const settingsApi = {

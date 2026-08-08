@@ -1032,6 +1032,65 @@
         </div>
       </div>
 
+      <!-- Secrets: named values a job config refers to as {name} -->
+      <div class="card s-col-6">
+        <div class="card-body">
+          <div class="card-section-title">{{ t("settings.secretsSection") }}</div>
+          <p style="font-size: 12px; color: #888; margin: 0 0 12px">
+            {{ t("settings.secretsHint") }}
+          </p>
+
+          <div v-if="secretsMsg" class="success-msg">{{ secretsMsg }}</div>
+          <div v-if="secretsError" class="error-msg">{{ secretsError }}</div>
+
+          <div v-for="sec in secrets" :key="sec.key" class="ua-preset-row">
+            <span class="ua-preset-name">{{ sec.key }}</span>
+            <span class="ua-preset-value">{{ "{" + sec.key + "}" }}</span>
+            <span style="font-size: 11px; color: #aaa">
+              {{ sec.updatedAt ? fmtSecretDate(sec.updatedAt) : "" }}
+            </span>
+            <button
+              class="btn btn-sm btn-danger btn-icon"
+              :title="t('common.delete')"
+              @click="removeSecret(sec.key)"
+            >
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+          <p v-if="!secrets.length" style="font-size: 12px; color: #aaa; margin: 0 0 12px">
+            {{ t("settings.secretsEmpty") }}
+          </p>
+
+          <!-- Same form adds and replaces: an existing name is simply written over -->
+          <div class="proxy-row" style="margin-top: 10px">
+            <input
+              v-model.trim="secretForm.key"
+              class="form-input"
+              style="flex: 0 0 180px"
+              :placeholder="t('settings.secretNamePlaceholder')"
+            />
+            <input
+              v-model="secretForm.value"
+              class="form-input"
+              style="flex: 1"
+              type="password"
+              autocomplete="new-password"
+              :placeholder="t('settings.secretValuePlaceholder')"
+            />
+            <button
+              class="btn btn-sm btn-primary"
+              :disabled="secretSaving || !secretForm.key || !secretForm.value"
+              @click="saveSecret"
+            >
+              {{ secretSaving ? t("common.saving") : t("common.save") }}
+            </button>
+          </div>
+          <p style="font-size: 12px; color: #888; margin: 6px 0 0">
+            {{ t("settings.secretsWriteOnlyHint") }}
+          </p>
+        </div>
+      </div>
+
       <!-- Proxies -->
       <div class="card s-col-6">
         <div class="card-body">
@@ -2230,6 +2289,7 @@ import {
   authApi,
   dataApi,
   aiSuppliersApi,
+  secretsApi,
   statusApi,
   type CfBrowserTest,
   type CfBrowserTestRun,
@@ -2249,6 +2309,7 @@ import type {
   CfKeyCheck,
   NotifyBotInfo,
   NotifyBotChat,
+  SecretSummary,
 } from "../api/client";
 import { t } from "../i18n";
 import { proxySupportsTelegram } from "../utils/proxy";
@@ -3349,6 +3410,7 @@ async function loadMemory() {
 
 onMounted(async () => {
   loadMemory();
+  void loadSecrets();
   await loadProviders();
   try {
     const s = await settingsApi.get();
@@ -3756,6 +3818,56 @@ async function saveSchedulePage() {
     setSchedulePageSeparate(scheduleSeparatePageSetting.value);
   } catch {
     scheduleSeparatePageSetting.value = !scheduleSeparatePageSetting.value;
+  }
+}
+
+// ── Secrets ────────────────────────────────────────────────────────────────────
+// Names only: the list endpoint never returns a value, and neither does anything else.
+const secrets = ref<SecretSummary[]>([]);
+const secretForm = reactive({ key: "", value: "" });
+const secretSaving = ref(false);
+const secretsMsg = ref("");
+const secretsError = ref("");
+
+function fmtSecretDate(iso: string): string {
+  // SQLite writes UTC without a zone, which the browser would otherwise read as local
+  const d = new Date(iso.includes("T") ? iso : `${iso.replace(" ", "T")}Z`);
+  return isNaN(d.getTime()) ? "" : d.toLocaleDateString();
+}
+
+async function loadSecrets() {
+  try {
+    secrets.value = await secretsApi.list();
+  } catch {
+    secrets.value = [];
+  }
+}
+
+async function saveSecret() {
+  secretsMsg.value = "";
+  secretsError.value = "";
+  secretSaving.value = true;
+  try {
+    await secretsApi.save(secretForm.key, secretForm.value);
+    secretsMsg.value = t("settings.secretSaved").replace("{name}", secretForm.key);
+    secretForm.key = "";
+    secretForm.value = "";
+    await loadSecrets();
+  } catch (err: any) {
+    secretsError.value = err.response?.data?.error ?? t("settings.saveFailed");
+  } finally {
+    secretSaving.value = false;
+  }
+}
+
+async function removeSecret(key: string) {
+  secretsMsg.value = "";
+  secretsError.value = "";
+  try {
+    await secretsApi.remove(key);
+    await loadSecrets();
+  } catch (err: any) {
+    secretsError.value = err.response?.data?.error ?? t("settings.saveFailed");
   }
 }
 

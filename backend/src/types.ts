@@ -561,6 +561,40 @@ export type WebStep =
     }
   | {
       /**
+       * Read a verification code out of a mailbox and hold it under a name, for a later
+       * `web_input` to type as `{name}`. What a signup that emails a code needs: without it
+       * the run stops at the confirmation box.
+       *
+       * Gmail only, over IMAP with an app password. The inbox and the junk folder are both
+       * read, since a code from an unfamiliar domain is often filtered as spam.
+       *
+       * The password is not part of the config:
+       * `appPassword` names a secret set in Settings, written `{gmailAppPassword}`, and the
+       * value is read on the backend where the step runs. Nothing hands it to the browser,
+       * and a shared or exported template carries the name alone.
+       */
+      type: "web_email_code";
+      /** The mailbox to read, e.g. me@gmail.com. */
+      email: string;
+      /** Secret holding the Gmail app password, written `{gmailAppPassword}`. */
+      appPassword: string;
+      /** Name to hold the code under. */
+      varName: string;
+      /** Only consider mail whose sender contains this. Case is ignored. */
+      fromContains?: string;
+      /** Only consider mail whose subject contains this. Case is ignored. */
+      subjectContains?: string;
+      /**
+       * Expression pulling the code out of the message, e.g. `Your code is (\d{6})`. Capture
+       * group 1 is kept when there is one, otherwise the whole match. Blank looks for a 4-8
+       * digit run, preferring one next to the word "code".
+       */
+      pattern?: string;
+      /** How long to wait for the mail to arrive. Blank/0 waits 120s. */
+      waitMs?: number;
+    }
+  | {
+      /**
        * Send a message through the notification bot from the middle of a run, with `{name}`
        * standing for whatever the steps have gathered. What makes a signup worth running:
        * the account it just made is of no use if nothing says what the credentials were.

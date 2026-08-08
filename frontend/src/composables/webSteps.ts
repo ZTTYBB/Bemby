@@ -37,6 +37,14 @@ export type WebStepForm = {
   value: string;
   /** web_notify: the chat to send to; blank uses the configured one. */
   target: string;
+  /** web_email_code: the mailbox to read. */
+  email: string;
+  /** web_email_code: the secret holding the app password, e.g. `{gmailAppPassword}`. */
+  appPassword: string;
+  /** web_email_code: only consider mail from a sender containing this. */
+  fromContains: string;
+  /** web_email_code: only consider mail whose subject contains this. */
+  subjectContains: string;
   /** web_hold: how long to keep the pointer down. */
   holdMs: number;
   /** web_drag: what to drop it on; blank drags by the offset below. */
@@ -74,6 +82,7 @@ export const WEB_STEP_TYPES: WebStepType[] = [
   "web_pick",
   "web_collect",
   "web_read",
+  "web_email_code",
   "web_set",
   "web_notify",
   "web_if",
@@ -137,6 +146,10 @@ export function defaultWebStep(): WebStepForm {
     option: "",
     value: "",
     target: "",
+    email: "",
+    appPassword: "{gmailAppPassword}",
+    fromContains: "",
+    subjectContains: "",
     holdMs: 1000,
     toSelector: "",
     dragX: 260,
@@ -212,6 +225,17 @@ export function webStepToConfig(s: WebStepForm): WebStep {
       };
     case "web_set":
       return { type: "web_set", varName: s.varName.trim(), value: s.value };
+    case "web_email_code":
+      return {
+        type: "web_email_code",
+        email: s.email.trim(),
+        appPassword: s.appPassword.trim(),
+        varName: s.varName.trim(),
+        ...(s.fromContains.trim() ? { fromContains: s.fromContains.trim() } : {}),
+        ...(s.subjectContains.trim() ? { subjectContains: s.subjectContains.trim() } : {}),
+        ...(s.pattern.trim() ? { pattern: s.pattern.trim() } : {}),
+        ...(s.waitMs > 0 ? { waitMs: s.waitMs } : {}),
+      };
     case "web_notify":
       return {
         type: "web_notify",
@@ -351,6 +375,18 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
       };
     case "web_set":
       return { ...base, type: s.type, varName: s.varName, value: s.value };
+    case "web_email_code":
+      return {
+        ...base,
+        type: s.type,
+        email: s.email,
+        appPassword: s.appPassword,
+        varName: s.varName,
+        fromContains: s.fromContains ?? "",
+        subjectContains: s.subjectContains ?? "",
+        pattern: s.pattern ?? "",
+        waitMs: s.waitMs ?? 120000,
+      };
     case "web_notify":
       return { ...base, type: s.type, text: s.text, target: s.target ?? "" };
     case "web_read":
