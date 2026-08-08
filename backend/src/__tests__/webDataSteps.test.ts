@@ -2,16 +2,12 @@
 // saving what the round gathered, and removing what is no longer wanted. Driven against a
 // stand-in page and the real store, so the interesting part is covered -- that a value written
 // by one step is there for the next run to read, which is the point of the store.
+//
+// The database is a throwaway one: under vitest db/database.ts refuses the working
+// directory's own file and makes a temp one, so the fixtures below clear tables that
+// belong to this run alone.
 
-import fs from "fs";
-import os from "os";
-import path from "path";
-
-// The real database module reads DB_PATH at import time
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bemby-web-data-test-"));
-process.env.DB_PATH = path.join(tmpDir, "test.db");
-
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { Page } from "playwright-core";
 import { db } from "../db/database";
 import { CF_TUNING_KEY } from "../jobs/cfTuning";
@@ -57,10 +53,6 @@ beforeEach(() => {
     CF_TUNING_KEY,
     JSON.stringify({ inAppStepMs: 0, inAppSettleMs: 0, readyPollMs: 100 }),
   );
-});
-
-afterAll(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 function seedExample(): void {

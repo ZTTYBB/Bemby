@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import { fuzzyScore } from "./fuzzy";
 import {
   ENCRYPTED_ACCOUNT_COLUMNS,
@@ -9,8 +10,30 @@ import {
   isSecretEncryptionEnabled,
 } from "./secretColumns";
 
-const DB_PATH =
-  process.env.DB_PATH ?? path.resolve(process.cwd(), "data/bemby.db");
+/**
+ * Where the database lives: DB_PATH when it is set, otherwise `data/bemby.db` beside the
+ * working directory.
+ *
+ * Under vitest that working-directory database is off limits and a throwaway one is used
+ * instead -- a test whose fixture clears a table would otherwise clear the development data.
+ * That is not a hypothetical: a test file cannot point the path at its own file by assigning
+ * DB_PATH in its body, because ES imports are hoisted and this module has already opened its
+ * database by the time that line runs, so the fallback is what a test actually gets. Once
+ * that stopped being obvious, `DELETE FROM data_folders` in a fixture deleted real folders.
+ *
+ * A test that does want a file of its own (through `vi.hoisted`, which runs early enough) is
+ * still given it: only the working-directory path is refused.
+ */
+function resolveDbPath(): string {
+  const workingDir = path.resolve(process.cwd(), "data/bemby.db");
+  const chosen = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : workingDir;
+  if (process.env.VITEST && chosen === workingDir) {
+    return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bemby-test-db-")), "test.db");
+  }
+  return chosen;
+}
+
+const DB_PATH = resolveDbPath();
 
 const dir = path.dirname(DB_PATH);
 if (!fs.existsSync(dir)) {

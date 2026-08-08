@@ -2,16 +2,12 @@
 // the save and delete steps do to a stored value, and the folder/record CRUD the Data view
 // drives. The path arithmetic is the part worth pinning down -- writing one field of a record
 // must leave the rest of it alone, which is the whole reason a path exists.
+//
+// The database is a throwaway one: under vitest db/database.ts refuses the working
+// directory's own file and makes a temp one, so the fixtures below clear tables that
+// belong to this run alone.
 
-import fs from "fs";
-import os from "os";
-import path from "path";
-
-// The real database module reads DB_PATH at import time
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bemby-data-store-test-"));
-process.env.DB_PATH = path.join(tmpDir, "test.db");
-
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "../db/database";
 import {
   createFolder,
@@ -43,10 +39,6 @@ beforeEach(() => {
   db.prepare("DELETE FROM data_records").run();
   db.prepare("DELETE FROM data_folders").run();
   setEnabled(true);
-});
-
-afterAll(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 /** The shape the feature was designed around: a folder with one record holding a JSON value. */
