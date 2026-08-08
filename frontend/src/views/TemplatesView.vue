@@ -320,6 +320,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { templatesApi, settingsApi, accountsApi, tgClientApi, jobsApi, type JobTemplate, type Settings, type Proxy, type AvailableAccount } from '../api/client';
 import { t } from '../i18n';
+import { copyText } from '../utils/clipboard';
 import { usePersistedRef } from '../composables/usePersistedRef';
 import { debounce } from '../composables/useDebounce';
 import { formatAccountLabel, loadAccountDisplaySetting } from '../composables/accountDisplay';
@@ -708,29 +709,15 @@ function shareShape(tpl: JobTemplate): Record<string, unknown> {
 async function shareSelected() {
   const selected = templates.value.filter(t => selectedIds.value.includes(t.id));
   const text = JSON.stringify(selected.map(shareShape), null, 2);
-  await writeClipboard(text);
+  // The tick says the text is on the clipboard, so it waits on that actually happening
+  if (!(await copyText(text))) { showToast(t('common.copyFailed')); return; }
   sharedMulti.value = true;
   setTimeout(() => { sharedMulti.value = false; }, 1500);
 }
 
-async function writeClipboard(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const el = document.createElement('textarea');
-    el.value = text;
-    el.style.position = 'fixed';
-    el.style.opacity = '0';
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand('copy');
-    document.body.removeChild(el);
-  }
-}
-
 async function shareTemplate(tpl: JobTemplate) {
   const text = JSON.stringify(shareShape(tpl), null, 2);
-  await writeClipboard(text);
+  if (!(await copyText(text))) { showToast(t('common.copyFailed')); return; }
   copiedTplId.value = tpl.id;
   setTimeout(() => { copiedTplId.value = null; }, 1500);
 }

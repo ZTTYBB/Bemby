@@ -977,19 +977,23 @@
             </p>
           </div>
 
-          <!-- The data store: its menu entry and its job steps -->
-          <div class="settings-subsection" style="margin-top: 28px">
-            {{ t("settings.dataStoreSection") }}
-          </div>
-          <div class="form-group">
-            <label class="form-check">
-              <input type="checkbox" v-model="dataStoreSetting" @change="saveDataStore" />
-              <span>{{ t("settings.dataStoreToggle") }}</span>
-            </label>
-            <p style="font-size: 12px; color: #888; margin: 4px 0 0 24px">
-              {{ t("settings.dataStoreHint") }}
-            </p>
-          </div>
+          <!-- The data store: its menu entry and its job steps. The whole section is absent
+               unless the server offers the feature (DATA_MANAGEMENT), so a panel that has no
+               use for it never asks the question -->
+          <template v-if="dataStoreAvailable">
+            <div class="settings-subsection" style="margin-top: 28px">
+              {{ t("settings.dataStoreSection") }}
+            </div>
+            <div class="form-group">
+              <label class="form-check">
+                <input type="checkbox" v-model="dataStoreSetting" @change="saveDataStore" />
+                <span>{{ t("settings.dataStoreToggle") }}</span>
+              </label>
+              <p style="font-size: 12px; color: #888; margin: 4px 0 0 24px">
+                {{ t("settings.dataStoreHint") }}
+              </p>
+            </div>
+          </template>
 
           <!-- TG account display -->
           <div class="settings-subsection" style="margin-top: 28px">
@@ -2337,7 +2341,12 @@ import { t } from "../i18n";
 import { proxySupportsTelegram } from "../utils/proxy";
 import { setAccountDisplayWithTgName } from "../composables/accountDisplay";
 import { setSchedulePageSeparate } from "../composables/schedulePage";
-import { setDataStoreEnabled } from "../composables/dataStore";
+import {
+  applyDataStoreSetting,
+  dataStoreAvailable,
+  dataStoreEnabled,
+  setDataStoreEnabled,
+} from "../composables/dataStore";
 import { setTemplateEditButton } from "../composables/templateEditButton";
 
 const timezones = [
@@ -3493,8 +3502,8 @@ onMounted(async () => {
     accountDisplayWithTgName.value = s.account_display_with_tg_name === "true";
     scheduleSeparatePageSetting.value = s.schedule_separate_page === "true";
     jobsTemplateEditButtonSetting.value = s.jobs_template_edit_button === "true";
-    dataStoreSetting.value = s.data_store_enabled === "true";
-    setDataStoreEnabled(dataStoreSetting.value);
+    applyDataStoreSetting(s);
+    dataStoreSetting.value = dataStoreEnabled.value;
     form.default_play_duration = Number(s.default_play_duration ?? 300);
     form.default_device_name = s.default_device_name ?? "Mac";
     form.ai_model = s.ai_model ?? "";

@@ -29,6 +29,10 @@ import {
   writeDataValue,
 } from "../db/dataStore";
 
+// The deployment-level gate. Unlike DB_PATH this is read when the check runs, not when the
+// module is imported, so setting it here is early enough.
+process.env.DATA_MANAGEMENT = "1";
+
 function setEnabled(on: boolean): void {
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('data_store_enabled', ?)").run(
     String(on),

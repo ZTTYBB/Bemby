@@ -71,8 +71,34 @@ export function dataRefText(folder: string, key: string, path = ""): string {
   return `{data${segment(folder)}${segment(key)}${tail}}`;
 }
 
-/** Whether the feature is switched on in Settings. Off means jobs cannot read or write it. */
+/**
+ * Whether this deployment offers the data store at all, set by DATA_MANAGEMENT ("1"/"true")
+ * the way bulk account management is set by BULK_ACCOUNT_MANAGEMENT. Off is off for everyone:
+ * no menu entry, no Settings toggle, no data steps in the step editor and no API behind them,
+ * whatever the stored setting says. For a panel that has no use for the feature and is simpler
+ * without it.
+ */
+export function isDataManagementEnabled(): boolean {
+  const v = (process.env.DATA_MANAGEMENT ?? "").trim().toLowerCase();
+  return v === "1" || v === "true";
+}
+
+/**
+ * Why the store is unavailable, naming the switch that would change it -- the deployment's env
+ * var or the Settings toggle. A step that fails should say which one to go and look at.
+ */
+export function dataStoreOffReason(): string {
+  return isDataManagementEnabled()
+    ? "Data is turned off in Settings"
+    : "Data is not enabled on this server (set DATA_MANAGEMENT=1)";
+}
+
+/**
+ * Whether the feature is switched on: offered by the deployment, and on in Settings. Off means
+ * jobs cannot read or write it.
+ */
 export function isDataStoreEnabled(): boolean {
+  if (!isDataManagementEnabled()) return false;
   try {
     const row = db
       .prepare("SELECT value FROM settings WHERE key = 'data_store_enabled'")

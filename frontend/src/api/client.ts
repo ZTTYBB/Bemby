@@ -1377,6 +1377,8 @@ export type Settings = {
   ai_key_configured?: string;
   /** Server-computed: "true" when bulk account management is enabled via the BULK_ACCOUNT_MANAGEMENT env var. */
   bulk_account_management?: string;
+  /** Server-computed: "true" when the data store is enabled via the DATA_MANAGEMENT env var. */
+  data_management?: string;
   ai_model: string;
   /** ai_models row id pinning the default model to an exact supplier. */
   ai_default_model_id?: string;

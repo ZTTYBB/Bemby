@@ -269,6 +269,7 @@ import {
   loadDataStoreSetting,
   setDataFolderNames,
 } from "../composables/dataStore";
+import { copyText } from "../utils/clipboard";
 
 // Folders and the records of the one in hand. A value is edited as the text of it: whether
 // `{"a":1}` is an object or a string is settled by the backend, so the panel does not have to
@@ -454,13 +455,12 @@ async function doDeleteRecord() {
 /** The reference a job writes to read this record, on the clipboard. */
 async function copyRef(record: DataRecord) {
   const folder = selectedFolder.value?.name ?? "";
-  try {
-    await navigator.clipboard.writeText(dataRefText(folder, record.key));
-    copiedId.value = record.id;
-    setTimeout(() => (copiedId.value = null), 1500);
-  } catch (err) {
-    reportError(err);
+  if (!(await copyText(dataRefText(folder, record.key)))) {
+    error.value = t("common.copyFailed");
+    return;
   }
+  copiedId.value = record.id;
+  setTimeout(() => (copiedId.value = null), 1500);
 }
 
 async function exportStore(folderId?: number) {

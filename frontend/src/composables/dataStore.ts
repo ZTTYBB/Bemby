@@ -5,6 +5,9 @@ import { dataStoreApi, settingsApi } from "../api/client";
 // offered in the step editor. Shared so App.vue's menu, the editors and Settings agree the
 // moment the toggle flips.
 const enabled = ref(false);
+// Whether the deployment offers the feature at all (DATA_MANAGEMENT on the server). Off hides
+// the Settings toggle too, so a panel that has no use for the store never mentions it.
+const available = ref(false);
 let loaded = false;
 
 /** Lazy-loads the setting once. Safe to call from any view's onMounted. */
@@ -12,16 +15,28 @@ export async function loadDataStoreSetting(): Promise<void> {
   if (loaded) return;
   loaded = true;
   try {
-    const s = await settingsApi.get();
-    enabled.value = s.data_store_enabled === "true";
+    applyDataStoreSetting(await settingsApi.get());
   } catch {
     loaded = false; // allow a later retry
   }
 }
 
+/**
+ * Takes both flags off a Settings payload, for a view that has just fetched one anyway. The
+ * deployment's flag governs: with the feature not offered, a stored `true` counts for nothing.
+ */
+export function applyDataStoreSetting(payload: {
+  data_management?: string;
+  data_store_enabled?: string;
+}): void {
+  available.value = payload.data_management === "true";
+  enabled.value = available.value && payload.data_store_enabled === "true";
+  loaded = true;
+}
+
 /** Applies the change straight away (called by Settings when the toggle flips). */
 export function setDataStoreEnabled(value: boolean): void {
-  enabled.value = value;
+  enabled.value = available.value && value;
   loaded = true;
 }
 
@@ -57,4 +72,8 @@ export function setDataFolderNames(names: string[]): void {
   namesLoaded = true;
 }
 
-export { enabled as dataStoreEnabled, folderNames as dataFolderNames };
+export {
+  enabled as dataStoreEnabled,
+  available as dataStoreAvailable,
+  folderNames as dataFolderNames,
+};

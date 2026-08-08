@@ -25,6 +25,7 @@ const zh = {
     edit: "编辑",
     duplicate: "复制",
     insertAfter: "在此后插入一步",
+    copyFailed: "复制失败：浏览器仅在 HTTPS 或 localhost 下开放剪贴板，请手动选中文本复制",
     moveUp: "上移",
     moveDown: "下移",
     delete: "删除",
@@ -1804,6 +1805,8 @@ const en: typeof zh = {
     edit: "Edit",
     duplicate: "Duplicate",
     insertAfter: "Insert one after this",
+    copyFailed:
+      "Could not copy: the browser only opens the clipboard on HTTPS or localhost. Select the text and copy it by hand.",
     moveUp: "Move up",
     moveDown: "Move down",
     delete: "Delete",

@@ -8,6 +8,7 @@ import {
   findFolderByName,
   getRecord,
   getRecordById,
+  dataStoreOffReason,
   isDataStoreEnabled,
   isValidDataName,
   listFolders,
@@ -23,10 +24,10 @@ import {
 
 const router = Router();
 
-/** Off in Settings means off everywhere, the panel included. */
+/** Off means off everywhere, the panel included, whichever switch turned it off. */
 router.use((_req, res, next) => {
   if (!isDataStoreEnabled()) {
-    res.status(403).json({ error: "Data is turned off in Settings", code: "DATA_DISABLED" });
+    res.status(403).json({ error: dataStoreOffReason(), code: "DATA_DISABLED" });
     return;
   }
   next();

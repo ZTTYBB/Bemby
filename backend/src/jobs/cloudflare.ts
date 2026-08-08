@@ -17,6 +17,7 @@ import {
 import { expandCommand } from "./placeholders";
 import {
   dataRefText,
+  dataStoreOffReason,
   deleteDataValue,
   isDataStoreEnabled,
   parseDataValue,
@@ -2439,7 +2440,7 @@ function dataTarget(
   step: { folder?: string; key?: string; path?: string },
   run: WebStepRun,
 ): { folder: string; key: string; path: string; label: string } {
-  if (!isDataStoreEnabled()) throw new Error("Data is turned off in Settings");
+  if (!isDataStoreEnabled()) throw new Error(dataStoreOffReason());
   const folder = fillVars(step.folder ?? "", run.current).trim();
   const key = fillVars(step.key ?? "", run.current).trim();
   const path = fillVars(step.path ?? "", run.current).trim();

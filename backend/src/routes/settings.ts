@@ -4,6 +4,7 @@ import { refreshScheduler, purgeOldLogs } from "../scheduler";
 import { SocksClient } from "socks";
 import { parseTgProxy } from "../jobs/runner";
 import { isBulkAccountManagementEnabled } from "../jobs/bulkAdd";
+import { isDataManagementEnabled } from "../db/dataStore";
 import {
   areCfFontsInstalled,
   cfFontsStatus,
@@ -237,6 +238,8 @@ function getClientSettings(): Record<string, string> {
   result.bulk_account_management = isBulkAccountManagementEnabled()
     ? "true"
     : "false";
+  // Same for the data store: off hides its menu entry, its Settings toggle and its job steps
+  result.data_management = isDataManagementEnabled() ? "true" : "false";
   // Whether the on-demand Cloudflare-solver browser is present, and which build
   result.cf_chromium_installed = isChromiumInstalled() ? "true" : "false";
   // x11vnc, which the hand-driven browser needs to show its screen. Installed on demand
@@ -300,6 +303,9 @@ router.put("/", (req, res) => {
   db.transaction(() => {
     for (const key of ALLOWED_KEYS) {
       if (!(key in updates)) continue;
+      // The data store's toggle is not there to be flipped on a panel whose deployment does
+      // not offer the feature: the toggle is hidden, so this is for a stale page or a script
+      if (key === "data_store_enabled" && !isDataManagementEnabled()) continue;
       // Skip if the client sent back the masked hash or bot token unchanged
       if (
         (key === "default_tg_api_hash" || key === NOTIFY_BOT_TOKEN_KEY) &&

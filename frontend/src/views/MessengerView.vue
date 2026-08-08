@@ -1763,6 +1763,7 @@ import {
 } from "../api/client";
 import { avatarCache, avatarQueue, avatarQueued, avatarFetching, avatarConcurrencyState, persistAvatarCache } from "../composables/avatarCache";
 import { t } from "../i18n";
+import { copyText } from "../utils/clipboard";
 import {
   formatAccountLabel,
   loadAccountDisplaySetting,
@@ -2824,17 +2825,8 @@ async function openProfile() {
 let copyToastTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function copyField(value: string) {
-  try {
-    await navigator.clipboard.writeText(value);
-  } catch {
-    const el = document.createElement("textarea");
-    el.value = value;
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand("copy");
-    document.body.removeChild(el);
-  }
-  copyToast.value = "Copied!";
+  const ok = await copyText(value);
+  copyToast.value = ok ? "Copied!" : t("common.copyFailed");
   if (copyToastTimer) clearTimeout(copyToastTimer);
   copyToastTimer = setTimeout(() => {
     copyToast.value = "";

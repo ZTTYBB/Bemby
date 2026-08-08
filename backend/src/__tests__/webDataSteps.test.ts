@@ -44,6 +44,10 @@ function fakePage() {
 
 const run = (page: Page, steps: WebStep[]) => runWebSteps(page, steps, Date.now() + 30_000, {});
 
+// The deployment-level gate. Unlike DB_PATH this is read when the check runs, not when the
+// module is imported, so setting it here is early enough.
+process.env.DATA_MANAGEMENT = "1";
+
 beforeEach(() => {
   db.prepare("DELETE FROM data_records").run();
   db.prepare("DELETE FROM data_folders").run();
