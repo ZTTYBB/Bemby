@@ -398,12 +398,12 @@ describe("web_set and web_notify", () => {
     const f = fakePage();
     const out = await run(f.page, [
       { type: "web_set", varName: "user", value: "sam" },
-      { type: "web_set", varName: "email", value: "{user}+{num:3}@outlook.com" },
+      { type: "web_set", varName: "email", value: "{user}+{num:3}@example.com" },
       { type: "web_input", selector: "#email", text: "{email}" },
     ]);
 
     expect(out.ok).toBe(true);
-    expect(f.calls.typed[0]).toMatch(/^sam\+\d{3}@outlook\.com$/);
+    expect(f.calls.typed[0]).toMatch(/^sam\+\d{3}@example\.com$/);
   });
 
   it("shows the value in the log, since remembering it is the point", async () => {
@@ -607,13 +607,13 @@ describe("placeholders in what a step types", () => {
   it("expands the random tokens in the text a field is filled with", async () => {
     const f = fakePage();
     const out = await run(f.page, [
-      { type: "web_input", selector: "#email", text: "{word:10}@outlook.com" },
+      { type: "web_input", selector: "#email", text: "{word:10}@example.com" },
     ]);
 
     expect(out.ok).toBe(true);
-    expect(f.calls.typed[0]).toMatch(/^[a-z]{10}@outlook\.com$/);
+    expect(f.calls.typed[0]).toMatch(/^[a-z]{10}@example\.com$/);
     // The log shows what was actually typed, not the template
-    expect(out.logs[0].outcome).toMatch(/@outlook\.com/);
+    expect(out.logs[0].outcome).toMatch(/@example\.com/);
   });
 
   it("expands them in an address a step opens", async () => {

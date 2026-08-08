@@ -10,7 +10,7 @@
         <span class="web-step-num">{{ i + 1 }}</span>
         <select v-model="s.type" class="form-select web-step-type">
           <option
-            v-for="ty in offeredTypes"
+            v-for="ty in typesFor(s.type)"
             :key="ty"
             :value="ty"
             :disabled="aiKeyMissing && AI_WEB_STEP_TYPES.includes(ty)"
@@ -118,6 +118,76 @@
         <div style="font-size: 11px; color: #aaa; margin-top: 3px">
           {{ t("jobs.web.setHint") }}
         </div>
+      </div>
+
+      <!-- The data store: which folder, which record, and which field of its value -->
+      <div v-if="DATA_WEB_STEP_TYPES.includes(s.type)">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelDataFolder") }}</label>
+            <input
+              v-model.trim="s.folder"
+              class="form-input"
+              :list="folderListId"
+              :placeholder="t('jobs.web.dataFolderPlaceholder')"
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelDataKey") }}</label>
+            <input
+              v-model.trim="s.recordKey"
+              class="form-input"
+              :placeholder="t('jobs.web.dataKeyPlaceholder')"
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelDataPath") }}</label>
+            <input
+              v-model.trim="s.path"
+              class="form-input"
+              :placeholder="t('jobs.web.dataPathPlaceholder')"
+            />
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.dataTargetHint") }}
+        </div>
+
+        <div v-if="s.type === 'web_data_read'" class="form-group" style="margin-top: 8px">
+          <label class="form-label">{{ t("jobs.web.labelVarName") }}</label>
+          <input
+            v-model.trim="s.varName"
+            class="form-input"
+            :placeholder="t('jobs.web.readNamePlaceholder')"
+          />
+          <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+            {{ t("jobs.web.dataReadHint") }}
+          </div>
+        </div>
+
+        <div v-if="s.type === 'web_data_save'" class="form-group" style="margin-top: 8px">
+          <label class="form-label">{{ t("jobs.web.labelDataValue") }}</label>
+          <textarea
+            v-model="s.value"
+            class="form-input"
+            rows="2"
+            style="resize: vertical"
+            :placeholder="t('jobs.web.dataValuePlaceholder')"
+          />
+          <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+            {{ t("jobs.web.dataSaveHint") }}
+          </div>
+        </div>
+
+        <template v-if="s.type !== 'web_data_save'">
+          <label class="form-checkbox-label" style="margin-top: 8px">
+            <input v-model="s.optional" type="checkbox" />
+            {{ t("jobs.web.labelDataOptional") }}
+          </label>
+          <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+            {{ t("jobs.web.dataOptionalHint") }}
+          </div>
+        </template>
       </div>
 
       <!-- Read a code out of a mailbox: the password is a secret's name, never the value -->
@@ -697,19 +767,30 @@
     <datalist :id="keyListId">
       <option v-for="k in COMMON_KEYS" :key="k" :value="k" />
     </datalist>
+
+    <!-- The folders the data store already holds, so a data step is not pointed at a typo -->
+    <datalist :id="folderListId">
+      <option v-for="f in dataFolderNames" :key="f" :value="f" />
+    </datalist>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, getCurrentInstance } from "vue";
+import { computed, getCurrentInstance, onMounted } from "vue";
 import { t } from "../i18n";
 import {
   AI_WEB_STEP_TYPES,
+  DATA_WEB_STEP_TYPES,
   defaultWebStep,
   offeredWebStepTypes,
   type WebStepForm,
   type WebStepType,
 } from "../composables/webSteps";
+import {
+  dataFolderNames,
+  dataStoreEnabled,
+  loadDataFolderNames,
+} from "../composables/dataStore";
 
 // The list is mutated in place: the parent holds it inside its own action form object, so
 // emitting a replacement would mean threading an update back through the action index.
@@ -726,7 +807,16 @@ const props = defineProps<{
   role?: "steps" | "loop" | "then" | "else";
 }>();
 
-const offeredTypes = computed(() => offeredWebStepTypes(props.depth ?? 0, props.inLoop ?? false));
+// Per step rather than once for the list: a step already saved as a data step keeps its own
+// type on offer even with the store switched off, so opening the form cannot rewrite it.
+function typesFor(current: WebStepType): WebStepType[] {
+  return offeredWebStepTypes(props.depth ?? 0, props.inLoop ?? false, {
+    dataEnabled: dataStoreEnabled.value,
+    keep: current,
+  });
+}
+
+onMounted(loadDataFolderNames);
 
 // Suggestions for the key field. Not the whole set -- any letter or digit is a key too, and
 // the field stays free text for those; these are the ones a page usually goes by. The backend
@@ -757,7 +847,9 @@ const COMMON_KEYS = [
 ];
 
 // One datalist per editor instance, so the recursion cannot mint the same id twice
-const keyListId = `web-keys-${getCurrentInstance()?.uid ?? 0}`;
+const instanceId = getCurrentInstance()?.uid ?? 0;
+const keyListId = `web-keys-${instanceId}`;
+const folderListId = `data-folders-${instanceId}`;
 
 const heading = computed(() => {
   switch (props.role) {

@@ -586,6 +586,39 @@ export type WebStep =
   | { type: "web_read"; selector: string; varName: string; maxChars?: number }
   | {
       /**
+       * Read a record out of the data store into a name. The same value is readable inline as
+       * {data.folder.key} in any text field; the step is what a job wants when the value has
+       * to reach a selector, or when the run should stop if nothing is stored.
+       */
+      type: "web_data_read";
+      folder: string;
+      key: string;
+      /** Field inside the record's value. Blank reads the whole record. */
+      path?: string;
+      varName: string;
+      /** Carry on with nothing stored, rather than failing the step. */
+      optional?: boolean;
+    }
+  | {
+      /** Write a value to the data store, making the folder and the record if need be. */
+      type: "web_data_save";
+      folder: string;
+      key: string;
+      /** Field inside the record's value. Blank replaces the whole record. */
+      path?: string;
+      /** Text that reads as JSON is stored as JSON. Takes {name} and {data.folder.key}. */
+      value: string;
+    }
+  | {
+      /** Remove a record from the data store, or one field of it. */
+      type: "web_data_delete";
+      folder: string;
+      key: string;
+      path?: string;
+      optional?: boolean;
+    }
+  | {
+      /**
        * Read a verification code out of a Gmail mailbox and hold it under a name. The app
        * password is not stored here: `appPassword` names a secret set in Settings, written
        * {gmailAppPassword}, and only the backend ever reads its value.
@@ -1353,6 +1386,8 @@ export type Settings = {
   schedule_separate_page?: string;
   /** "true" adds a template-edit button to templated jobs on the jobs page. */
   jobs_template_edit_button?: string;
+  /** "true" turns on the data store: its menu entry, its API and its job steps. */
+  data_store_enabled?: string;
   /** Days to keep job logs; "0" keeps all logs. */
   log_retention_days?: string;
   /** Minimum minutes between scheduled runs; "0" disables staggering. */
@@ -1827,6 +1862,8 @@ export type ImportResult = {
   jobsImported: number;
   aiSuppliersImported: number;
   aiModelsImported: number;
+  dataFoldersImported?: number;
+  dataRecordsImported?: number;
   settingsUpdated: number;
 };
 
@@ -1844,6 +1881,62 @@ export const dataApi = {
   ) =>
     api
       .post<ImportResult>("/data/import", { data, mode, secret, forceReauth, confirmPassword })
+      .then((r) => r.data),
+};
+
+// ── Data store ────────────────────────────────────────────────────────────────
+
+/** A folder of the data store, as the list shows it. */
+export type DataFolder = {
+  id: number;
+  name: string;
+  recordCount: number;
+  updatedAt: string | null;
+};
+
+/** One record: a key, and a value that may be an object, a string or a number. */
+export type DataRecord = {
+  id: number;
+  folderId: number;
+  key: string;
+  value: unknown;
+  updatedAt: string | null;
+};
+
+export type DataStoreExport = {
+  version: "1";
+  exportedAt: string;
+  folders: Array<{ name: string; records: Array<{ key: string; value: unknown }> }>;
+};
+
+// `valueText` rather than a parsed value: whether `{"a":1}` is an object or the text of one is
+// settled on the backend, so the panel and a job's save step cannot disagree about it.
+export const dataStoreApi = {
+  folders: () => api.get<DataFolder[]>("/data-store/folders").then((r) => r.data),
+  createFolder: (name: string) =>
+    api.post<{ id: number; name: string }>("/data-store/folders", { name }).then((r) => r.data),
+  renameFolder: (id: number, name: string) =>
+    api.patch<{ ok: boolean }>(`/data-store/folders/${id}`, { name }).then((r) => r.data),
+  deleteFolder: (id: number) =>
+    api.delete<{ ok: boolean }>(`/data-store/folders/${id}`).then((r) => r.data),
+  records: (folderId: number) =>
+    api.get<DataRecord[]>(`/data-store/folders/${folderId}/records`).then((r) => r.data),
+  createRecord: (folderId: number, key: string, valueText: string) =>
+    api
+      .post<{ id: number; key: string }>(`/data-store/folders/${folderId}/records`, {
+        key,
+        valueText,
+      })
+      .then((r) => r.data),
+  updateRecord: (id: number, changes: { key?: string; valueText?: string }) =>
+    api.patch<{ ok: boolean }>(`/data-store/records/${id}`, changes).then((r) => r.data),
+  deleteRecord: (id: number) =>
+    api.delete<{ ok: boolean }>(`/data-store/records/${id}`).then((r) => r.data),
+  export: (folderId?: number) =>
+    api
+      .get<DataStoreExport>("/data-store/export", {
+        params: folderId ? { folderId } : undefined,
+      })
       .then((r) => r.data),
 };
 

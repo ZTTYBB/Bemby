@@ -1954,6 +1954,102 @@
         </div>
       </div>
 
+      <!-- Data store -->
+      <div v-if="dataStoreEnabled" class="card">
+        <div class="card-body">
+          <template v-if="locale === 'zh'">
+            <div class="card-section-title">数据</div>
+            <p class="help-para">
+              任务可长期保存并读取的数据，在「设置」中开启。文件夹下存放记录，每条记录有一个键和一个取值——
+              可以是 JSON 对象，也可以是字符串、数字这样的单个值。与任务变量（「设置变量」步骤）不同，
+              这里的数据在本次运行结束后依然存在，因此适合保存刚注册好的账号、站点发放的邀请码等。
+            </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              读取
+            </div>
+            <p class="help-para">
+              在任务的任意文本框中写 <code>{{ "{data.文件夹.键}" }}</code> 读取整条记录，
+              写 <code>{{ "{data.文件夹.键.字段}" }}</code> 读取记录中的某个字段（嵌套用
+              <code>login.password</code>，数组用 <code>items.0</code>）。
+              例如 <code>{{ "{data.example.email.password}" }}</code>。
+              引用不存在时原样保留，以便从日志中看出是哪一处引用出了问题。
+              若需要用在 CSS 选择器中，或希望「没有存过就直接失败」，请改用网页步骤「读取数据」。
+            </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              写入与删除
+            </div>
+            <p class="help-para">
+              在网页步骤中添加<strong>保存到数据</strong>或<strong>删除数据</strong>：
+              填写文件夹、记录键，以及可选的字段路径（留空表示整条记录）。
+              保存时文件夹与记录不存在会自动创建；内容若是合法 JSON 则按 JSON 保存。
+              填了字段路径则只覆盖该字段，记录中的其他字段保留。
+            </p>
+            <p class="help-note">
+              文件夹名与记录键只能包含字母、数字、下划线和连字符，以便写成引用形式。
+              数据以原文保存、未加密，且会随「设置」中的完整备份一并导出；只应由后台使用的密码请改用「设置」中的密钥（Secrets）。
+            </p>
+          </template>
+          <template v-else>
+            <div class="card-section-title">Data</div>
+            <p class="help-para">
+              Values a job can keep and read back long after the run that saved
+              them, switched on in Settings. A folder holds records; a record has
+              a key and a value — a JSON object, or a single piece of data like a
+              string or a number. Unlike a job variable (the
+              <strong>Set a variable</strong> step), what is here outlives the
+              run, which is what the account a signup just made, or an invite
+              code a site handed out, needs.
+            </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              Reading
+            </div>
+            <p class="help-para">
+              Write <code>{{ "{data.folder.key}" }}</code> in any text field of a
+              job for the whole record, or
+              <code>{{ "{data.folder.key.field}" }}</code> for one field of it
+              (<code>login.password</code> for a nested one,
+              <code>items.0</code> into a list) — for example
+              <code>{{ "{data.example.email.password}" }}</code>. A reference
+              with nothing behind it is left as it stands, so the log shows which
+              one was wrong. When the value has to reach a CSS selector, or
+              nothing stored should stop the run, use the
+              <strong>Read from Data</strong> page step instead.
+            </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              Writing and deleting
+            </div>
+            <p class="help-para">
+              Add a <strong>Save to Data</strong> or
+              <strong>Delete from Data</strong> page step: a folder, a record
+              key, and an optional field path (blank means the whole record).
+              Saving makes the folder and the record if they are not there yet,
+              and text that reads as JSON is stored as JSON. With a field path
+              only that field is written, and the rest of the record is left
+              alone.
+            </p>
+            <p class="help-note">
+              Folder names and record keys may hold letters, digits, underscores
+              and hyphens, so they can be written as a reference. Values are
+              stored as they are typed, unencrypted, and travel in the full
+              backup from Settings; a password only the backend should ever see
+              belongs in Secrets instead.
+            </p>
+          </template>
+        </div>
+      </div>
+
       <!-- Settings -->
       <div class="card">
         <div class="card-body">
@@ -2674,7 +2770,12 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted } from "vue";
 import { locale } from "../i18n";
+import { dataStoreEnabled, loadDataStoreSetting } from "../composables/dataStore";
+
+// The Data card is only worth showing where the feature is switched on
+onMounted(loadDataStoreSetting);
 </script>
 
 <style scoped>

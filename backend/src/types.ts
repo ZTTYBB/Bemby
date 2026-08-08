@@ -561,6 +561,53 @@ export type WebStep =
     }
   | {
       /**
+       * Read a record out of the data store and hold it under a name, for the steps after it
+       * to use as `{name}`. The same value is readable inline as `{data.folder.key}` in any
+       * text field; a step of its own is what a job wants when the value is needed in a
+       * selector, or when the run should stop outright if nothing is stored.
+       */
+      type: "web_data_read";
+      /** Folder holding the record, e.g. `example`. */
+      folder: string;
+      /** The record's key, e.g. `email`. */
+      key: string;
+      /** Field inside the record's value, e.g. `password`. Blank reads the whole record. */
+      path?: string;
+      /** Name to hold what was read under. */
+      varName: string;
+      /** Carry on with nothing stored under that name, rather than failing the step. */
+      optional?: boolean;
+    }
+  | {
+      /**
+       * Write a value to the data store, so it outlives the run: the account a signup just
+       * made, or the address a site handed out. The folder and the record are made if they
+       * are not there yet.
+       */
+      type: "web_data_save";
+      folder: string;
+      key: string;
+      /** Field inside the record's value to write. Blank replaces the whole record. */
+      path?: string;
+      /**
+       * What to store. Takes the round's names (`{username}`), the random tokens
+       * (`{alpha:12}`) and other records (`{data.folder.key}`). Text that reads as JSON is
+       * stored as JSON, so `{"a":1}` becomes an object rather than a string.
+       */
+      value: string;
+    }
+  | {
+      /** Remove a record from the data store, or just one field of it. */
+      type: "web_data_delete";
+      folder: string;
+      key: string;
+      /** Field inside the record's value to remove. Blank removes the whole record. */
+      path?: string;
+      /** Carry on when there was nothing there, rather than failing the step. */
+      optional?: boolean;
+    }
+  | {
+      /**
        * Read a verification code out of a mailbox and hold it under a name, for a later
        * `web_input` to type as `{name}`. What a signup that emails a code needs: without it
        * the run stops at the confirmation box.

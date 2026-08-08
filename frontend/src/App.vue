@@ -36,6 +36,7 @@
       <a class="nav-link" href="#" :class="{ active: currentView === 'jobs' }" @click.prevent="setView('jobs')"><i class="fa-solid fa-robot"></i>{{ t('nav.jobs') }}</a>
       <a v-if="scheduleSeparatePage" class="nav-link" href="#" :class="{ active: currentView === 'schedule' }" @click.prevent="setView('schedule')"><i class="fa-solid fa-calendar-days"></i>{{ t('nav.schedule') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'templates' }" @click.prevent="setView('templates')"><i class="fa-solid fa-layer-group"></i>{{ t('nav.templates') }}</a>
+      <a v-if="dataStoreEnabled" class="nav-link" href="#" :class="{ active: currentView === 'data' }" @click.prevent="setView('data')"><i class="fa-solid fa-database"></i>{{ t('nav.data') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'logs' }" @click.prevent="setView('logs')"><i class="fa-solid fa-scroll"></i>{{ t('nav.logs') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'settings' }" @click.prevent="setView('settings')"><i class="fa-solid fa-gear"></i>{{ t('nav.settings') }}</a>
       <a class="nav-link" href="#" :class="{ active: currentView === 'help' }" @click.prevent="setView('help')"><i class="fa-solid fa-circle-question"></i>{{ t('nav.help') }}</a>
@@ -98,6 +99,7 @@ import { authApi, requirePasswordChangeSignal } from './api/client';
 import AccountsView from './views/AccountsView.vue';
 import JobsView from './views/JobsView.vue';
 import TemplatesView from './views/TemplatesView.vue';
+import DataView from './views/DataView.vue';
 import LogsView from './views/LogsView.vue';
 import SettingsView from './views/SettingsView.vue';
 import HelpView from './views/HelpView.vue';
@@ -108,11 +110,12 @@ import {
   loadSchedulePageSetting,
   scheduleSeparatePage,
 } from './composables/schedulePage';
+import { dataStoreEnabled, loadDataStoreSetting } from './composables/dataStore';
 
-type ViewName = 'accounts' | 'messenger' | 'jobs' | 'schedule' | 'templates' | 'settings' | 'logs' | 'help';
+type ViewName = 'accounts' | 'messenger' | 'jobs' | 'schedule' | 'templates' | 'data' | 'settings' | 'logs' | 'help';
 
 const LAST_VIEW_KEY = 'bemby:lastView';
-const VALID_VIEWS: ViewName[] = ['accounts', 'messenger', 'jobs', 'schedule', 'templates', 'settings', 'logs', 'help'];
+const VALID_VIEWS: ViewName[] = ['accounts', 'messenger', 'jobs', 'schedule', 'templates', 'data', 'settings', 'logs', 'help'];
 
 const viewComponents: Record<ViewName, Component> = {
   accounts: AccountsView,
@@ -120,6 +123,7 @@ const viewComponents: Record<ViewName, Component> = {
   jobs: JobsView,
   schedule: ScheduleView,
   templates: TemplatesView,
+  data: DataView,
   settings: SettingsView,
   logs: LogsView,
   help: HelpView,
@@ -127,12 +131,14 @@ const viewComponents: Record<ViewName, Component> = {
 
 const savedView = localStorage.getItem(LAST_VIEW_KEY) as ViewName;
 const currentView = ref<ViewName>(VALID_VIEWS.includes(savedView) ? savedView : 'accounts');
-const currentComponent = computed(() =>
-  viewComponents[
-    currentView.value === 'schedule' && !scheduleSeparatePage.value ? 'jobs' : currentView.value
-  ],
-);
+const currentComponent = computed(() => {
+  // A view whose menu entry is switched off falls back rather than showing an empty page
+  if (currentView.value === 'schedule' && !scheduleSeparatePage.value) return viewComponents.jobs;
+  if (currentView.value === 'data' && !dataStoreEnabled.value) return viewComponents.accounts;
+  return viewComponents[currentView.value];
+});
 loadSchedulePageSetting();
+loadDataStoreSetting();
 
 function setView(view: ViewName) {
   currentView.value = view;

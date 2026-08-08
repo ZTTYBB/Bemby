@@ -3,6 +3,8 @@
 // into a field. Kept in a module of its own so the browser side can reach it without pulling
 // in a Telegram client.
 
+import { fillDataRefs } from "../db/dataStore";
+
 const LOWER = "abcdefghijklmnopqrstuvwxyz";
 const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const DIGITS = "0123456789";
@@ -50,9 +52,15 @@ function randomOf(list: string[]): string {
  * randomFirstName, randomLastName (an ordinary given name / surname; no length to give)
  * An optional context map supplies named tokens (e.g. {name}) that take
  * precedence over the built-in random types.
+ *
+ * `{data.folder.key}` reads the data store, `{data.folder.key.field}` one field of a record,
+ * and `{data.folder[me@example.com].field}` the same where the key holds a dot. Those are
+ * resolved last, after the names and random tokens, so a reference may be built out of them
+ * (`{data.example[{username}@example.com].password}`) -- and so a stored value that happens to
+ * contain braces is used as it stands rather than expanded again.
  */
 export function expandCommand(template: string, context?: Record<string, string>): string {
-  return template.replace(/\{(\w+)(?::(\d+))?\}/g, (match, type: string, lenStr?: string) => {
+  const expanded = template.replace(/\{(\w+)(?::(\d+))?\}/g, (match, type: string, lenStr?: string) => {
     if (context && Object.prototype.hasOwnProperty.call(context, type)) {
       return context[type];
     }
@@ -81,4 +89,5 @@ export function expandCommand(template: string, context?: Record<string, string>
         return match; // unknown placeholder -- leave as-is
     }
   });
+  return fillDataRefs(expanded);
 }

@@ -33,8 +33,16 @@ export type WebStepForm = {
   key: string;
   /** web_select: the option to choose, by its label or its value. */
   option: string;
-  /** web_set: what to hold under the name. */
+  /** web_set / web_data_save: what to hold under the name, or store. */
   value: string;
+  /** The data steps: which folder of the data store, e.g. `example`. */
+  folder: string;
+  /** The data steps: which record, e.g. `email`. */
+  recordKey: string;
+  /** The data steps: field inside the record's value. Blank means the whole record. */
+  path: string;
+  /** The data steps: carry on when nothing is stored there. */
+  optional: boolean;
   /** web_notify: the chat to send to; blank uses the configured one. */
   target: string;
   /** web_email_code: the mailbox to read. */
@@ -90,6 +98,9 @@ export const WEB_STEP_TYPES: WebStepType[] = [
   "web_read",
   "web_email_code",
   "web_set",
+  "web_data_read",
+  "web_data_save",
+  "web_data_delete",
   "web_notify",
   "web_if",
   "web_repeat",
@@ -108,6 +119,13 @@ export const AI_WEB_STEP_TYPES: WebStepType[] = [
   "ai_web_click_xy",
 ];
 
+/** Types that reach the data store, so the editor can hide them while it is switched off. */
+export const DATA_WEB_STEP_TYPES: WebStepType[] = [
+  "web_data_read",
+  "web_data_save",
+  "web_data_delete",
+];
+
 /** Types that hold other steps, and so decide what may be offered inside them. */
 export const LOOP_WEB_STEP_TYPES: WebStepType[] = ["web_repeat", "web_for_each"];
 export const BRANCH_WEB_STEP_TYPE: WebStepType = "web_if";
@@ -117,13 +135,20 @@ export const MAX_WEB_STEP_DEPTH = 3;
 
 /**
  * What the editor may offer at this point in the nesting. Neither loop can go inside a loop,
- * though both may go inside a branch; nothing may go past the depth limit.
+ * though both may go inside a branch; nothing may go past the depth limit. The data steps are
+ * left out while the store is switched off, since the backend would refuse them anyway --
+ * except on a step already saved as one, which stays selectable so it is not silently changed.
  */
-export function offeredWebStepTypes(depth: number, inLoop: boolean): WebStepType[] {
+export function offeredWebStepTypes(
+  depth: number,
+  inLoop: boolean,
+  opts: { dataEnabled?: boolean; keep?: WebStepType } = {},
+): WebStepType[] {
   return WEB_STEP_TYPES.filter((ty) => {
     const container = LOOP_WEB_STEP_TYPES.includes(ty) || ty === BRANCH_WEB_STEP_TYPE;
     if (LOOP_WEB_STEP_TYPES.includes(ty) && inLoop) return false;
     if (container && depth >= MAX_WEB_STEP_DEPTH) return false;
+    if (DATA_WEB_STEP_TYPES.includes(ty) && !opts.dataEnabled && ty !== opts.keep) return false;
     return true;
   });
 }
@@ -151,6 +176,10 @@ export function defaultWebStep(): WebStepForm {
     key: "Enter",
     option: "",
     value: "",
+    folder: "",
+    recordKey: "",
+    path: "",
+    optional: false,
     target: "",
     email: "",
     appPassword: "{gmailAppPassword}",
@@ -234,6 +263,31 @@ export function webStepToConfig(s: WebStepForm): WebStep {
       };
     case "web_set":
       return { type: "web_set", varName: s.varName.trim(), value: s.value };
+    case "web_data_read":
+      return {
+        type: "web_data_read",
+        folder: s.folder.trim(),
+        key: s.recordKey.trim(),
+        varName: s.varName.trim(),
+        ...(s.path.trim() ? { path: s.path.trim() } : {}),
+        ...(s.optional ? { optional: true } : {}),
+      };
+    case "web_data_save":
+      return {
+        type: "web_data_save",
+        folder: s.folder.trim(),
+        key: s.recordKey.trim(),
+        value: s.value,
+        ...(s.path.trim() ? { path: s.path.trim() } : {}),
+      };
+    case "web_data_delete":
+      return {
+        type: "web_data_delete",
+        folder: s.folder.trim(),
+        key: s.recordKey.trim(),
+        ...(s.path.trim() ? { path: s.path.trim() } : {}),
+        ...(s.optional ? { optional: true } : {}),
+      };
     case "web_email_code":
       return {
         type: "web_email_code",
@@ -393,6 +447,34 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
       };
     case "web_set":
       return { ...base, type: s.type, varName: s.varName, value: s.value };
+    case "web_data_read":
+      return {
+        ...base,
+        type: s.type,
+        folder: s.folder,
+        recordKey: s.key,
+        path: s.path ?? "",
+        varName: s.varName,
+        optional: s.optional ?? false,
+      };
+    case "web_data_save":
+      return {
+        ...base,
+        type: s.type,
+        folder: s.folder,
+        recordKey: s.key,
+        path: s.path ?? "",
+        value: s.value,
+      };
+    case "web_data_delete":
+      return {
+        ...base,
+        type: s.type,
+        folder: s.folder,
+        recordKey: s.key,
+        path: s.path ?? "",
+        optional: s.optional ?? false,
+      };
     case "web_email_code":
       return {
         ...base,

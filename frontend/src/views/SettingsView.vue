@@ -969,6 +969,20 @@
             </p>
           </div>
 
+          <!-- The data store: its menu entry and its job steps -->
+          <div class="settings-subsection" style="margin-top: 28px">
+            {{ t("settings.dataStoreSection") }}
+          </div>
+          <div class="form-group">
+            <label class="form-check">
+              <input type="checkbox" v-model="dataStoreSetting" @change="saveDataStore" />
+              <span>{{ t("settings.dataStoreToggle") }}</span>
+            </label>
+            <p style="font-size: 12px; color: #888; margin: 4px 0 0 24px">
+              {{ t("settings.dataStoreHint") }}
+            </p>
+          </div>
+
           <!-- TG account display -->
           <div class="settings-subsection" style="margin-top: 28px">
             {{ t("settings.accountDisplaySection") }}
@@ -2315,6 +2329,7 @@ import { t } from "../i18n";
 import { proxySupportsTelegram } from "../utils/proxy";
 import { setAccountDisplayWithTgName } from "../composables/accountDisplay";
 import { setSchedulePageSeparate } from "../composables/schedulePage";
+import { setDataStoreEnabled } from "../composables/dataStore";
 import { setTemplateEditButton } from "../composables/templateEditButton";
 
 const timezones = [
@@ -3316,6 +3331,7 @@ const defaultTgApiError = ref("");
 const accountDisplayWithTgName = ref(false);
 const scheduleSeparatePageSetting = ref(false);
 const jobsTemplateEditButtonSetting = ref(false);
+const dataStoreSetting = ref(false);
 
 async function saveDefaultTgApi() {
   defaultTgApiMsg.value = "";
@@ -3446,6 +3462,8 @@ onMounted(async () => {
     accountDisplayWithTgName.value = s.account_display_with_tg_name === "true";
     scheduleSeparatePageSetting.value = s.schedule_separate_page === "true";
     jobsTemplateEditButtonSetting.value = s.jobs_template_edit_button === "true";
+    dataStoreSetting.value = s.data_store_enabled === "true";
+    setDataStoreEnabled(dataStoreSetting.value);
     form.default_play_duration = Number(s.default_play_duration ?? 300);
     form.default_device_name = s.default_device_name ?? "Mac";
     form.ai_model = s.ai_model ?? "";
@@ -3818,6 +3836,16 @@ async function saveSchedulePage() {
     setSchedulePageSeparate(scheduleSeparatePageSetting.value);
   } catch {
     scheduleSeparatePageSetting.value = !scheduleSeparatePageSetting.value;
+  }
+}
+
+async function saveDataStore() {
+  try {
+    await settingsApi.update({ data_store_enabled: String(dataStoreSetting.value) });
+    // Show or hide the menu entry and the data steps without a reload
+    setDataStoreEnabled(dataStoreSetting.value);
+  } catch {
+    dataStoreSetting.value = !dataStoreSetting.value;
   }
 }
 

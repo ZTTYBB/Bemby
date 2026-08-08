@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../db/database';
 import { decryptPayload, encryptPayload, type EncryptedEnvelope } from '../db/exportCrypto';
 import { decryptAccountRow, encryptSecret } from '../db/secretColumns';
+import { exportData, isValidDataName } from '../db/dataStore';
 import { refreshScheduler } from '../scheduler';
 import {
   verifyPassword,
@@ -222,6 +223,11 @@ export type ExportPayload = {
     modelId: string;
     label: string | null;
   }>;
+  /**
+   * The data store, folder by folder. A backup that left it out would silently lose whatever
+   * the jobs have saved there, which is the one part of the store nothing else holds a copy of.
+   */
+  dataFolders?: Array<{ name: string; records: Array<{ key: string; value: unknown }> }>;
   settings: Record<string, string>;
 };
 
@@ -363,6 +369,7 @@ router.post('/export', (req, res) => {
         modelId: m.model_id,
         label: m.label,
       })),
+    dataFolders: exportData().folders,
     settings: Object.fromEntries(
       settings
         // Passkeys now live on the account row (exported per-account above), never as a
@@ -438,7 +445,7 @@ router.post('/import', async (req, res) => {
     }
   }
 
-  const results = { accountsImported: 0, accountsSkipped: 0, templatesImported: 0, jobsImported: 0, aiSuppliersImported: 0, aiModelsImported: 0, settingsUpdated: 0, proxyRefsCleared: 0 };
+  const results = { accountsImported: 0, accountsSkipped: 0, templatesImported: 0, jobsImported: 0, aiSuppliersImported: 0, aiModelsImported: 0, dataFoldersImported: 0, dataRecordsImported: 0, settingsUpdated: 0, proxyRefsCleared: 0 };
 
   try {
     db.transaction(() => {
@@ -449,6 +456,8 @@ router.post('/import', async (req, res) => {
       db.prepare('DELETE FROM jobs').run();
       db.prepare('DELETE FROM job_templates').run();
       db.prepare('DELETE FROM tg_accounts').run();
+      db.prepare('DELETE FROM data_records').run();
+      db.prepare('DELETE FROM data_folders').run();
       // The pinned default references a wiped ai_models row id
       db.prepare("DELETE FROM settings WHERE key = 'ai_default_model_id'").run();
     }
@@ -608,6 +617,31 @@ router.post('/import', async (req, res) => {
           'INSERT INTO ai_models (supplier_id, model_id, label) VALUES (?, ?, ?)',
         ).run(resolvedSupplierId, m.modelId, m.label ?? null);
         results.aiModelsImported++;
+      }
+    }
+
+    // Import the data store. A record already in the folder is overwritten: the backup is the
+    // newer copy of what a job saved, and keeping the older value would be the surprise.
+    if (Array.isArray(payload.dataFolders)) {
+      for (const folder of payload.dataFolders) {
+        const name = String(folder?.name ?? '').trim();
+        if (!isValidDataName(name)) continue;
+        const existing = db.prepare('SELECT id FROM data_folders WHERE name = ?').get(name) as { id: number } | undefined;
+        const folderId = existing
+          ? existing.id
+          : (db.prepare('INSERT INTO data_folders (name) VALUES (?)').run(name).lastInsertRowid as number);
+        if (!existing) results.dataFoldersImported++;
+
+        for (const record of folder?.records ?? []) {
+          const key = String(record?.key ?? '').trim();
+          if (!isValidDataName(key)) continue;
+          db.prepare(
+            `INSERT INTO data_records (folder_id, key, value) VALUES (?, ?, ?)
+               ON CONFLICT(folder_id, key) DO UPDATE
+                 SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+          ).run(folderId, key, JSON.stringify(record.value ?? null));
+          results.dataRecordsImported++;
+        }
       }
     }
 

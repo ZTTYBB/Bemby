@@ -19,6 +19,7 @@ import statusRouter from "./routes/status";
 import settingsRouter from "./routes/settings";
 import secretsRouter from "./routes/secrets";
 import dataRouter from "./routes/data";
+import dataStoreRouter from "./routes/dataStore";
 import debugRouter from "./routes/debug";
 import aiSuppliersRouter from "./routes/ai-suppliers";
 import templatesRouter from "./routes/templates";
@@ -154,7 +155,9 @@ app.use("/api/logs", requireAuth, logsRouter);
 app.use("/api/status", requireAuth, statusRouter);
 app.use("/api/settings", requireAuth, settingsRouter);
 app.use("/api/secrets", requireAuth, secretsRouter);
+// `/api/data` is the backup export/import; the data store is its own router
 app.use("/api/data", requireAuth, dataRouter);
+app.use("/api/data-store", requireAuth, dataStoreRouter);
 app.use("/api/debug", requireAuth, debugRouter);
 app.use("/api/ai-suppliers", requireAuth, aiSuppliersRouter);
 app.use("/api/templates", requireAuth, templatesRouter);

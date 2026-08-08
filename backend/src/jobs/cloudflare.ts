@@ -15,6 +15,14 @@ import {
   type ProxyCandidate,
 } from "../tg/proxyProviders";
 import { expandCommand } from "./placeholders";
+import {
+  dataRefText,
+  deleteDataValue,
+  isDataStoreEnabled,
+  parseDataValue,
+  readDataValue,
+  writeDataValue,
+} from "../db/dataStore";
 import { EMAIL_CODE_WAIT_MS } from "./emailCode";
 import type { WebStep, WebStepLog } from "../types";
 
@@ -2410,6 +2418,25 @@ export function fillContent(text: string, vars: Map<string, string>): string {
 }
 
 /**
+ * Where a data step is pointed, with the round's names filled in, and how to say so in the
+ * log. Shared by the three of them so a reference reads the same whether it was read, written
+ * or removed -- and so the switch in Settings is checked in one place.
+ */
+function dataTarget(
+  step: { folder?: string; key?: string; path?: string },
+  run: WebStepRun,
+): { folder: string; key: string; path: string; label: string } {
+  if (!isDataStoreEnabled()) throw new Error("Data is turned off in Settings");
+  const folder = fillVars(step.folder ?? "", run.current).trim();
+  const key = fillVars(step.key ?? "", run.current).trim();
+  const path = fillVars(step.path ?? "", run.current).trim();
+  if (!folder) throw new Error("no data folder given");
+  if (!key) throw new Error("no record key given");
+  // The label is the reference a person would write for it, brackets and all
+  return { folder, key, path, label: dataRefText(folder, key, path).slice(1, -1) };
+}
+
+/**
  * Turns what a `web_pick` read off the page into the candidates it may choose from:
  * narrowed to the part that matters, de-duplicated, and minus what has already been used.
  * Kept out of the step body because this is where a mis-configured pick goes wrong, and
@@ -2879,6 +2906,39 @@ async function runStepList(
           const value = fillContent(step.value ?? "", run.current);
           run.current.set(name, value);
           log.outcome = `{${name}} = ${oneLine(value).slice(0, 120)}`;
+          break;
+        }
+
+        case "web_data_read": {
+          const name = step.varName.trim();
+          if (!name) throw new Error("no name given to hold what was read under");
+          const where = dataTarget(step, run);
+          const value = readDataValue(where.folder, where.key, where.path);
+          if (value === null) {
+            if (!step.optional) throw new Error(`nothing is stored at ${where.label}`);
+            log.outcome = `nothing is stored at ${where.label}; carried on`;
+            break;
+          }
+          run.current.set(name, value);
+          log.outcome = `{${name}} = ${oneLine(value).slice(0, 120)} (from ${where.label})`;
+          break;
+        }
+
+        case "web_data_save": {
+          const where = dataTarget(step, run);
+          const text = fillContent(step.value ?? "", run.current);
+          writeDataValue(where.folder, where.key, where.path, parseDataValue(text));
+          log.outcome = `saved ${oneLine(text).slice(0, 120)} to ${where.label}`;
+          break;
+        }
+
+        case "web_data_delete": {
+          const where = dataTarget(step, run);
+          const removed = deleteDataValue(where.folder, where.key, where.path);
+          if (!removed && !step.optional) throw new Error(`nothing is stored at ${where.label}`);
+          log.outcome = removed
+            ? `removed ${where.label}`
+            : `nothing was stored at ${where.label}; carried on`;
           break;
         }
 
@@ -3497,6 +3557,18 @@ async function runStepList(
   return undefined;
 }
 
+/** The reference a data step points at, for the log line, before the step has run. */
+function dataLabel(
+  step: { folder?: string; key?: string; path?: string },
+  fill: (text: string) => string,
+): string {
+  return dataRefText(
+    fill(step.folder?.trim() ?? ""),
+    fill(step.key?.trim() ?? ""),
+    fill(step.path?.trim() ?? ""),
+  ).slice(1, -1);
+}
+
 /** What the step is trying to do, for the log line. */
 function describeWebStep(step: WebStep, run: WebStepRun): string {
   const fill = (text: string) => fillVars(text, run.current);
@@ -3531,6 +3603,12 @@ function describeWebStep(step: WebStep, run: WebStepRun): string {
       );
     case "web_set":
       return `Set {${step.varName}}`;
+    case "web_data_read":
+      return `Read ${dataLabel(step, fill)} into {${step.varName}}`;
+    case "web_data_save":
+      return `Save to ${dataLabel(step, fill)}`;
+    case "web_data_delete":
+      return `Remove ${dataLabel(step, fill)}`;
     case "web_notify":
       return `Send a notification${step.target?.trim() ? ` to ${fill(step.target)}` : ""}`;
     case "web_read":

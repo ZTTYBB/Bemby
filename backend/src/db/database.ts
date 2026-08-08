@@ -81,6 +81,7 @@ db.exec(`
     ('ai_fallback_enabled',  'true'),
     ('account_display_with_tg_name','false'),
     ('jobs_template_edit_button','false'),
+    ('data_store_enabled',   'false'),
     ('log_retention_days',   '0'),
     ('ua_presets',           '[{"name":"SenPlayer (Mac)","value":"SenPlayer/6.1.2 CFNetwork/1490.0.4 Darwin/23.2.0"},{"name":"Yamby (Android TV)","value":"Yamby/2.0.3.4(Android)"},{"name":"Hills (Windows)","value":"Hills/0.2.1"},{"name":"Lenna (iOS)","value":"Lenna/1.0.15 CFNetwork/1494.0.7 Darwin/23.4.0"},{"name":"VidHub (iOS)","value":"VidHub/2.2.4"}]');
 `);
@@ -314,6 +315,28 @@ db.exec(`
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+// The data store: folders of named records a job reads with `{data.folder.key}` and writes
+// with the data steps. Kept apart from `secrets` because these values are meant to be read
+// back, listed and exported -- a secret never is.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS data_folders (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL UNIQUE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS data_records (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_id  INTEGER NOT NULL REFERENCES data_folders(id) ON DELETE CASCADE,
+    key        TEXT    NOT NULL,
+    value      TEXT    NOT NULL DEFAULT '""',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (folder_id, key)
   );
 `);
 
