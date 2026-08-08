@@ -23,35 +23,13 @@
             }}
           </option>
         </select>
-        <button
-          type="button"
-          class="btn btn-ghost btn-sm btn-icon"
-          :disabled="i === 0"
-          @click="move(i, -1)"
-        >
-          <i class="fa-solid fa-arrow-up"></i>
-        </button>
-        <button
-          type="button"
-          class="btn btn-ghost btn-sm btn-icon"
-          :disabled="i === steps.length - 1"
-          @click="move(i, 1)"
-        >
-          <i class="fa-solid fa-arrow-down"></i>
-        </button>
-        <!-- A step usually belongs somewhere in the middle; adding at the end and walking it
-             up is the same thing, several clicks longer -->
-        <button
-          type="button"
-          class="btn btn-ghost btn-sm btn-icon"
-          :title="t('common.insertAfter')"
-          @click="insertAfter(i)"
-        >
-          <i class="fa-solid fa-plus"></i>
-        </button>
-        <button type="button" class="btn btn-danger btn-sm btn-icon" @click="remove(i)">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
+        <RowControls
+          :index="i"
+          :count="steps.length"
+          @move="move(i, $event)"
+          @insert="insertAfter(i)"
+          @remove="remove(i)"
+        />
       </div>
 
       <!-- CSS selector: every type but the screenshot-driven AI ones and the plain delay -->
@@ -791,6 +769,7 @@ import {
   dataStoreEnabled,
   loadDataFolderNames,
 } from "../composables/dataStore";
+import RowControls from "./RowControls.vue";
 
 // The list is mutated in place: the parent holds it inside its own action form object, so
 // emitting a replacement would mean threading an update back through the action index.

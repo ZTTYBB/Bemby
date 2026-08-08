@@ -391,10 +391,7 @@
                   <option value="open_bot_menu_app" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenBotMenuApp') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
                   <option value="open_url" :disabled="cfBrowserMissing">{{ t('jobs.custom.actionOpenUrl') }}{{ cfBrowserMissing ? ' (' + t('jobs.noCfBrowser') + ')' : '' }}</option>
                 </select>
-                <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === 0" @click="moveUp(i)"><i class="fa-solid fa-arrow-up"></i></button>
-                <button type="button" class="btn btn-ghost btn-sm btn-icon" :disabled="i === customActions.length - 1" @click="moveDown(i)"><i class="fa-solid fa-arrow-down"></i></button>
-                <button type="button" class="btn btn-ghost btn-sm btn-icon" :title="t('common.insertAfter')" @click="insertAction(i)"><i class="fa-solid fa-plus"></i></button>
-                <button type="button" class="btn btn-danger btn-sm btn-icon" @click="removeAction(i)"><i class="fa-solid fa-xmark"></i></button>
+                <RowControls :index="i" :count="customActions.length" @move="moveAction(i, $event)" @insert="insertAction(i)" @remove="removeAction(i)" />
               </div>
 
               <!-- send_command -->
@@ -670,9 +667,7 @@
                   <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.miniAppButtonHint') }}</div>
                 </div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
-                  <label class="form-label">{{ t('jobs.custom.labelInAppButton') }}</label>
-                  <input v-model.trim="action.appButton" class="form-input" :placeholder="t('jobs.custom.inAppButtonPlaceholder')" />
-                  <div style="font-size:11px;color:#aaa;margin-top:3px">{{ t('jobs.custom.inAppButtonHint') }}</div>
+                  <MiniAppStepsEditor :steps="action.appSteps" />
                 </div>
                 <div class="form-group" style="margin-bottom:0;margin-top:8px">
                   <label class="form-label">{{ t('jobs.custom.labelSuccessContains') }}</label>
@@ -1207,7 +1202,10 @@ import ScheduleList from '../components/ScheduleList.vue';
 import { debounce } from '../composables/useDebounce';
 import PaginationBar from '../components/PaginationBar.vue';
 import WebStepsEditor from '../components/WebStepsEditor.vue';
+import MiniAppStepsEditor from '../components/MiniAppStepsEditor.vue';
+import RowControls from '../components/RowControls.vue';
 import { webStepsFromConfig, webStepsToConfig, type WebStepForm } from '../composables/webSteps';
+import { appButtonsOf } from '../composables/miniAppSteps';
 import ManualBrowser from '../components/ManualBrowser.vue';
 import {
   onBulkTaskFinished,
@@ -1243,7 +1241,8 @@ type CustomActionForm = {
   /** join_group: only click a verification prompt naming this account */
   verifyMentionsMe: boolean;
   channelId: string;
-  appButton: string;
+  /** Mini App actions: the in-app steps, one per entry, run in order */
+  appSteps: string[];
   /** open_mini_app: browser budget, 0 = default */
   miniAppMaxWaitMs: number;
   /** open_mini_app: pinned browser proxy id, 'direct', or '' for the job proxy */
@@ -1588,7 +1587,7 @@ function onJobTypeChange() {
 }
 
 function defaultAction(): CustomActionForm {
-  return { type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '', contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到', buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0, captchaLength: '', successContains: '', failContains: '', contact: '', groupId: '', checkMembership: false, verifyButton: '', verifyWaitMs: 30000, verifyMentionsMe: false, channelId: '', appButton: '', miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppTryAllProxies: true, profileId: '', keepAppSession: false, url: '', webSteps: [] };
+  return { type: 'send_command', content: '/start', contentDropdown: '/start', contentCustom: '', contentAiInputLength: '', maxWaitMs: 30000, waitMs: 2000, button: '签到', buttonDropdown: '签到', buttonCustom: '', buttonAiHint: '', maxRetries: 3, scope: 0, captchaLength: '', successContains: '', failContains: '', contact: '', groupId: '', checkMembership: false, verifyButton: '', verifyWaitMs: 30000, verifyMentionsMe: false, channelId: '', appSteps: [], miniAppMaxWaitMs: 300000, miniAppProxyId: '', miniAppTryAllProxies: true, profileId: '', keepAppSession: false, url: '', webSteps: [] };
 }
 
 function addAction() {
@@ -1604,16 +1603,11 @@ function removeAction(i: number) {
   customActions.value.splice(i, 1);
 }
 
-function moveUp(i: number) {
-  if (i === 0) return;
+function moveAction(i: number, by: number) {
   const arr = customActions.value;
-  [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
-}
-
-function moveDown(i: number) {
-  const arr = customActions.value;
-  if (i >= arr.length - 1) return;
-  [arr[i], arr[i + 1]] = [arr[i + 1], arr[i]];
+  const to = i + by;
+  if (to < 0 || to >= arr.length) return;
+  [arr[i], arr[to]] = [arr[to], arr[i]];
 }
 
 onMounted(async () => {
@@ -1694,9 +1688,9 @@ function applyTemplate(tpl: JobTemplate) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha' as const, maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group' as const, groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000, verifyMentionsMe: a.verifyMentionsMe ?? false };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel' as const, channelId: a.channelId, checkMembership: a.checkMembership ?? false };
-          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app' as const, contact: a.contact ?? '', button: a.button ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url' as const, url: a.url ?? '', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app' as const, contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
           if (a.type === 'open_url') return { ...base, type: 'open_url' as const, url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
@@ -1982,9 +1976,9 @@ function openEdit(j: Job) {
           if (a.type === 'enter_captcha') return { ...base, type: 'enter_captcha', maxWaitMs: a.maxWaitMs, captchaLength: String(a.captchaLength ?? ''), maxRetries: a.maxRetries ?? 0 };
           if (a.type === 'join_group') return { ...base, type: 'join_group', groupId: a.groupId, checkMembership: a.checkMembership ?? false, verifyButton: a.verifyButton ?? '', verifyWaitMs: a.verifyWaitMs ?? 30000, verifyMentionsMe: a.verifyMentionsMe ?? false };
           if (a.type === 'subscribe_channel') return { ...base, type: 'subscribe_channel', channelId: a.channelId, checkMembership: a.checkMembership ?? false };
-          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app', contact: a.contact ?? '', button: a.button ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url', url: a.url ?? '', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
-          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app', contact: a.contact ?? '', appButton: (a.appButtons ?? []).join(' > '), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_mini_app') return { ...base, type: 'open_mini_app', contact: a.contact ?? '', button: a.button ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_mini_app_url') return { ...base, type: 'open_mini_app_url', url: a.url ?? '', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
+          if (a.type === 'open_bot_menu_app') return { ...base, type: 'open_bot_menu_app', contact: a.contact ?? '', appSteps: [...(a.appButtons ?? [])], successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '', keepAppSession: a.keepAppSession ?? false };
           if (a.type === 'open_url') return { ...base, type: 'open_url', url: a.url ?? '', webSteps: webStepsFromConfig(a.steps), successContains: a.successContains ?? '', failContains: a.failContains ?? '', maxRetries: a.maxRetries ?? 0, miniAppMaxWaitMs: a.maxWaitMs ?? 0, miniAppProxyId: a.proxyId ?? '', miniAppTryAllProxies: a.tryAllProxies ?? true, profileId: a.profileId ?? '' };
           if (a.type === 'click_button') {
             const aiMatch = a.button.match(/^\{aiBtn(?::(.+))?\}$/);
@@ -2179,7 +2173,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           type: 'open_mini_app' as const,
           ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
           ...(a.button.trim() ? { button: a.button.trim() } : {}),
-          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
+          ...appButtonsOf(a.appSteps),
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
@@ -2193,7 +2187,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
           type: 'open_mini_app_url' as const,
           url: a.url.trim(),
           ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
-          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
+          ...appButtonsOf(a.appSteps),
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
@@ -2206,7 +2200,7 @@ function buildConfig(): EmbywatchConfig | CustomConfig | AutoregConfig | Checkin
         if (a.type === 'open_bot_menu_app') return {
           type: 'open_bot_menu_app' as const,
           ...(a.contact.trim() ? { contact: a.contact.trim() } : {}),
-          ...(a.appButton.trim() ? { appButtons: a.appButton.split(/->|>/).map(x => x.trim()).filter(Boolean) } : {}),
+          ...appButtonsOf(a.appSteps),
           ...(a.successContains.trim() ? { successContains: a.successContains.trim() } : {}),
           ...(a.failContains.trim() ? { failContains: a.failContains.trim() } : {}),
           ...(a.maxRetries > 0 ? { maxRetries: a.maxRetries } : {}),
