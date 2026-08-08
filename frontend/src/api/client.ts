@@ -1923,6 +1923,17 @@ export type DataFolder = {
   name: string;
   recordCount: number;
   updatedAt: string | null;
+  /** Line format its text export was last written with, absent until it has had one. */
+  exportFormat?: string;
+};
+
+/** A folder rendered as a text file: one line per record, to the format asked for. */
+export type DataTextExport = {
+  name: string;
+  format: string;
+  text: string;
+  /** Records in the folder, which is more than the lines when a preview asked for a few. */
+  lineCount: number;
 };
 
 /** One record: a key, and a value that may be an object, a string or a number. */
@@ -1968,6 +1979,11 @@ export const dataStoreApi = {
       .get<DataStoreExport>("/data-store/export", {
         params: folderId ? { folderId } : undefined,
       })
+      .then((r) => r.data),
+  /** `save` keeps the format on the folder; `limit` asks for the first lines, for a preview. */
+  exportText: (folderId: number, opts: { format: string; save?: boolean; limit?: number }) =>
+    api
+      .post<DataTextExport>(`/data-store/folders/${folderId}/export-text`, opts)
       .then((r) => r.data),
 };
 

@@ -71,6 +71,9 @@
                 <button class="btn btn-secondary btn-sm" @click="exportStore(selectedFolder.id)">
                   <i class="fa-solid fa-download"></i> {{ t("data.exportFolder") }}
                 </button>
+                <button class="btn btn-secondary btn-sm" @click="openTextExport()">
+                  <i class="fa-solid fa-file-lines"></i> {{ t("data.exportText") }}
+                </button>
                 <button class="btn btn-primary btn-sm" @click="openRecordForm(null)">
                   <i class="fa-solid fa-plus"></i> {{ t("data.addRecord") }}
                 </button>
@@ -213,6 +216,51 @@
           <button class="btn btn-primary" :disabled="saving" @click="saveRecord">
             <i class="fa-solid fa-check"></i>
             {{ saving ? t("common.saving") : t("common.save") }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- A folder as a text file, to a format the person writes. The preview is what settles a
+         mistyped field name, which would otherwise come out as a column of blanks -->
+    <div v-if="textExportOpen" class="modal-backdrop">
+      <div class="modal" style="width: 620px">
+        <h3 class="modal-title">
+          {{ t("data.exportTextTitle").replace("{name}", textExportFolder?.name ?? "") }}
+        </h3>
+        <div class="modal-body">
+          <div v-if="textExportError" class="error-msg" style="margin-bottom: 10px">
+            {{ textExportError }}
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("data.exportTextFormat") }}</label>
+            <input
+              v-model="textExportFormat"
+              class="form-input"
+              style="font-family: monospace"
+              :placeholder="DEFAULT_EXPORT_FORMAT"
+              @input="queueTextPreview"
+            />
+            <div style="font-size: 11px; color: #aaa; margin-top: 4px; line-height: 1.6">
+              {{ t("data.exportTextHint") }}
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom: 0">
+            <label class="form-label">
+              {{ t("data.exportTextPreview") }}
+              <span v-if="textExportCount" style="color: #888; font-weight: 400">
+                ({{ t("data.exportTextLines").replace("{n}", String(textExportCount)) }})
+              </span>
+            </label>
+            <pre class="data-text-preview">{{ textExportPreview || t("data.exportTextEmpty") }}</pre>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" @click="textExportOpen = false">
+            <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+          </button>
+          <button class="btn btn-primary" :disabled="saving" @click="downloadTextExport">
+            <i class="fa-solid fa-download"></i> {{ t("data.exportTextDownload") }}
           </button>
         </div>
       </div>
@@ -463,6 +511,88 @@ async function copyRef(record: DataRecord) {
   setTimeout(() => (copiedId.value = null), 1500);
 }
 
+// ── A folder as a text file ───────────────────────────────────────────────────
+//
+// The format belongs to the folder and is kept when the file is downloaded, so a folder
+// exported once is exported the same way next time without retyping it. Rendering happens on
+// the backend for both the preview and the file, so what is previewed is the file itself
+// rather than a second implementation's idea of it.
+
+const DEFAULT_EXPORT_FORMAT = "{key}----{value}";
+
+const textExportOpen = ref(false);
+const textExportFolder = ref<DataFolder | null>(null);
+const textExportFormat = ref(DEFAULT_EXPORT_FORMAT);
+const textExportPreview = ref("");
+const textExportCount = ref(0);
+const textExportError = ref("");
+let previewTimer: ReturnType<typeof setTimeout> | null = null;
+
+function openTextExport() {
+  const folder = selectedFolder.value;
+  if (!folder) return;
+  textExportFolder.value = folder;
+  textExportFormat.value = folder.exportFormat || DEFAULT_EXPORT_FORMAT;
+  textExportPreview.value = "";
+  textExportCount.value = 0;
+  textExportError.value = "";
+  textExportOpen.value = true;
+  void refreshTextPreview();
+}
+
+/** Debounced: the preview follows the field without a request per keystroke. */
+function queueTextPreview() {
+  if (previewTimer) clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => void refreshTextPreview(), 250);
+}
+
+const PREVIEW_LINES = 8;
+
+async function refreshTextPreview() {
+  const folder = textExportFolder.value;
+  if (!folder) return;
+  textExportError.value = "";
+  try {
+    const result = await dataStoreApi.exportText(folder.id, {
+      format: textExportFormat.value,
+      limit: PREVIEW_LINES,
+    });
+    textExportPreview.value = result.text;
+    textExportCount.value = result.lineCount;
+  } catch (err: any) {
+    textExportPreview.value = "";
+    textExportError.value = err?.response?.data?.error ?? String(err?.message ?? err);
+  }
+}
+
+/** Writes `<folder>.txt`, and keeps the format on the folder on the way past. */
+async function downloadTextExport() {
+  const folder = textExportFolder.value;
+  if (!folder) return;
+  saving.value = true;
+  textExportError.value = "";
+  try {
+    const result = await dataStoreApi.exportText(folder.id, {
+      format: textExportFormat.value,
+      save: true,
+    });
+    const blob = new Blob([result.text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${result.name}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    textExportOpen.value = false;
+    // The kept format comes back with the folder list, so the next open is pre-filled with it
+    await loadFolders();
+  } catch (err: any) {
+    textExportError.value = err?.response?.data?.error ?? String(err?.message ?? err);
+  } finally {
+    saving.value = false;
+  }
+}
+
 async function exportStore(folderId?: number) {
   try {
     const payload = await dataStoreApi.export(folderId);
@@ -562,5 +692,22 @@ async function exportStore(folderId?: number) {
   font-family: monospace;
   font-size: 12px;
   word-break: break-all;
+}
+
+/* The preview is the file: a long line scrolls rather than wrapping, so what would be one
+   line in the file reads as one line here */
+.data-text-preview {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fafafa;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #333;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre;
 }
 </style>

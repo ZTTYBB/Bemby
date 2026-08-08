@@ -2012,6 +2012,22 @@
               保存时文件夹与记录不存在会自动创建；内容若是合法 JSON 则按 JSON 保存。
               填了字段路径则只覆盖该字段，记录中的其他字段保留。
             </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              导出
+            </div>
+            <p class="help-para">
+              「导出此文件夹」下载 JSON；<strong>导出为文本</strong>则按自定的每行格式下载
+              <code>文件夹名.txt</code>，例如
+              <code>{{ "{key}----{password}" }}</code> 得到
+              <code>me@example.com----hunter2</code> 这样的一行。
+              可用占位为 <code>{{ "{key}" }}</code>、<code>{{ "{value}" }}</code>、
+              <code>{{ "{updatedAt}" }}</code>，其他名称表示取值中的字段（<code>{{ "{a.b}" }}</code>
+              取字段中的字段）；<code>\t</code> 与 <code>\n</code> 可用于生成 Tab 分隔的文件。
+              下载前有预览，字段名写错会直接看到空列；格式记在该文件夹上，下次导出自动带出。
+            </p>
             <p class="help-note">
               文件夹名与记录键只能包含字母、数字、下划线和连字符，以便写成引用形式。
               数据以原文保存、未加密，且会随「设置」中的完整备份一并导出；只应由后台使用的密码请改用「设置」中的密钥（Secrets）。
@@ -2060,6 +2076,26 @@
               and text that reads as JSON is stored as JSON. With a field path
               only that field is written, and the rest of the record is left
               alone.
+            </p>
+            <div
+              class="card-section-title"
+              style="margin-top: 16px; font-size: 11px"
+            >
+              Exporting
+            </div>
+            <p class="help-para">
+              "Export this folder" downloads JSON.
+              <strong>Export as text</strong> downloads
+              <code>foldername.txt</code> instead, a line per record to a format
+              you write: <code>{{ "{key}----{password}" }}</code> gives
+              <code>me@example.com----hunter2</code>. Alongside
+              <code>{{ "{key}" }}</code>, <code>{{ "{value}" }}</code> and
+              <code>{{ "{updatedAt}" }}</code>, any other name is a field of the
+              value (<code>{{ "{a.b}" }}</code> reaches a field of a field), and
+              <code>\t</code> / <code>\n</code> are a tab and a newline for a
+              tab-separated file. A preview shows the lines before you download,
+              so a mistyped field name reads as the empty column it would be, and
+              the format is kept on the folder for next time.
             </p>
             <p class="help-note">
               Folder names and record keys may hold letters, digits, underscores

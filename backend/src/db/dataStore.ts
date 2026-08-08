@@ -35,6 +35,8 @@ export type DataFolder = {
   name: string;
   recordCount: number;
   updatedAt: string | null;
+  /** Line format this folder's text export was last written with, if it has one. */
+  exportFormat?: string;
 };
 
 export type DataRecord = {
@@ -262,11 +264,13 @@ export function listFolders(): DataFolder[] {
         ORDER BY f.name`,
     )
     .all() as Array<FolderRow & { record_count: number }>;
+  const formats = readExportFormats();
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
     recordCount: r.record_count,
     updatedAt: r.updated_at,
+    ...(formats[r.name] ? { exportFormat: formats[r.name] } : {}),
   }));
 }
 
@@ -284,17 +288,28 @@ export function createFolder(name: string): number {
 }
 
 export function renameFolder(id: number, name: string): boolean {
-  return (
+  const before = (
+    db.prepare("SELECT name FROM data_folders WHERE id = ?").get(id) as FolderRow | undefined
+  )?.name;
+  const renamed =
     db
       .prepare(
         "UPDATE data_folders SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
       )
-      .run(name, id).changes > 0
-  );
+      .run(name, id).changes > 0;
+  // The text export format is kept under the folder's name, so it moves with it
+  if (renamed && before) moveExportFormat(before, name);
+  return renamed;
 }
 
 export function deleteFolder(id: number): boolean {
-  return db.prepare("DELETE FROM data_folders WHERE id = ?").run(id).changes > 0;
+  const name = (
+    db.prepare("SELECT name FROM data_folders WHERE id = ?").get(id) as FolderRow | undefined
+  )?.name;
+  const deleted = db.prepare("DELETE FROM data_folders WHERE id = ?").run(id).changes > 0;
+  // Nothing left to export, so the format it was exported with goes too
+  if (deleted && name) dropExportFormat(name);
+  return deleted;
 }
 
 /** The folder of that name, made if it is not there yet. Used by a job's save step. */
@@ -496,5 +511,123 @@ export function exportData(folderId?: number): DataStoreExport {
       name: f.name,
       records: listRecords(f.id).map((r) => ({ key: r.key, value: r.value })),
     })),
+  };
+}
+
+// ── Text export ───────────────────────────────────────────────────────────────
+
+// A folder as a plain text file, a line per record, written to a format the person gives:
+// `{key}----{password}` for the pair a signup produced, `{key}` alone for a list of addresses.
+// The format belongs to the folder and is kept, since a folder exported once is exported again
+// the same way.
+//
+// It lives in the settings table as a map keyed by folder name rather than as a column on the
+// folder: the schema is generated outside this repo, and this is bookkeeping of the same kind
+// as the other JSON maps kept there. The name is also what the format survives on -- it is how
+// a folder is referred to everywhere else, and it outlives the row ids a restored backup mints.
+
+const EXPORT_FORMATS_KEY = "data_export_formats";
+
+/** What a folder with no format of its own is offered: the key and the whole value. */
+export const DEFAULT_EXPORT_FORMAT = "{key}----{value}";
+
+function readExportFormats(): Record<string, string> {
+  try {
+    const row = db
+      .prepare("SELECT value FROM settings WHERE key = ?")
+      .get(EXPORT_FORMATS_KEY) as { value: string } | undefined;
+    const parsed = row?.value ? JSON.parse(row.value) : {};
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeExportFormats(map: Record<string, string>): void {
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
+    EXPORT_FORMATS_KEY,
+    JSON.stringify(map),
+  );
+}
+
+/** The format kept for this folder, or undefined when it has never been exported as text. */
+export function getExportFormat(folderName: string): string | undefined {
+  const stored = readExportFormats()[folderName];
+  return typeof stored === "string" && stored ? stored : undefined;
+}
+
+/** Keeps the format for next time. A blank one forgets it, back to the default. */
+export function setExportFormat(folderName: string, format: string): void {
+  const map = readExportFormats();
+  if (format.trim()) map[folderName] = format;
+  else delete map[folderName];
+  writeExportFormats(map);
+}
+
+/** Follows a folder through a rename, so its format is not lost with the old name. */
+function moveExportFormat(from: string, to: string): void {
+  const map = readExportFormats();
+  if (from === to || !map[from]) return;
+  map[to] = map[from];
+  delete map[from];
+  writeExportFormats(map);
+}
+
+function dropExportFormat(folderName: string): void {
+  const map = readExportFormats();
+  if (!(folderName in map)) return;
+  delete map[folderName];
+  writeExportFormats(map);
+}
+
+/**
+ * One record as a line of the export.
+ *
+ * `{key}` is the record's key, `{value}` the whole value as text and `{updatedAt}` its stamp;
+ * any other name is a field of the value -- `{password}` for what the signup step saved, and
+ * `{a.b}` for a field of a field. A name with nothing behind it comes out empty rather than
+ * printed as it stands, since a line of a data file is not the place to find `{password}`; the
+ * preview beside the field is what shows a mistyped name for what it is. `\t` and `\n` in the
+ * format are the characters they name, so a tab-separated file can be asked for.
+ */
+export function formatRecordLine(
+  format: string,
+  record: { key: string; value: unknown; updatedAt?: string | null },
+): string {
+  const withEscapes = format
+    .replace(/\\t/g, "\t")
+    .replace(/\\n/g, "\n")
+    .replace(/\\\\/g, "\\");
+  return withEscapes.replace(/\{([^{}]+)\}/g, (_whole, name: string) => {
+    const token = name.trim();
+    if (token === "key") return record.key;
+    if (token === "value") return dataValueToText(record.value);
+    if (token === "updatedAt") return record.updatedAt ?? "";
+    const found = valueAtPath(record.value, splitDataPath(token));
+    return found === undefined || found === null ? "" : dataValueToText(found);
+  });
+}
+
+export type TextExport = { name: string; format: string; text: string; lineCount: number };
+
+/**
+ * A folder as the text file it downloads: one line per record, in key order, ending in a
+ * newline the way a text file does. `limit` cuts it short for the preview beside the field.
+ */
+export function exportFolderText(
+  folderId: number,
+  format: string,
+  limit?: number,
+): TextExport | null {
+  const folder = listFolders().find((f) => f.id === folderId);
+  if (!folder) return null;
+  const records = listRecords(folderId);
+  const shown = limit && limit > 0 ? records.slice(0, limit) : records;
+  const lines = shown.map((r) => formatRecordLine(format, r));
+  return {
+    name: folder.name,
+    format,
+    text: lines.length ? `${lines.join("\n")}\n` : "",
+    lineCount: records.length,
   };
 }

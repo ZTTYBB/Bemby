@@ -2,9 +2,12 @@ import { Router } from "express";
 import {
   createFolder,
   createRecord,
+  DEFAULT_EXPORT_FORMAT,
   deleteFolder,
   deleteRecord,
   exportData,
+  exportFolderText,
+  getExportFormat,
   findFolderByName,
   getRecord,
   getRecordById,
@@ -15,6 +18,7 @@ import {
   listRecords,
   parseDataValue,
   renameFolder,
+  setExportFormat,
   updateRecord,
 } from "../db/dataStore";
 
@@ -41,6 +45,11 @@ const nameError = (what: string) =>
 function folderIdParam(raw: unknown): number | null {
   const id = Number(raw);
   return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+/** The folder's name, for the format kept under it. Null when there is no such folder. */
+function folderNameOf(id: number): string | null {
+  return listFolders().find((f) => f.id === id)?.name ?? null;
 }
 
 /** Reads the value out of a body: `valueText` is parsed, `value` is taken as the JSON it is. */
@@ -183,6 +192,41 @@ router.get("/export", (req, res) => {
     return;
   }
   res.json(exportData(folderId ?? undefined));
+});
+
+/**
+ * One folder as plain text, a line per record, to the format given. `save` keeps that format on
+ * the folder for next time, and `limit` asks for the first lines only, which is what the panel
+ * previews beside the field while it is being typed.
+ */
+router.post("/folders/:id/export-text", (req, res) => {
+  const folderId = folderIdParam(req.params.id);
+  if (!folderId) {
+    res.status(400).json({ error: "Invalid folder id" });
+    return;
+  }
+  const body = req.body as { format?: unknown; save?: unknown; limit?: unknown };
+  const format =
+    typeof body.format === "string" && body.format.trim()
+      ? body.format
+      : (getExportFormat(folderNameOf(folderId) ?? "") ?? DEFAULT_EXPORT_FORMAT);
+  const limit = Number(body.limit);
+
+  let result;
+  try {
+    result = exportFolderText(folderId, format, Number.isInteger(limit) ? limit : undefined);
+  } catch (err) {
+    // A path in the format that cannot be read apart, e.g. `{a[b}` -- the panel says so rather
+    // than downloading a file of broken lines
+    res.status(400).json({ error: (err as Error).message });
+    return;
+  }
+  if (!result) {
+    res.status(404).json({ error: "Folder not found" });
+    return;
+  }
+  if (body.save === true) setExportFormat(result.name, format);
+  res.json(result);
 });
 
 export default router;
