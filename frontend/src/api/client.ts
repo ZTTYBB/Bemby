@@ -787,6 +787,11 @@ export type CustomStepLog = {
   cfBuild?: "keyed" | "free";
   /** The browser profile the step ran on, i.e. whose cookies it had. */
   cfProfile?: string;
+  /** The device fingerprint seed it ran on; it moves only where the profile does. */
+  cfDevice?: number;
+  /** The locale it reported, and whether that was pinned in Settings or came from the exit. */
+  cfLocale?: string;
+  cfLocalePinned?: boolean;
   cfAttempts?: number;
   cfPageTitle?: string;
   cfNavError?: string;
@@ -1468,6 +1473,8 @@ export type ManualSession = {
   runId?: string;
   jobName: string;
   profileKey: string;
+  /** The job runs on {noProfile}: this session has a throwaway profile and keeps nothing. */
+  ephemeral?: boolean;
   vncPort: number;
   startedAt: number;
   lastSeenAt: number;
@@ -1584,6 +1591,11 @@ export const settingsApi = {
   stopCfBrowsers: () =>
     api
       .post<{ ok: boolean; stopped: number }>("/settings/cf-solver/stop")
+      .then((r) => r.data),
+  /** Forgets where each exit comes out, so the next launch looks it up again. */
+  clearCfExitGeo: () =>
+    api
+      .post<{ ok: boolean; cleared?: number }>("/settings/cf-solver/clear-exit-geo")
       .then((r) => r.data),
   /** Deletes the per-exit browser profiles (cookies, cache, site data). */
   clearCfProfiles: () =>

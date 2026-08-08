@@ -158,6 +158,19 @@ export type CheckinPageResult = {
    * resolving to something other than what was intended.
    */
   profileKey?: string;
+  /**
+   * The device seed the browser ran on. Reported next to the profile because "the site still
+   * knows me" is answered by whether this moved between runs: a kept profile holds it still on
+   * purpose, and a throwaway one (`{noProfile}`) draws a new one every time.
+   */
+  deviceSeed?: number;
+  /**
+   * The locale the browser reported, and whether it was pinned in Settings rather than taken
+   * from the exit. A page that comes up in the wrong language is one or the other: a pinned
+   * locale beating the exit, or a remembered exit location that is out of date.
+   */
+  locale?: string;
+  localePinned?: boolean;
   /** Why the attempt is not ok, in plain words, for the job log. */
   reason?: string;
   /** Navigation/renderer trouble seen while loading (page crash, failed request). */
@@ -4068,6 +4081,11 @@ async function attemptLoad(
   // The profile it ran on, so a log can say whose cookies these were: a login that
   // keeps being asked for is almost always a name resolving to other than intended.
   let profileKey: string | undefined;
+  // And the device it ran as, which is the other half of "why does the site still know me"
+  let deviceSeed: number | undefined;
+  // And the locale it presented, which is the other question a page in the wrong language asks
+  let locale: string | undefined;
+  let localePinned: boolean | undefined;
   // Renderer trouble the page reports on its own: a crashed tab or a main request
   // that never arrived both leave a blank page that otherwise looks challenge-free.
   const troubles: string[] = [];
@@ -4084,6 +4102,9 @@ async function attemptLoad(
     launchOk = true;
     browserTier = launched.tier;
     profileKey = launched.profileKey;
+    deviceSeed = launched.deviceSeed;
+    locale = launched.locale;
+    localePinned = launched.localePinned;
     const page = launched.page;
 
     page.on("crash", () => note("page crashed"));
@@ -4323,6 +4344,9 @@ async function attemptLoad(
       // meet it alike -- rotating the pool there only spends the budget.
       browserTier,
       profileKey,
+      deviceSeed,
+      locale,
+      localePinned,
       exitRelated: solved && webFailure ? false : !!navError || (challenged && !verdict.ok) || !text.trim(),
       screenshot: opts.screenshot ? await screenshotOf(page) : undefined,
     };
@@ -4423,6 +4447,14 @@ export async function loadCheckinUrl(
       [
         `${candidate.label}: ${result.ok ? "ok" : "failed"}`,
         result.challenged ? "challenged" : undefined,
+        // Which profile and device this exit ran as: a site that keeps knowing the visitor,
+        // or keeps forgetting a login, is nearly always one of these two not being what was
+        // intended -- and neither is visible on the page
+        result.profileKey ? `profile ${result.profileKey}` : undefined,
+        result.deviceSeed ? `device ${result.deviceSeed}` : undefined,
+        result.locale
+          ? `locale ${result.locale}${result.localePinned ? " (pinned)" : ""}`
+          : undefined,
         result.pageTitle ? `title="${result.pageTitle}"` : undefined,
         `text ${result.text.trim().length} chars`,
         result.inAppAction ? `in-app: ${result.inAppAction}` : undefined,

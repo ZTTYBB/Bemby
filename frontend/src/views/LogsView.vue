@@ -672,6 +672,18 @@
                           <span v-if="s.cfProfile"
                             >{{ t("logs.cf.profile") }}: {{ s.cfProfile }}</span
                           >
+                          <!-- The machine the page saw. It only stands still where the
+                               profile does, so a figure repeating run after run says the
+                               profile is being kept when it was meant to be thrown away -->
+                          <span v-if="s.cfDevice"
+                            >{{ t("logs.cf.device") }}: {{ s.cfDevice }}</span
+                          >
+                          <!-- Which language the browser asked pages for, and whether that
+                               was pinned in Settings rather than taken from the exit -->
+                          <span v-if="s.cfLocale"
+                            >{{ t("logs.cf.locale") }}: {{ s.cfLocale
+                            }}{{ s.cfLocalePinned ? ` (${t("logs.cf.localePinned")})` : "" }}</span
+                          >
                           <span v-if="s.cfMiniApp"
                             >{{ t("logs.cf.signed") }}:
                             {{ s.cfMiniAppSigned ? "✓" : "✗" }}</span

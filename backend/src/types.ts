@@ -958,6 +958,19 @@ export type CustomStepLog = {
    * something other than what was meant.
    */
   cfProfile?: string;
+  /**
+   * The device fingerprint seed the browser ran on. The answer to "why does the site still
+   * see the same machine": a kept profile holds this still on purpose, so it only changes
+   * between runs where the profile does -- `{noProfile}` draws a new one every time.
+   */
+  cfDevice?: number;
+  /**
+   * The locale the browser reported, with a mark when it was pinned in Settings rather than
+   * taken from the exit. A page in the wrong language is one of those two: a pinned locale
+   * beating the exit's own, or a remembered exit location that has gone out of date.
+   */
+  cfLocale?: string;
+  cfLocalePinned?: boolean;
   /** How many exits were tried before the page loaded. */
   cfAttempts?: number;
   /** Title of the page the browser ended up on. */

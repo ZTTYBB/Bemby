@@ -2519,6 +2519,9 @@ export async function runCustom(
                 step.cfProxy = cf.proxyLabel;
                 step.cfBuild = cf.browserTier;
                 step.cfProfile = cf.profileKey;
+                step.cfDevice = cf.deviceSeed;
+                step.cfLocale = cf.locale;
+                step.cfLocalePinned = cf.localePinned;
                 step.cfAttempts = cf.attempts;
                 step.cfPageTitle = cf.pageTitle;
                 step.cfNavError = cf.navError;
@@ -2689,6 +2692,9 @@ export async function runCustom(
                 step.cfProxy = cf.proxyLabel;
                 step.cfBuild = cf.browserTier;
                 step.cfProfile = cf.profileKey;
+                step.cfDevice = cf.deviceSeed;
+                step.cfLocale = cf.locale;
+                step.cfLocalePinned = cf.localePinned;
                 step.cfAttempts = cf.attempts;
                 step.cfPageTitle = cf.pageTitle;
                 step.cfNavError = cf.navError;
@@ -2832,6 +2838,9 @@ export async function runCustom(
                 step.cfProxy = cf.proxyLabel;
                 step.cfBuild = cf.browserTier;
                 step.cfProfile = cf.profileKey;
+                step.cfDevice = cf.deviceSeed;
+                step.cfLocale = cf.locale;
+                step.cfLocalePinned = cf.localePinned;
                 step.cfAttempts = cf.attempts;
                 step.cfPageTitle = cf.pageTitle;
                 step.cfNavError = cf.navError;

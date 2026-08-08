@@ -630,6 +630,14 @@
               </button>
               <button
                 class="btn btn-ghost btn-sm cf-uninstall-btn"
+                :disabled="cfInstalling || cfTesting || cfUninstalling || cfStopping || cfClearingGeo"
+                @click="clearCfExitGeo"
+              >
+                <i class="fa-solid fa-location-crosshairs"></i>
+                {{ cfClearingGeo ? t("settings.cfSolver.clearingGeo") : t("settings.cfSolver.clearGeoBtn") }}
+              </button>
+              <button
+                class="btn btn-ghost btn-sm cf-uninstall-btn"
                 :disabled="cfInstalling || cfTesting || cfUninstalling || cfStopping"
                 @click="confirmUninstallCf = true"
               >
@@ -2712,6 +2720,29 @@ async function stopCfBrowsers() {
  * Deletes the per-exit profiles. Cookies and cache go; the browser identity does not, since
  * the fingerprint comes from the exit rather than the profile.
  */
+/**
+ * Forgets where every exit comes out, so the next launch of each looks it up again. For the
+ * case a remembered location has gone stale: the host has moved country and the browser is
+ * still presenting the old one's clock and language.
+ */
+const cfClearingGeo = ref(false);
+async function clearCfExitGeo() {
+  cfInstallMsg.value = "";
+  cfInstallError.value = "";
+  cfClearingGeo.value = true;
+  try {
+    const res = await settingsApi.clearCfExitGeo();
+    cfInstallMsg.value = t("settings.cfSolver.geoCleared").replace(
+      "{n}",
+      String(res.cleared ?? 0),
+    );
+  } catch (e: any) {
+    cfInstallError.value = e?.response?.data?.error ?? e?.message ?? t("common.saveFailed");
+  } finally {
+    cfClearingGeo.value = false;
+  }
+}
+
 async function clearCfProfiles() {
   cfInstallMsg.value = "";
   cfInstallError.value = "";

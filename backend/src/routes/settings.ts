@@ -52,6 +52,7 @@ import {
 import { exportCfProfiles, importCfProfiles } from "../jobs/cfProfileArchive";
 import { installVnc, removeVnc, vncInstallLog, vncStatus } from "../jobs/vncInstall";
 import {
+  clearCfExitGeo,
   providersForClient,
   saveProviders,
   syncProviders,
@@ -499,6 +500,14 @@ router.post("/cf-solver/clear-profiles", (_req, res) => {
     return;
   }
   res.json({ ok: true, removed: result.removed });
+});
+
+// POST /cf-solver/clear-exit-geo -- forget where every exit comes out, so the next launch of
+// each looks it up again. What this is for: the host has moved country (a new box, or a VPN
+// brought up on it) and the browser is meanwhile still presenting the old country's clock and
+// language, since a remembered location otherwise stands for a fortnight.
+router.post("/cf-solver/clear-exit-geo", (_req, res) => {
+  res.json({ ok: true, cleared: clearCfExitGeo() });
 });
 
 // ── Browser profiles, one at a time ──────────────────────────────────────────

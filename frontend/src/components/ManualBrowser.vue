@@ -7,9 +7,12 @@
           {{ t("manualBrowser.title") }}
           <span v-if="session" class="mb-job">{{ session.jobName }}</span>
         </div>
-        <!-- Which profile the cookie is about to land in: the whole point of the session -->
+        <!-- Which profile the cookie is about to land in: the whole point of the session.
+             A job on {noProfile} has a throwaway one, so it is named as such rather than
+             shown as the "(none)" the backend calls it -->
         <span v-if="session" class="mb-profile" :title="t('manualBrowser.profileHint')">
-          {{ t("manualBrowser.profile") }}: {{ session.profileKey }}
+          {{ t("manualBrowser.profile") }}:
+          {{ session.ephemeral ? t("manualBrowser.profileTemp") : session.profileKey }}
         </span>
         <button
           v-if="props.runId"
@@ -84,6 +87,11 @@
           </button>
         </div>
         <div class="mb-clip-hint">{{ clipMsg || t("manualBrowser.clipboardHint") }}</div>
+      </div>
+
+      <!-- Not an error: the session is open and usable, it just keeps nothing -->
+      <div v-if="session?.ephemeral" class="mb-note">
+        <i class="fa-solid fa-circle-info"></i> {{ t("manualBrowser.ephemeralNote") }}
       </div>
 
       <div v-if="error" class="mb-error">
@@ -391,6 +399,18 @@ onBeforeUnmount(() => {
 
 .mb-warn {
   color: #c47f17;
+}
+
+/* A standing fact about the session, told once, in the colour of a note rather than a fault */
+.mb-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #7a5b12;
+  background: #fdf6e3;
+  border-bottom: 1px solid #f0e3bc;
 }
 
 .mb-error {

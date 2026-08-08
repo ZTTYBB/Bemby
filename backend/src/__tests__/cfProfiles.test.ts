@@ -168,6 +168,24 @@ describe("cfProfileKey", () => {
     expect(cfProfileKey(undefined, "{ip}-{noProfile}", JOB)).toBe(CF_NO_PROFILE_KEY);
   });
 
+  // Written without its braces it used to become a profile *called* `noProfile`: kept, and
+  // shared by every run that spelled it the same way, which is the opposite of what was asked
+  // for -- and silent, since the site then meets the same cookies and the same device forever
+  it("takes the token without its braces, when that is the whole name", () => {
+    expect(cfProfileKey(PROXY, "noProfile", JOB)).toBe(CF_NO_PROFILE_KEY);
+    expect(cfProfileKey(PROXY, "noprofile")).toBe(CF_NO_PROFILE_KEY);
+    expect(cfProfileKey(PROXY, "no-profile")).toBe(CF_NO_PROFILE_KEY);
+    expect(cfProfileKey(PROXY, "no_profile")).toBe(CF_NO_PROFILE_KEY);
+    expect(cfProfileKey(PROXY, "  No Profile  ")).toBe(CF_NO_PROFILE_KEY);
+    expect(cfProfileKey(PROXY, "{no profile}")).toBe(CF_NO_PROFILE_KEY);
+  });
+
+  it("still takes a name that merely contains the words as the name it looks like", () => {
+    // Only the whole field is read as the token, so a name of one's own is left alone
+    expect(cfProfileKey(undefined, "noprofile-test", JOB)).toBe("noprofile-test");
+    expect(cfProfileKey(undefined, "{jobId}-noprofile", JOB)).toBe("104-noprofile");
+  });
+
   it("gives no-profile a key no real profile can be called", () => {
     // It becomes a directory name everywhere else, so the sentinel must not survive sanitising
     expect(cfProfileKey(undefined, "(none)")).toBe("none");

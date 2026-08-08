@@ -917,8 +917,20 @@ export const CF_PROFILE_ID_DEFAULT = "{ip}";
  */
 export const CF_NO_PROFILE_KEY = "(none)";
 
-/** The token asking for that: `{noProfile}`, however it is cased or hyphenated. */
-const NO_PROFILE_RE = /\{\s*no[-_]?profile\s*\}/i;
+/** The token asking for that: `{noProfile}`, however it is cased, spaced or hyphenated. */
+const NO_PROFILE_RE = /\{\s*no[-_\s]?profile\s*\}/i;
+
+/**
+ * The same asked for without the braces -- `noProfile`, `no-profile`, `no profile` -- when
+ * that is the whole of the name.
+ *
+ * Written like this it used to become a profile directory called `noProfile`, kept and shared
+ * by every run that spelled it the same way: the opposite of what was asked for, and silently,
+ * since a persistent profile hands the site back the same cookies and the same device every
+ * time. Only the whole field counts, so a name that merely contains the words
+ * (`{ip}-noprofile-test`) is still taken as the name it looks like.
+ */
+const BARE_NO_PROFILE_RE = /^\s*no[-_\s]?profile\s*$/i;
 
 /** What a profile name may be built from, beyond `{ip}` which comes from the exit. */
 export type CfProfileVars = {
@@ -970,8 +982,10 @@ export function cfProfileKey(
 
   const wanted = template?.trim() || CF_PROFILE_ID_DEFAULT;
   // Asked for nothing kept: the token wins over the rest of the name, since a name that
-  // half-persists is no answer either way
-  if (NO_PROFILE_RE.test(wanted)) return CF_NO_PROFILE_KEY;
+  // half-persists is no answer either way. Taken with or without its braces -- a field
+  // holding just `noProfile` means what it says, and reading it as a directory name was
+  // worse than useless: it kept one profile, shared, for every run that spelled it so.
+  if (NO_PROFILE_RE.test(wanted) || BARE_NO_PROFILE_RE.test(wanted)) return CF_NO_PROFILE_KEY;
 
   const filled = wanted.replace(/\{(\w+)\}/g, (whole, name: string) => {
     const known = PROFILE_VAR_NAMES.find((v) => v.toLowerCase() === name.toLowerCase());
@@ -1277,6 +1291,14 @@ export type LaunchedBrowser = {
   key: string;
   /** The profile it is running on, which is what decides whose cookies it has. */
   profileKey: string;
+  /**
+   * The device seed this launch ran on. Worth reporting: "the site still knows me" is
+   * answered by whether this figure moved between runs, and nothing else on the page says.
+   */
+  deviceSeed: number;
+  /** The locale it reported, and whether that was pinned in Settings or came from the exit. */
+  locale?: string;
+  localePinned: boolean;
   /** Which build is running: the licensed one, or the unlicensed fallback. */
   tier: BuildTier;
   /** What is known about where it comes out, if anything yet. */
@@ -1360,7 +1382,11 @@ export async function launchCfBrowser(
   warnIfWindowExceedsScreen(win);
   const key = exitKey(proxyUrl);
   const geo = cfExitGeo(key);
-  const locale = cfBrowserLang() ?? geo?.lang;
+  // A pinned locale wins over the exit's own, which is the point of pinning one -- but it is
+  // also why an Australian exit can keep rendering pages in another language, so which of the
+  // two won is reported below and in the job log
+  const pinnedLang = cfBrowserLang();
+  const locale = pinnedLang ?? geo?.lang;
   // Geography follows the exit -- it is a fact about the IP, shared by everything going out
   // through it. Cookies and the device they were issued to follow the profile, whose name
   // the caller decides: see `cfProfileKey`.
@@ -1423,6 +1449,18 @@ export async function launchCfBrowser(
   }
 
   const { launchPersistentContext } = await cloak();
+  const deviceSeed = fingerprintSeed(profile.seedKey);
+  // Said out loud because this is what the questions are actually about: "the site still knows
+  // me" comes down to whether the device moved (a kept profile holds it still on purpose, a
+  // throwaway one draws a new one every run), and "the page is in the wrong language" comes
+  // down to which locale won -- a pinned one beats the exit's own by design, and nothing on
+  // the page says so
+  console.log(
+    `[cfBrowser] profile ${profileKey === CF_NO_PROFILE_KEY ? "(none, throwaway)" : profileKey}` +
+      `, device ${deviceSeed}, locale ${locale ?? "(browser default)"}` +
+      `${pinnedLang ? " (pinned in Settings)" : geo?.lang ? ` (from exit ${geo.loc})` : ""}` +
+      `, clock ${geo?.tz ?? "(host)"}`,
+  );
   const open = (exe: string | undefined, licenseKey?: string) =>
     withBinaryPin(exe, () =>
       launchPersistentContext({
@@ -1440,7 +1478,7 @@ export async function launchCfBrowser(
           // One machine per exit, kept across runs alongside its cookies
           // Seeded from the profile, not the bare exit: the device has to stay with the
           // cookies it was issued to, or a session comes back on a machine that has changed
-          `--fingerprint=${fingerprintSeed(profile.seedKey)}`,
+          `--fingerprint=${deviceSeed}`,
           // The container has no user namespaces to sandbox into, and /dev/shm is small
           "--no-sandbox",
           "--disable-setuid-sandbox",
@@ -1539,6 +1577,9 @@ export async function launchCfBrowser(
       page,
       key,
       profileKey,
+      deviceSeed,
+      locale,
+      localePinned: Boolean(pinnedLang),
       tier: usedTier,
       geo,
       close: async () => {

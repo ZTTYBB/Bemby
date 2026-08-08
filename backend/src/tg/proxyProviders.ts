@@ -287,7 +287,24 @@ function readCfWins(): Record<string, string> {
 const CF_GEO_KEY = "cf_exit_geo";
 
 /** Where an exit comes out, so the browser can present a matching locale and clock. */
-export type CfExitGeo = { loc: string; tz?: string; lang?: string };
+export type CfExitGeo = {
+  loc: string;
+  tz?: string;
+  lang?: string;
+  /** Epoch ms this was looked up, so a stale answer is re-checked rather than kept forever. */
+  at?: number;
+};
+
+/**
+ * How long a remembered location stands before it is looked up again.
+ *
+ * A proxy's own country does not move, but which exit a key names certainly does: `direct` is
+ * whatever host Bemby runs on, and that changes when the deployment moves or a VPN goes up on
+ * it. Kept forever, a stale answer dresses the browser in the old country's clock and language
+ * indefinitely -- and nothing on the page says why. Re-checking costs one extra launch per
+ * exit per fortnight.
+ */
+export const CF_GEO_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 function readCfGeo(): Record<string, CfExitGeo> {
   try {
@@ -298,22 +315,41 @@ function readCfGeo(): Record<string, CfExitGeo> {
   }
 }
 
-/** The known geography of an exit, looked up by its stable key. */
+/**
+ * The known geography of an exit, looked up by its stable key. An answer older than
+ * `CF_GEO_MAX_AGE_MS` is treated as unknown, so the next launch probes again: see there for
+ * why one is not kept indefinitely.
+ */
 export function cfExitGeo(exitKey: string): CfExitGeo | undefined {
-  return readCfGeo()[exitKey];
+  const known = readCfGeo()[exitKey];
+  if (!known) return undefined;
+  // No stamp at all means it was written before this expiry existed: probe it once, which
+  // both refreshes it and stamps it
+  if (!known.at || Date.now() - known.at > CF_GEO_MAX_AGE_MS) return undefined;
+  return known;
 }
 
 /**
- * Remembers where an exit comes out. Looked up once per exit and kept, since the
- * lookup costs a page load and a proxy's country does not move.
+ * Remembers where an exit comes out, stamped with when. Looked up once per exit and kept for
+ * a fortnight, since the lookup costs a page load.
  */
 export function rememberCfExitGeo(exitKey: string, geo: CfExitGeo): void {
   if (!exitKey || !geo.loc) return;
   const all = readCfGeo();
-  const known = all[exitKey];
-  if (known?.loc === geo.loc && known?.tz === geo.tz && known?.lang === geo.lang) return;
-  all[exitKey] = geo;
+  all[exitKey] = { ...geo, at: geo.at ?? Date.now() };
   writeSetting(CF_GEO_KEY, JSON.stringify(all));
+}
+
+/**
+ * Forgets where every exit comes out, so the next launch of each looks it up again. For the
+ * case the fortnight is too long to wait on: the host has just moved country, and every job is
+ * meanwhile presenting the old one's clock and language.
+ */
+export function clearCfExitGeo(): number {
+  const all = readCfGeo();
+  const n = Object.keys(all).length;
+  if (n) writeSetting(CF_GEO_KEY, "{}");
+  return n;
 }
 
 /** Records which proxy cleared a challenge on a host, so the next run starts there. */

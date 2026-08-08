@@ -17,11 +17,16 @@ import type { CustomAction, CustomConfig, Job } from "../types";
 /**
  * A browser someone drives by hand, on the profile a job will later run on.
  *
- * The point is the cookie. A site that rations logins, or a challenge the solver cannot get
- * through, needs a person once -- and because the session runs on the job's own profile and
+ * The point is usually the cookie. A site that rations logins, or a challenge the solver cannot
+ * get through, needs a person once -- and because the session runs on the job's own profile and
  * exits through the job's own proxy, what it leaves behind is exactly what the scheduled run
  * picks up. Anything else (a different profile, a different exit) leaves a session the site
  * will not honour for the job.
+ *
+ * A job on `{noProfile}` opens too, on a throwaway profile of its own, exactly as its scheduled
+ * runs do. Nothing is kept, so there is no cookie to leave -- but seeing what the page does,
+ * and working something by hand once, is reason enough. The session says as much rather than
+ * refusing to open.
  *
  * One at a time. Each session holds a profile, a licence seat and a proxy for as long as it
  * is open, and the whole point is to watch it, which nobody does to two at once.
@@ -47,6 +52,11 @@ export type ManualSession = {
   jobName: string;
   /** The profile it is running on, which is the whole point: the job must share it. */
   profileKey: string;
+  /**
+   * The job runs on `{noProfile}`, so this session has a throwaway profile of its own and
+   * keeps nothing: worth saying, since a login left here goes when the browser does.
+   */
+  ephemeral?: boolean;
   /** Where the viewer connects, once it has a ticket. */
   vncPort: number;
   startedAt: number;
@@ -223,13 +233,12 @@ export async function startManualSession(opts: {
     templateId: opts.job.templateId ?? undefined,
     tgId: opts.accountId,
   });
-  // Nothing this session does would survive it, and the cookie is the whole point
-  if (profileKey === CF_NO_PROFILE_KEY) {
-    throw new Error(
-      'This job runs on {noProfile}, so its browser keeps nothing between runs -- a login ' +
-        'left here would be thrown away with the session. Give the job a profile name first.',
-    );
-  }
+  // `{noProfile}` gets its own throwaway profile, like every other run of this job does, and
+  // opens as normal. It used to be refused outright, on the grounds that a login left here
+  // would not survive the session -- true, but not the only reason to open a browser: seeing
+  // what the page actually does, working a challenge by hand, reading an error the screenshots
+  // do not show. The session says so instead of standing in the way.
+  const ephemeral = profileKey === CF_NO_PROFILE_KEY;
 
   const url =
     opts.url?.trim() || (action as { url?: string } | undefined)?.url?.trim() || "about:blank";
@@ -249,8 +258,9 @@ export async function startManualSession(opts: {
       display: display.display,
       profile: { template, vars: { jobId: opts.job.id, templateId: opts.job.templateId ?? undefined, tgId: opts.accountId } },
     });
-    // A throwaway profile means a scheduled run had it open, and the whole point of the
-    // session -- leaving a cookie the job will find -- would silently not happen
+    // A throwaway profile where a kept one was asked for means a scheduled run had it open,
+    // and the whole point of the session -- leaving a cookie the job will find -- would
+    // silently not happen. A job on `{noProfile}` asked for a throwaway, so it matches.
     if (browser.profileKey !== profileKey) {
       throw new Error(
         `The profile "${profileKey}" is in use by a running job, so this session would not ` +
@@ -273,6 +283,7 @@ export async function startManualSession(opts: {
     jobId: opts.job.id,
     jobName: opts.job.name,
     profileKey: browser.profileKey,
+    ...(ephemeral ? { ephemeral: true } : {}),
     vncPort: vnc.port,
     startedAt: Date.now(),
     lastSeenAt: Date.now(),
@@ -294,7 +305,10 @@ export async function startManualSession(opts: {
     }, 30_000),
   };
   current = session;
-  console.log(`[manual] browser open for job ${session.jobId} on profile ${session.profileKey}`);
+  console.log(
+    `[manual] browser open for job ${session.jobId} on profile ` +
+      `${ephemeral ? "(none, throwaway -- nothing is kept)" : session.profileKey}`,
+  );
   return publicView(session);
 }
 
