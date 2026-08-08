@@ -611,6 +611,20 @@ export type WebStep =
       holdMs?: number;
     }
   | {
+      /**
+       * Press and hold at a point measured from an element, without pressing the element
+       * itself. The point is drawn on this step's screenshot so the offset can be corrected.
+       */
+      type: "web_hold_offset";
+      selector: string;
+      /** Where on the anchor the offset starts. Defaults to its centre. */
+      from?: "centre" | "topLeft";
+      x?: number;
+      y?: number;
+      /** How long to keep it down. Blank/0 holds 1s. */
+      holdMs?: number;
+    }
+  | {
       /** Press on something, drag it to a target or by a distance, and let go. */
       type: "web_drag";
       selector: string;

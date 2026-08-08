@@ -45,8 +45,13 @@ export type WebStepForm = {
   fromContains: string;
   /** web_email_code: only consider mail whose subject contains this. */
   subjectContains: string;
-  /** web_hold: how long to keep the pointer down. */
+  /** web_hold / web_hold_offset: how long to keep the pointer down. */
   holdMs: number;
+  /** web_hold_offset: where on the anchor the offset is measured from. */
+  holdFrom: "centre" | "topLeft";
+  /** web_hold_offset: how far from the anchor to press. */
+  offsetX: number;
+  offsetY: number;
   /** web_drag: what to drop it on; blank drags by the offset below. */
   toSelector: string;
   /** web_drag: how far to drag when there is no drop target. */
@@ -70,6 +75,7 @@ export const WEB_STEP_TYPES: WebStepType[] = [
   "web_button",
   "web_press",
   "web_hold",
+  "web_hold_offset",
   "web_drag",
   "web_select",
   "web_wait_element",
@@ -151,6 +157,9 @@ export function defaultWebStep(): WebStepForm {
     fromContains: "",
     subjectContains: "",
     holdMs: 1000,
+    holdFrom: "centre",
+    offsetX: 0,
+    offsetY: 0,
     toSelector: "",
     dragX: 260,
     dragY: 0,
@@ -259,6 +268,15 @@ export function webStepToConfig(s: WebStepForm): WebStep {
       return {
         type: "web_hold",
         selector: s.selector.trim(),
+        ...(s.holdMs > 0 ? { holdMs: s.holdMs } : {}),
+      };
+    case "web_hold_offset":
+      return {
+        type: "web_hold_offset",
+        selector: s.selector.trim(),
+        ...(s.holdFrom === "topLeft" ? { from: "topLeft" as const } : {}),
+        ...(s.offsetX ? { x: s.offsetX } : {}),
+        ...(s.offsetY ? { y: s.offsetY } : {}),
         ...(s.holdMs > 0 ? { holdMs: s.holdMs } : {}),
       };
     case "web_drag":
@@ -401,6 +419,16 @@ export function webStepFromConfig(s: WebStep): WebStepForm {
       return { ...base, type: s.type, key: s.key, selector: s.selector ?? "" };
     case "web_hold":
       return { ...base, type: s.type, selector: s.selector, holdMs: s.holdMs ?? 1000 };
+    case "web_hold_offset":
+      return {
+        ...base,
+        type: s.type,
+        selector: s.selector,
+        holdFrom: s.from === "topLeft" ? "topLeft" : "centre",
+        offsetX: s.x ?? 0,
+        offsetY: s.y ?? 0,
+        holdMs: s.holdMs ?? 1000,
+      };
     case "web_drag":
       return {
         ...base,

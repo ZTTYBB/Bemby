@@ -67,12 +67,17 @@
           s.type === 'web_select' ||
           s.type === 'web_press' ||
           s.type === 'web_hold' ||
+          s.type === 'web_hold_offset' ||
           s.type === 'web_drag' ||
           s.type === 'web_ai_input'
         "
       >
         <label class="form-label">{{
-          s.type === "web_drag" ? t("jobs.web.labelDragFrom") : t("jobs.web.labelSelector")
+          s.type === "web_drag"
+            ? t("jobs.web.labelDragFrom")
+            : s.type === "web_hold_offset"
+              ? t("jobs.web.labelAnchor")
+              : t("jobs.web.labelSelector")
         }}</label>
         <input
           v-model.trim="s.selector"
@@ -80,7 +85,13 @@
           :placeholder="t('jobs.web.selectorPlaceholder')"
         />
         <div style="font-size: 11px; color: #aaa; margin-top: 3px">
-          {{ s.type === "web_press" ? t("jobs.web.pressSelectorHint") : t("jobs.web.selectorHint") }}
+          {{
+            s.type === "web_press"
+              ? t("jobs.web.pressSelectorHint")
+              : s.type === "web_hold_offset"
+                ? t("jobs.web.anchorHint")
+                : t("jobs.web.selectorHint")
+          }}
         </div>
       </div>
 
@@ -219,6 +230,32 @@
         <input v-model.number="s.holdMs" class="form-input" type="number" min="0" step="500" />
         <div style="font-size: 11px; color: #aaa; margin-top: 3px">
           {{ t("jobs.web.holdHint") }}
+        </div>
+      </div>
+
+      <!-- Press at an offset from an anchor: the anchor itself is only measured -->
+      <div v-if="s.type === 'web_hold_offset'" style="margin-top: 8px">
+        <label class="form-label">{{ t("jobs.web.labelHoldFrom") }}</label>
+        <select v-model="s.holdFrom" class="form-select">
+          <option value="centre">{{ t("jobs.web.holdFromCentre") }}</option>
+          <option value="topLeft">{{ t("jobs.web.holdFromTopLeft") }}</option>
+        </select>
+        <div class="form-row" style="margin-top: 8px">
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelOffsetX") }}</label>
+            <input v-model.number="s.offsetX" class="form-input" type="number" step="5" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("jobs.web.labelOffsetY") }}</label>
+            <input v-model.number="s.offsetY" class="form-input" type="number" step="5" />
+          </div>
+        </div>
+        <div class="form-group" style="margin-top: 8px">
+          <label class="form-label">{{ t("jobs.web.labelHoldMs") }}</label>
+          <input v-model.number="s.holdMs" class="form-input" type="number" min="0" step="500" />
+        </div>
+        <div style="font-size: 11px; color: #aaa; margin-top: 3px">
+          {{ t("jobs.web.holdOffsetHint") }}
         </div>
       </div>
 

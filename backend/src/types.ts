@@ -648,6 +648,29 @@ export type WebStep =
     }
   | {
       /**
+       * Press and hold at a point measured from an element, rather than on the element
+       * itself. What a widget with nothing to aim at wants: the checkbox, the handle or the
+       * blank spot that has to be held is often unreachable by selector -- it lives in a
+       * canvas, a shadow root or a frame -- while some steady container around it is not.
+       * The anchor is only ever measured, never pressed.
+       *
+       * The point is drawn on this step's screenshot, so the offset can be read off the log
+       * and corrected rather than guessed at twice.
+       */
+      type: "web_hold_offset";
+      /** Element the offset is measured from. Nothing is clicked on it. */
+      selector: string;
+      /** Where on the anchor the offset starts. Defaults to its centre. */
+      from?: "centre" | "topLeft";
+      /** Rightward offset in pixels. May be negative. */
+      x?: number;
+      /** Downward offset in pixels. May be negative. */
+      y?: number;
+      /** How long to keep the pointer down. Blank/0 holds 1s. */
+      holdMs?: number;
+    }
+  | {
+      /**
        * Press on something, drag it, and let go -- a slider puzzle's handle pulled to the
        * right, or a piece dropped on its slot. The pointer is walked across in small moves
        * with a slight arc rather than teleported, since an instant jump from one point to

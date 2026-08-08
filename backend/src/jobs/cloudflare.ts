@@ -519,6 +519,27 @@ async function elementCentre(
 }
 
 /**
+ * The anchor's box in viewport coordinates, for a step that presses at an offset from it
+ * rather than on it. Scrolled into view first, exactly as `elementCentre` does, so the
+ * figures the offset is measured from are the ones the screenshot will show.
+ */
+async function elementBox(
+  page: Page,
+  selector: string,
+): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  return page
+    .evaluate((sel: string) => {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      if (!el) return null;
+      el.scrollIntoView({ block: "center", inline: "center" });
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return null;
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    }, selector)
+    .catch(() => null);
+}
+
+/**
  * Walks the pointer from one point to another with the button already down, in small moves
  * that start slow, run on, and ease off, with a slight arc across the line of travel.
  *
@@ -2152,10 +2173,15 @@ function refineWindow(at: { x: number; y: number }, view: { w: number; h: number
  * the pointer went rather than only what the page did about it. Green, to read apart from
  * the red measuring grid. Taken off again once that screenshot is captured.
  */
-async function markClickPoint(page: Page, x: number, y: number): Promise<void> {
+async function markClickPoint(
+  page: Page,
+  x: number,
+  y: number,
+  what = "clicked",
+): Promise<void> {
   await page
     .evaluate(
-      ({ px, py }: { px: number; py: number }) => {
+      ({ px, py, label }: { px: number; py: number; label: string }) => {
         const base = "position:fixed;pointer-events:none;z-index:2147483647;";
         const hair = `${base}background:#22c55e;box-shadow:0 0 0 1px rgba(255,255,255,.9);`;
         const holder = document.createElement("div");
@@ -2166,10 +2192,10 @@ async function markClickPoint(page: Page, x: number, y: number): Promise<void> {
           `<div style="${hair}left:${px - 24}px;top:${py}px;width:48px;height:1px"></div>` +
           `<div style="${hair}left:${px}px;top:${py - 24}px;width:1px;height:48px"></div>` +
           `<div style="${base}left:${px + 16}px;top:${py + 16}px;color:#fff;background:#22c55e;` +
-          `font:bold 11px/1.2 monospace;padding:2px 4px;border-radius:3px">clicked ${px},${py}</div>`;
+          `font:bold 11px/1.2 monospace;padding:2px 4px;border-radius:3px">${label} ${px},${py}</div>`;
         document.body.appendChild(holder);
       },
-      { px: x, py: y },
+      { px: x, py: y, label: what },
     )
     .catch(() => {});
 }
@@ -3140,6 +3166,61 @@ async function runStepList(
           break;
         }
 
+        case "web_hold_offset": {
+          const selector = fillVars(step.selector, run.current).trim();
+          if (!selector) throw new Error("no CSS selector given for the anchor");
+          const box = await elementBox(page, selector);
+          if (!box) throw new Error(`nothing matching \`${selector}\` is on the page`);
+
+          const dx = Math.round(step.x || 0);
+          const dy = Math.round(step.y || 0);
+          const origin =
+            step.from === "topLeft"
+              ? { x: box.x, y: box.y }
+              : { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+          const x = Math.round(origin.x + dx);
+          const y = Math.round(origin.y + dy);
+
+          // A point off the page cannot be pressed, and Playwright's own error for it says
+          // nothing about the offset that put it there
+          const view = await page
+            .evaluate(() => ({ w: innerWidth, h: innerHeight }))
+            .catch(() => ({ w: 0, h: 0 }));
+          if (view.w && (x < 0 || y < 0 || x > view.w || y > view.h))
+            throw new Error(
+              `the offset lands at ${x},${y}, which is off a ${view.w}×${view.h} page ` +
+                `(the anchor is ${Math.round(box.width)}×${Math.round(box.height)} at ` +
+                `${Math.round(box.x)},${Math.round(box.y)})`,
+            );
+
+          const ms = step.holdMs && step.holdMs > 0 ? step.holdMs : 1_000;
+          // What sits there, read before the press: a control that swaps itself out on
+          // being held would otherwise be logged as whatever replaced it
+          const under = await describePoint(page, x, y);
+
+          // Approach as a pointer would, then keep it down. The release is in a `finally`:
+          // a button left held would sit under every step that follows.
+          await page.mouse.move(x - 6, y + 4);
+          await page.mouse.move(x, y);
+          await page.mouse.down();
+          try {
+            await sleep(Math.min(ms, Math.max(0, msLeft(deadline))), deadline);
+          } finally {
+            await page.mouse.up().catch(() => {});
+          }
+
+          // Drawn for this step's screenshot alone, so the offset can be corrected by
+          // looking at where it actually landed
+          await markClickPoint(page, x, y, "held");
+          marked = true;
+
+          const anchoredAt = step.from === "topLeft" ? "top-left" : "centre";
+          log.outcome =
+            `held ${x},${y} for ${(ms / 1000).toFixed(1)}s -- ${dx},${dy} from the ` +
+            `${anchoredAt} of \`${selector}\`, on ${under}`;
+          break;
+        }
+
         case "web_drag": {
           const selector = fillVars(step.selector, run.current).trim();
           if (!selector) throw new Error("no CSS selector given");
@@ -3462,6 +3543,11 @@ function describeWebStep(step: WebStep, run: WebStepRun): string {
       return `For each {${step.varName}}, run ${step.steps?.length ?? 0} step(s)`;
     case "web_hold":
       return `Press and hold \`${fill(step.selector)}\``;
+    case "web_hold_offset":
+      return (
+        `Press and hold ${Math.round(step.x || 0)},${Math.round(step.y || 0)} from the ` +
+        `${step.from === "topLeft" ? "top-left" : "centre"} of \`${fill(step.selector)}\``
+      );
     case "web_drag":
       return (
         `Drag \`${fill(step.selector)}\` ` +
