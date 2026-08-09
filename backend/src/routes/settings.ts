@@ -50,6 +50,7 @@ import {
   removeAllCfBuilds,
   stopAllCfBrowsers,
 } from "../jobs/cfBrowser";
+import { restartBemby, restartSupervised } from "../system/restart";
 import { exportCfProfiles, importCfProfiles } from "../jobs/cfProfileArchive";
 import { installVnc, removeVnc, vncInstallLog, vncStatus } from "../jobs/vncInstall";
 import {
@@ -267,6 +268,9 @@ function getClientSettings(): Record<string, string> {
   result.cf_profile_count = String(cfProfileCount());
   // How many solver browsers are open right now, so the panel can offer to stop them
   result.cf_browsers_running = String(cfBrowsersRunning());
+  // Whether a restart from the panel would bring the backend back, or leave it down until
+  // someone starts it again. The button says which, rather than looking the same either way.
+  result.restart_supervised = restartSupervised() ? "true" : "false";
   // The CJK/emoji faces are not in the image either; they sit beside the browser in the
   // data dir. Reported separately so a browser that can only draw Latin is visible.
   result.cf_fonts_installed = areCfFontsInstalled() ? "true" : "false";
@@ -494,6 +498,16 @@ router.post("/cf-solver/keys/check", async (_req, res) => {
 router.post("/cf-solver/stop", async (_req, res) => {
   const result = await stopAllCfBrowsers();
   res.json({ ok: true, stopped: result.stopped });
+});
+
+// POST /system/restart -- close every browser, kill any left behind by an earlier backend,
+// and exit so the supervisor starts a fresh process. The heavier version of the button
+// above: it also clears what only a new process can (leased licence seats, the scheduler,
+// anything a wedged run is sitting on). Runs in flight are interrupted and reconciled on
+// the next boot.
+router.post("/system/restart", async (_req, res) => {
+  const result = await restartBemby();
+  res.json({ ok: true, ...result });
 });
 
 // POST /cf-solver/clear-profiles -- delete the per-exit browser profiles (cookies, cache,

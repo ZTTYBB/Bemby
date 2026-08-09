@@ -2263,6 +2263,55 @@
           </button>
         </div>
       </div>
+
+      <!-- Restarting the backend: the way out when the process itself is what is stuck -->
+      <div class="card s-col-6">
+        <div class="card-body">
+          <div class="card-section-title">{{ t("settings.system.title") }}</div>
+          <p style="font-size: 12px; color: #888; margin: 0 0 10px">
+            {{ t("settings.system.hint") }}
+          </p>
+          <div v-if="!restartSupervised" class="error-msg" style="margin-bottom: 10px">
+            {{ t("settings.system.unsupervised") }}
+          </div>
+          <div v-if="restartMsg" class="success-msg" style="margin-bottom: 10px">
+            {{ restartMsg }}
+          </div>
+          <div v-if="restartError" class="error-msg" style="margin-bottom: 10px">
+            {{ restartError }}
+          </div>
+          <button
+            class="btn btn-danger btn-sm"
+            :disabled="restarting"
+            @click="confirmRestart = true"
+          >
+            <i class="fa-solid fa-power-off"></i>
+            {{ restarting ? t("settings.system.restarting") : t("settings.system.restartBtn") }}
+            <template v-if="cfBrowsersRunning > 0"> ({{ cfBrowsersRunning }})</template>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- It takes every run in flight down with it, so it is asked for rather than assumed -->
+    <div v-if="confirmRestart" class="modal-backdrop">
+      <div class="modal" style="width: 420px">
+        <h3 class="modal-title">{{ t("settings.system.restartBtn") }}</h3>
+        <div class="modal-body">
+          <p>{{ t("settings.system.restartConfirm") }}</p>
+          <p v-if="!restartSupervised" class="error-msg">
+            {{ t("settings.system.unsupervised") }}
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" @click="confirmRestart = false">
+            <i class="fa-solid fa-xmark"></i> {{ t("common.cancel") }}
+          </button>
+          <button class="btn btn-danger" @click="restartSystem">
+            <i class="fa-solid fa-power-off"></i> {{ t("settings.system.restartBtn") }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Removing every downloaded build: ~200MB each comes back only by downloading again -->
@@ -3464,6 +3513,55 @@ async function loadMemory() {
   }
 }
 
+// Restarting the backend. The request is answered just before the process goes, so the
+// interesting part is afterwards: wait for the new one to answer, then reload onto it.
+const confirmRestart = ref(false);
+const restarting = ref(false);
+const restartSupervised = ref(true);
+const restartMsg = ref("");
+const restartError = ref("");
+
+/** Polls the unauthenticated health route until the new process answers, or time is up. */
+async function waitForBackend(timeoutMs = 90_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  // Let the old process finish going first, so its last answer is not read as the new one
+  await new Promise((r) => setTimeout(r, 2_000));
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      if (res.ok) return true;
+    } catch {
+      /* still down */
+    }
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+  return false;
+}
+
+async function restartSystem() {
+  confirmRestart.value = false;
+  restarting.value = true;
+  restartMsg.value = "";
+  restartError.value = "";
+  try {
+    const res = await settingsApi.restartSystem();
+    restartMsg.value = t("settings.system.restartStarted")
+      .replace("{stopped}", String(res.stopped))
+      .replace("{killed}", String(res.killed));
+    if (!res.supervised) {
+      restarting.value = false;
+      return;
+    }
+    if (await waitForBackend()) window.location.reload();
+    else restartError.value = t("settings.system.restartTimeout");
+  } catch (e: any) {
+    restartError.value =
+      e?.response?.data?.message ?? e?.message ?? t("settings.system.restartFailed");
+  } finally {
+    restarting.value = false;
+  }
+}
+
 onMounted(async () => {
   loadMemory();
   void loadSecrets();
@@ -3514,6 +3612,7 @@ onMounted(async () => {
     cfChromiumTier.value = s.cf_chromium_tier ?? "";
     cfFreeInstalled.value = s.cf_chromium_free_installed === "true";
     cfBrowsersRunning.value = Number(s.cf_browsers_running ?? 0);
+    restartSupervised.value = s.restart_supervised !== "false";
     cfBuilds.value = parseCfBuilds(s.cf_chromium_builds);
     cfProfileCount.value = Number(s.cf_profile_count ?? 0);
     cfBrowserLang.value = s.cf_browser_lang ?? "";

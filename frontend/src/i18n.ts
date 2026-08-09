@@ -1294,6 +1294,18 @@ const zh = {
       "上次进程未正常退出。终止前占用 {rss} MB（外部 {external} MB），时间 {at}。若接近上限，说明是被系统因内存不足终止。",
     memoryCrashJobs: "当时正在运行：",
     memoryUnavailable: "无法读取内存信息。",
+    system: {
+      title: "系统",
+      hint: "重启后端：关闭全部浏览器，清理上一个后端遗留的浏览器进程，并重置授权席位、配置文件占用与调度器。当“强制停止全部浏览器”不足以恢复时使用，例如浏览器总在任务执行中途退出。",
+      restartBtn: "重启 Bemby",
+      restarting: "重启中…",
+      restartConfirm: "当前正在运行的任务都会被中断，所有浏览器都会被关闭。服务恢复后会自动整理被中断的运行记录。",
+      restartStarted: "正在重启：已关闭 {stopped} 个浏览器，清理 {killed} 个残留进程。",
+      restartTimeout: "服务尚未恢复。请检查容器日志后刷新本页。",
+      restartFailed: "无法启动重启流程。",
+      unsupervised:
+        "当前没有进程守护会自动重启后端，退出后需要手动启动。Docker（restart: unless-stopped）会自动拉起；若由其他方式守护，请设置 BEMBY_SUPERVISED=1。",
+    },
     labelPlayDuration: "默认播放时长（秒）",
     labelDeviceName: "设备名称",
     deviceNameVars: "支持变量：{username} Emby 用户名，以及随机 {word:4}、{num:4}、{alpha:8}、{uuid}。",
@@ -3125,6 +3137,20 @@ const en: typeof zh = {
       "The previous process did not exit cleanly. It was holding {rss} MB ({external} MB external) at {at}. A figure near the limit means the system killed it for running out of memory.",
     memoryCrashJobs: "Running at the time:",
     memoryUnavailable: "Memory information is unavailable.",
+    system: {
+      title: "System",
+      hint: "Restarts the backend: every browser is closed, any left behind by an earlier backend is killed, and the licence seats, profiles and scheduler start over. Use it when stopping the browsers is not enough, e.g. when browsers keep dying part-way through a run.",
+      restartBtn: "Restart Bemby",
+      restarting: "Restarting…",
+      restartConfirm:
+        "Every job running right now will be interrupted, and every browser will be closed. Interrupted runs are reconciled when the server comes back.",
+      restartStarted: "Restarting: {stopped} browser(s) closed, {killed} stray process(es) killed.",
+      restartTimeout:
+        "The server has not come back yet. Check the container logs, then reload this page.",
+      restartFailed: "The restart could not be started.",
+      unsupervised:
+        "Nothing is set to restart this process automatically, so it will stay down until it is started again by hand. In Docker (restart: unless-stopped) it comes back on its own; set BEMBY_SUPERVISED=1 if something else here restarts it.",
+    },
     labelPlayDuration: "Default Play Duration (seconds)",
     labelDeviceName: "Device Name",
     deviceNameVars: "Supports variables: {username} (Emby username), and random {word:4}, {num:4}, {alpha:8}, {uuid}.",

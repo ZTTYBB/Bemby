@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   renameSync,
   rmSync,
   statSync,
@@ -1347,6 +1348,44 @@ export async function stopAllCfBrowsers(): Promise<{ stopped: number }> {
   // cannot hold up the rest
   await Promise.all(open.map((b) => b.close().catch(() => {})));
   return { stopped: open.length };
+}
+
+/**
+ * Kills any solver browser this process is not holding: one left by a backend that was
+ * killed, or one whose context went away while its process did not. They are invisible to
+ * `stopAllCfBrowsers`, and each still holds a profile directory and a licence session.
+ *
+ * Scoped by executable: only a binary living in this installation's own browser directory
+ * is killed, so nothing else on the host is touched. Linux only, since it reads procfs;
+ * elsewhere there is nothing to clean up that the supervisor will not handle.
+ */
+export function killStrayCfBrowsers(): { killed: number } {
+  const root = cloakCacheDir();
+  let killed = 0;
+  let pids: string[];
+  try {
+    pids = readdirSync("/proc").filter((name) => /^\d+$/.test(name));
+  } catch {
+    return { killed: 0 };
+  }
+  for (const pid of pids) {
+    let exe: string;
+    try {
+      exe = readlinkSync(`/proc/${pid}/exe`);
+    } catch {
+      // Gone between the listing and the read, or owned by another user
+      continue;
+    }
+    if (!exe.startsWith(root + path.sep)) continue;
+    try {
+      process.kill(Number(pid), "SIGKILL");
+      killed++;
+    } catch {
+      /* it exited on its own, or is not ours to signal */
+    }
+  }
+  if (killed) console.log(`[cfBrowser] killed ${killed} stray browser process(es)`);
+  return { killed };
 }
 
 export async function launchCfBrowser(

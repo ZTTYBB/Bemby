@@ -1432,6 +1432,8 @@ export type Settings = {
   cf_chromium_free_installed?: string;
   /** Server-computed: how many solver browsers are open right now. */
   cf_browsers_running?: string;
+  /** Server-computed: "true" when something is set to start the backend again after a restart. */
+  restart_supervised?: string;
   /** Server-computed JSON: every installed build, with its tier, version and path. */
   cf_chromium_builds?: string;
   /** Server-computed: how many browser profiles are on disk. */
@@ -1610,6 +1612,17 @@ export const settingsApi = {
   stopCfBrowsers: () =>
     api
       .post<{ ok: boolean; stopped: number }>("/settings/cf-solver/stop")
+      .then((r) => r.data),
+  /**
+   * Closes every browser, kills any left behind by an earlier backend, and restarts the
+   * server. The response arrives just before it goes, so the caller should expect the
+   * connection to drop straight after.
+   */
+  restartSystem: () =>
+    api
+      .post<{ ok: boolean; stopped: number; killed: number; supervised: boolean }>(
+        "/settings/system/restart",
+      )
       .then((r) => r.data),
   /** Forgets where each exit comes out, so the next launch looks it up again. */
   clearCfExitGeo: () =>
