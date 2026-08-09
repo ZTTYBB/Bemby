@@ -1303,6 +1303,12 @@ export type LaunchedBrowser = {
   tier: BuildTier;
   /** What is known about where it comes out, if anything yet. */
   geo?: CfExitGeo;
+  /**
+   * The browser process went away on its own, rather than through `close()`. Worth asking
+   * before reading anything off the page: every driver call against a dead browser answers
+   * with nothing, which reads exactly like a page that rendered blank.
+   */
+  died: () => boolean;
   /** Closes the browser and releases the profile, bridge and everything else. */
   close: () => Promise<void>;
 };
@@ -1572,6 +1578,22 @@ export async function launchCfBrowser(
     }
     await page.bringToFront().catch(() => {});
 
+    // A browser that exits mid-run leaves no exception behind: the driver calls that follow
+    // are caught one by one and answer with nothing, so the run reads as a page that never
+    // rendered and the exit takes the blame. This is the only honest signal that it went.
+    let closing = false;
+    let died = false;
+    context.on("close", () => {
+      if (closing) return;
+      died = true;
+      console.warn(
+        `[cfBrowser] the browser on profile ${profileKey} exited on its own. A licensed ` +
+          "build does that when it loses its licence session, and any build does when its " +
+          "profile is opened by a second process -- check nothing else is running against " +
+          "this data dir.",
+      );
+    });
+
     const launched: LaunchedBrowser = {
       context,
       page,
@@ -1582,7 +1604,9 @@ export async function launchCfBrowser(
       localePinned: Boolean(pinnedLang),
       tier: usedTier,
       geo,
+      died: () => died,
       close: async () => {
+        closing = true;
         // Before the browser goes: its cookies, which its own store may not keep
         await Promise.race([
           saveCookies(context, profile.dir).then((n) => {

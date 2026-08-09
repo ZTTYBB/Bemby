@@ -151,6 +151,12 @@ export type CheckinPageResult = {
    * turning every exit away.
    */
   browserFailed?: boolean;
+  /**
+   * The browser started but went away part-way through, so what the page was asked after
+   * that answered with nothing. Reported apart from `browserFailed` only so the log can say
+   * which of the two happened; both leave the exit untried.
+   */
+  browserGone?: boolean;
   /** Which browser build ran: the licensed one, or the unlicensed fallback. */
   browserTier?: "keyed" | "free";
   /**
@@ -4040,6 +4046,43 @@ function launchFailureReason(message: string): string | undefined {
   return undefined;
 }
 
+/** What Playwright says once the browser it was driving is no longer there. */
+const BROWSER_GONE_RE =
+  /Target (?:page|closed)|(?:context or )?browser has been closed|Browser closed|browser has disconnected/i;
+
+/**
+ * The browser did not survive the attempt. Nothing here is the exit's doing: the driver
+ * calls that followed the exit answered with nothing, so the page reads as blank however
+ * good the proxy was. Marked like a launch failure so the pool is left alone -- working
+ * through it would only kill the same browser a dozen more times.
+ */
+function browserGoneResult(
+  finalHost: string,
+  detail: string,
+  about: Pick<
+    CheckinPageResult,
+    "browserTier" | "profileKey" | "deviceSeed" | "locale" | "localePinned"
+  >,
+): CheckinPageResult {
+  return {
+    ok: false,
+    challenged: false,
+    text: "",
+    finalHost,
+    ...about,
+    reason:
+      "The solver browser exited part-way through the attempt, so the page was never " +
+      "driven to the end. A licensed build does that when it loses its licence session " +
+      "(a free-plan key allows one browser at a time), and any build does when a second " +
+      "process opens the same profile -- check nothing else is running against this data " +
+      `dir (${oneLine(detail).slice(0, 200)})`,
+    navError: detail,
+    exitRelated: false,
+    browserFailed: true,
+    browserGone: true,
+  };
+}
+
 /**
  * JPEG of what the browser is looking at, small enough to keep in a job log. `clip` narrows
  * it to one region, for the close-up the `ai_web_click_xy` step takes.
@@ -4312,6 +4355,18 @@ async function attemptLoad(
     const pageTitle = (await page.title().catch(() => "")) || undefined;
     const navError = troubles.length ? troubles.join("; ") : undefined;
 
+    // Asked before the verdict: a browser that went away answers every question with
+    // nothing, and the verdict below would read that as a page this exit failed to render.
+    if (launched.died()) {
+      return browserGoneResult(finalHost, navError ?? "the browser exited mid-run", {
+        browserTier,
+        profileKey,
+        deviceSeed,
+        locale,
+        localePinned,
+      });
+    }
+
     const verdict = opts.miniApp
       ? miniAppVerdict({
           challenged,
@@ -4370,6 +4425,16 @@ async function attemptLoad(
         exitRelated: false,
         browserFailed: true,
       };
+    }
+    // Nor is one that started and then went away: it took the exit nowhere either
+    if (launched?.died() || BROWSER_GONE_RE.test(msg)) {
+      return browserGoneResult(finalHost, msg, {
+        browserTier,
+        profileKey,
+        deviceSeed,
+        locale,
+        localePinned,
+      });
     }
     return {
       ok: false,
@@ -4479,8 +4544,11 @@ export async function loadCheckinUrl(
 
     // The browser is what failed; working through the pool would only repeat it
     if (result.browserFailed) {
-      trace.push("the solver browser could not start, so no exit was tried");
-      console.error("[cloudflare] the solver browser could not start; leaving the pool alone");
+      const what = result.browserGone
+        ? "the solver browser exited part-way through, so no other exit was tried"
+        : "the solver browser could not start, so no exit was tried";
+      trace.push(what);
+      console.error(`[cloudflare] ${what}; leaving the pool alone`);
       break;
     }
 

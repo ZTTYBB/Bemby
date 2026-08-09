@@ -33,9 +33,19 @@ import { startScheduler } from "./scheduler";
 import { createPanelWss } from "./tg/wsHandler";
 import { createVncWss } from "./tg/vncBridge";
 import { startMemoryMonitor, markCleanShutdown } from "./monitor/memory";
+import { claimInstanceLock, releaseInstanceLock } from "./instanceLock";
 
 // Validate critical env vars before accepting any requests
 getJwtSecret();
+
+// Before the scheduler can launch anything: a second backend on this data dir competes for
+// the same licence seats and browser profiles, which kills browsers mid-run
+try {
+  claimInstanceLock();
+} catch (err: any) {
+  console.error(`[instance] ${err?.message ?? err}`);
+  process.exit(1);
+}
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3000);
@@ -220,6 +230,7 @@ server.listen(PORT, BIND_HOST, () => {
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => {
     markCleanShutdown();
+    releaseInstanceLock();
     server.close(() => process.exit(0));
     // Don't wait on lingering keep-alive sockets past the usual container stop grace
     setTimeout(() => process.exit(0), 5_000).unref();

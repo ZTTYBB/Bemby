@@ -50,7 +50,7 @@ const SIGTRAP_FAILURE =
 // through evaluate(); this answers them by what the evaluated source is looking for, which
 // is enough to walk a page that loads cleanly, raises no challenge, and does not have the
 // control the caller named.
-function fakeBrowser(opts: { text: string }) {
+function fakeBrowser(opts: { text: string; died?: boolean }) {
   const page: any = {
     on: () => {},
     addInitScript: async () => {},
@@ -69,7 +69,13 @@ function fakeBrowser(opts: { text: string }) {
       return null;
     },
   };
-  return { context: {}, page, key: "direct", close: async () => {} };
+  return {
+    context: {},
+    page,
+    key: "direct",
+    died: () => !!opts.died,
+    close: async () => {},
+  };
 }
 
 beforeEach(() => {
@@ -135,6 +141,29 @@ describe("a solver browser that cannot start", () => {
 
     expect(res.reason).toMatch(/binary could not be started/);
     expect(res.refusedProxyIds).toEqual([]);
+  });
+});
+
+// A browser that goes away part-way through says nothing about the exit either, and it does
+// not announce itself: the driver calls that follow are each caught and answer with nothing,
+// so the attempt used to end as "the app page never rendered" and burn the exit for it.
+describe("a solver browser that exits mid-run", () => {
+  it("blames the browser rather than the exit, and leaves the pool alone", async () => {
+    launchCfBrowser.mockResolvedValue(fakeBrowser({ text: "", died: true }));
+
+    const res = await loadCheckinUrl("https://example.com/app", undefined, {
+      miniApp: true,
+      proxyCandidates: CANDIDATES,
+      maxWaitMs: 30_000,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.browserGone).toBe(true);
+    expect(res.browserFailed).toBe(true);
+    expect(res.refusedProxyIds).toEqual([]);
+    expect(res.attempts).toBe(1);
+    expect(res.reason).toMatch(/exited part-way through/);
+    expect(res.trace?.join(" ")).toContain("exited part-way through");
   });
 });
 
