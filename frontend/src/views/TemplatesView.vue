@@ -993,7 +993,7 @@
                         <input v-model.trim="row.embyUsername" class="form-input" style="font-size:12px" autocomplete="off" />
                       </div>
                       <div class="form-group" style="margin-bottom:0">
-                        <label class="form-label" style="font-size:11px">{{ t('templates.createJobsEmbyPass') }} <span style="color:#e63946">*</span></label>
+                        <label class="form-label" style="font-size:11px">{{ t('templates.createJobsEmbyPass') }}</label>
                         <input v-model="row.embyPassword" class="form-input" type="password" style="font-size:12px" autocomplete="new-password" />
                       </div>
                     </div>
@@ -2029,8 +2029,8 @@ async function doCreateJobs() {
   // Validate embywatch credentials
   if (createJobsTpl.value.jobType === 'embywatch') {
     for (const r of selected) {
-      if (!r.embyUsername.trim() || !r.embyPassword.trim()) {
-        createJobsError.value = `${r.account.name}: Emby username and password are required`;
+      if (!r.embyUsername.trim()) {
+        createJobsError.value = `${r.account.name}: ${t('jobs.errors.embyCredRequired')}`;
         return;
       }
     }

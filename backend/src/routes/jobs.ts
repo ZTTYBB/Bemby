@@ -16,6 +16,17 @@ import { parsePaging, parseSort, textParam, escapeLike } from "./list-query";
 
 const router = Router();
 
+function assertEmbywatchCredentials(config: unknown): string | null {
+  if (config == null || typeof config !== 'object') {
+    return 'Emby username is required';
+  }
+  const cfg = config as { username?: unknown; password?: unknown };
+  const username = typeof cfg.username === 'string' ? cfg.username.trim() : '';
+  if (!username) return 'Emby username is required';
+  // password may be empty
+  return null;
+}
+
 type JobRow = {
   id: number;
   name: string;
@@ -235,10 +246,10 @@ router.post("/test-emby", async (req, res) => {
     string,
     string | undefined
   >;
-  if (!serverUrl || !username || !password) {
+  if (!serverUrl || !username) {
     res
       .status(400)
-      .json({ error: "serverUrl, username and password are required" });
+      .json({ error: "serverUrl and username are required" });
     return;
   }
   if (!/^https?:\/\//i.test(serverUrl)) {
@@ -249,7 +260,7 @@ router.post("/test-emby", async (req, res) => {
   }
   const result = await testEmbyConnection(serverUrl, {
     username,
-    password,
+    password: password ?? '',
     userAgent,
     proxyId,
   });
@@ -283,6 +294,14 @@ router.post("/", (req, res) => {
     resolvedType === "autoreg";
   // A custom job need not target a bot at all: its actions can each name their own
   // contact, or drive a page that never touches Telegram.
+  if (resolvedType === "embywatch") {
+    const credError = assertEmbywatchCredentials(config);
+    if (credError) {
+      res.status(400).json({ error: credError });
+      return;
+    }
+  }
+
   if (!name || (needsAccount && !accountId) || (resolvedType !== "custom" && !botUsername)) {
     res.status(400).json({
       error:
@@ -365,6 +384,27 @@ router.put("/:id", (req, res) => {
     : existing.template_id;
 
   const updatedType = isLinked ? existing.job_type : (jobType ?? existing.job_type);
+
+  if (updatedType === "embywatch") {
+    const nextConfig =
+      (isLinked && existing.job_type !== "embywatch")
+        ? existing.config
+        : (config !== undefined
+            ? (config != null ? JSON.stringify(config) : null)
+            : existing.config);
+    let parsed: unknown = null;
+    if (nextConfig) {
+      try { parsed = JSON.parse(nextConfig); } catch { parsed = null; }
+    } else if (config !== undefined) {
+      parsed = config;
+    }
+    const credError = assertEmbywatchCredentials(parsed);
+    if (credError) {
+      res.status(400).json({ error: credError });
+      return;
+    }
+  }
+
   const runEvery = normalizeRunEvery(
     runEveryDays !== undefined ? runEveryDays : existing.run_every_days,
     runEveryDaysMax !== undefined ? runEveryDaysMax : existing.run_every_days_max,

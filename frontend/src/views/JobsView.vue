@@ -222,7 +222,7 @@
               <input v-model.trim="embyCfg.username" class="form-input" placeholder="Username" autocomplete="off" />
             </div>
             <div class="form-group">
-              <label class="form-label">{{ t('jobs.labelEmbyPass') }} <span style="color:#e63946">*</span></label>
+              <label class="form-label">{{ t('jobs.labelEmbyPass') }}</label>
               <input v-model="embyCfg.password" class="form-input" type="password" placeholder="Password" autocomplete="new-password" />
             </div>
           </div>
@@ -2132,7 +2132,7 @@ async function saveJob() {
   }
   if (form.jobType !== 'custom' && !form.botUsername) { formError.value = t('jobs.errors.botRequired'); return; }
   if (form.jobType === 'checkin' || form.jobType === 'autoreg') form.botUsername = form.botUsername.replace(/^@+/, '');
-  if (form.jobType === 'embywatch' && (!embyCfg.username || !embyCfg.password)) {
+  if (form.jobType === 'embywatch' && !embyCfg.username) {
     formError.value = t('jobs.errors.embyCredRequired');
     return;
   }

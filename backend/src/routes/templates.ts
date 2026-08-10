@@ -427,6 +427,17 @@ router.post('/:id/create-jobs', (req, res) => {
     res.status(400).json({ error: 'jobs array is required' }); return;
   }
 
+  if (template.job_type === 'embywatch') {
+    for (const j of jobs) {
+      const username = typeof j.config?.username === 'string' ? String(j.config.username).trim() : '';
+      if (!username) {
+        res.status(400).json({ error: `${j.name || 'job'}: Emby username is required` });
+        return;
+      }
+      // password may be empty
+    }
+  }
+
   const createdIds: number[] = [];
 
   db.transaction(() => {
