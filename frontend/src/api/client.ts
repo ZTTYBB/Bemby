@@ -51,7 +51,6 @@ function isCredentialCheck(url: string | undefined): boolean {
   const path = url.split("?")[0];
   return (
     path.endsWith("/auth/login") ||
-    path.endsWith("/auth/captcha") ||
     path.endsWith("/auth/credentials")
   );
 }
@@ -711,21 +710,12 @@ export type ScheduleStatus = {
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export const authApi = {
-  getCaptcha: () =>
-    api
-      .get<{ svg: string; captchaToken: string }>("/auth/captcha")
-      .then((r) => r.data),
-  login: (
-    username: string,
-    password: string,
-    captchaToken: string,
-    captchaAnswer: string,
-  ) =>
+  login: (username: string, password: string) =>
     api
       .post<{
         token: string;
         requirePasswordChange?: boolean;
-      }>("/auth/login", { username, password, captchaToken, captchaAnswer })
+      }>("/auth/login", { username, password })
       .then((r) => r.data),
   changeCredentials: (
     currentPassword: string,
